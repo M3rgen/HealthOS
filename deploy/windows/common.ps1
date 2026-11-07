@@ -22,6 +22,13 @@ function Get-HealtOSConfigDir {
     return (Join-Path (Join-Path $HOME '.config') 'healtos')
 }
 
+function Get-HealtOSBridgePython {
+    # Python for the Umay bridge's .venv (uv sync --python): the newest Python a host offers can
+    # be newer than every wheel in uv.lock (psycopg-binary, websockets: cp312-cp314), so uv picks
+    # or downloads one in this range. Same value as BRIDGE_PYTHON in install.sh.
+    return '>=3.12,<3.15'
+}
+
 function Get-HealtOSLogDir {
     if (Test-HealtOSWindows) {
         return (Join-Path (Join-Path $env:LOCALAPPDATA 'HealtOS') 'logs')
@@ -202,9 +209,31 @@ function Set-HealtOSPrivateAcl {
     Set-Acl -LiteralPath $Path -AclObject $acl
 }
 
+function Get-HealtOSAclReader {
+    # The decision behind Get-HealtOSAclProblem, over plain values so it is testable on any
+    # host: the SID of the first entry that lets anyone but the current user, SYSTEM
+    # (S-1-5-18) or Administrators (S-1-5-32-544) read the file, or '' when none does.
+    # OWNER RIGHTS (S-1-3-4) applies to the file's owner, so it is fine only while the owner is
+    # one of those three. Deny entries, entries without read access and inherit-only entries
+    # (which do not apply to the object itself) never widen access.
+    # Each entry: @{ Sid = 'S-1-...'; Allow = $true; Read = $true; InheritOnly = $false }
+    param([string]$CurrentSid, [string]$OwnerSid, [object[]]$Entries = @())
+    $trusted = @($CurrentSid, 'S-1-5-18', 'S-1-5-32-544')
+    foreach ($entry in @($Entries)) {
+        if ($null -eq $entry) { continue }
+        if (-not $entry.Allow -or -not $entry.Read -or $entry.InheritOnly) { continue }
+        $sid = [string]$entry.Sid
+        if ($trusted -contains $sid) { continue }
+        if ($sid -eq 'S-1-3-4' -and $OwnerSid -and $trusted -contains $OwnerSid) { continue }
+        return $sid
+    }
+    return ''
+}
+
 function Get-HealtOSAclProblem {
     # '' when only the current user (plus SYSTEM and Administrators, which can read any file
-    # anyway) may read the file; otherwise a short description of who else can.
+    # anyway, and OWNER RIGHTS while one of them owns the file) may read the file; otherwise a
+    # short description of who else can.
     param([string]$Path)
     if (-not (Test-HealtOSWindows)) {
         $item = Get-Item -LiteralPath $Path -Force
@@ -213,24 +242,40 @@ function Get-HealtOSAclProblem {
         if ($mode.Substring(4, 6) -ne '------') { return "mode $mode allows group or others" }
         return ''
     }
-    $mine = (Get-HealtOSCurrentSid).Value
-    $trusted = @($mine, 'S-1-5-18', 'S-1-5-32-544')
+    $sidType = [System.Security.Principal.SecurityIdentifier]
     $read = [System.Security.AccessControl.FileSystemRights]::ReadData
+    $allow = [System.Security.AccessControl.AccessControlType]::Allow
+    $inheritOnly = [System.Security.AccessControl.PropagationFlags]::InheritOnly
     $acl = Get-Acl -LiteralPath $Path
-    foreach ($rule in @($acl.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier]))) {
-        if ($rule.AccessControlType -ne [System.Security.AccessControl.AccessControlType]::Allow) { continue }
-        if (($rule.FileSystemRights -band $read) -eq 0) { continue }
-        $sid = $rule.IdentityReference.Value
-        if ($trusted -contains $sid) { continue }
-        $name = $sid
-        try {
-            $name = $rule.IdentityReference.Translate([System.Security.Principal.NTAccount]).Value
-        } catch {
-            $null = $_
-        }
-        return "readable by $name"
+    $owner = $null
+    try { $owner = $acl.GetOwner($sidType) } catch { $null = $_ }
+    $ownerSid = ''
+    if ($owner) { $ownerSid = $owner.Value }
+    $entries = @(foreach ($rule in @($acl.GetAccessRules($true, $true, $sidType))) {
+            @{
+                Sid = $rule.IdentityReference.Value
+                Allow = ($rule.AccessControlType -eq $allow)
+                Read = (($rule.FileSystemRights -band $read) -ne 0)
+                InheritOnly = (($rule.PropagationFlags -band $inheritOnly) -ne 0)
+            }
+        })
+    $sid = Get-HealtOSAclReader -CurrentSid (Get-HealtOSCurrentSid).Value -OwnerSid $ownerSid -Entries $entries
+    if (-not $sid) { return '' }
+    $name = Get-HealtOSSidName $sid
+    if ($sid -eq 'S-1-3-4') { $name = "$name, owner $(Get-HealtOSSidName $ownerSid)" }
+    return "readable by $name"
+}
+
+function Get-HealtOSSidName {
+    # DOMAIN\name for a SID when Windows can translate it, otherwise the SID itself.
+    param([string]$Sid)
+    if (-not $Sid) { return 'unknown' }
+    try {
+        $identity = New-Object System.Security.Principal.SecurityIdentifier($Sid)
+        return $identity.Translate([System.Security.Principal.NTAccount]).Value
+    } catch {
+        return $Sid
     }
-    return ''
 }
 
 function Get-HealtOSFreeBytes {

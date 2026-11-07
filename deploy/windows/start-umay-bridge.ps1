@@ -10,7 +10,7 @@ writes it once) and is passed to the bridge in the environment, like the systemd
 EnvironmentFile. Without a token the task stops and logs why.
 
 Python: the checkout's .venv (uv sync --frozen --no-dev) when present, otherwise
-`uv run --frozen --no-dev`. The Codex CLI
+`uv run --frozen --no-dev` on a Python from Get-HealtOSBridgePython. The Codex CLI
 must be installed with npm and signed in (`codex login`); see docs/legacy/WINDOWS.md. Output is
 appended to %LOCALAPPDATA%\HealtOS\logs\umay-bridge.log; the bridge's own log is bridge.log in
 %USERPROFILE%\.codex\healthos-bridge.
@@ -52,7 +52,7 @@ if (Test-Path -LiteralPath $python -PathType Leaf) {
         Add-LogLine 'uv was not found (winget install -e --id astral-sh.uv)'
         exit 1
     }
-    $arguments = @('run', '--frozen', '--no-dev', '--project', $root, 'python', $launcher)
+    $arguments = @('run', '--frozen', '--no-dev', '--python', (Get-HealtOSBridgePython), '--project', $root, 'python', $launcher)
 }
 
 $info = New-Object System.Diagnostics.ProcessStartInfo

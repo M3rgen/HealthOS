@@ -657,6 +657,30 @@ def test_bridge_dependencies_match_install_sh():
     assert "'run', '--frozen', '--no-dev'," in text(WINDOWS_DIR / "start-umay-bridge.ps1")
 
 
+def test_bridge_python_range_is_shared_and_matches_the_lock():
+    # uv would otherwise pick the newest host Python (Homebrew 3.15), for which uv.lock has no
+    # psycopg-binary wheel. One range: install.sh, common.ps1 and the CI installer job.
+    match = re.search(r"^BRIDGE_PYTHON='([^']+)'$", text(ROOT / "install.sh"), re.M)
+    assert match
+    spec = match.group(1)
+    assert f"return '{spec}'" in text(WINDOWS_DIR / "common.ps1")
+    assert 'run uv sync --frozen --no-dev --python "$BRIDGE_PYTHON"' in text(ROOT / "install.sh")
+    source = code_only(INSTALLER)
+    assert "& $uv sync --frozen --no-dev --python (Get-HealtOSBridgePython)" in source
+    bridge_task = text(WINDOWS_DIR / "start-umay-bridge.ps1")
+    assert "'--no-dev', '--python', (Get-HealtOSBridgePython)," in bridge_task
+    ci = yaml.safe_load(text(ROOT / ".github" / "workflows" / "ci.yml"))
+    steps = ci["jobs"]["installer"]["steps"]
+    assert any(f"--python '{spec}'" in step.get("run", "") for step in steps)
+    # Every minor the range allows must have a psycopg-binary wheel in uv.lock.
+    low, high = re.fullmatch(r">=3\.(\d+),<3\.(\d+)", spec).groups()
+    lock = text(ROOT / "uv.lock")
+    block = lock[lock.index('[[package]]\nname = "psycopg-binary"') + 1 :]
+    block = block[: block.index("[[package]]")]
+    for minor in range(int(low), int(high)):
+        assert f"cp3{minor}-cp3{minor}-" in block, minor
+
+
 def fake_bridge_tree(tmp_path: Path, env_text: str) -> Path:
     """A checkout with deploy/windows and a stand-in launcher whose update_env rewrites .env."""
     root = tmp_path / "bridge-checkout"
@@ -731,7 +755,7 @@ def test_bridge_task_passes_the_env_token_and_never_rewrites_env(
     result = pwsh("-File", str(task), env=env)
     assert result.returncode == 0, result.stdout + result.stderr
     assert text(root / ".env") == env_text
-    assert "run --frozen --no-dev --project" in text(tmp_path / "uv.log")
+    assert "run --frozen --no-dev --python >=3.12,<3.15 --project" in text(tmp_path / "uv.log")
     log = next(Path(home["HOME"]).rglob("umay-bridge.log"))
     assert "bridge token=token-from-dotenv" in text(log)
     # No token in .env: the task stops before starting anything.
@@ -928,6 +952,66 @@ def test_backup_settings_read_export_lines(tmp_path: Path):
     env.pop("BACKUP_AGE_RECIPIENT", None)
     result = pwsh("-Command", script, env=env)
     assert "DAYS=30" in result.stdout and "RECIPIENT=age1synthetic" in result.stdout, result.stderr
+
+
+ME = "S-1-5-21-1000-2000-3000-1001"
+OTHER_USER = "S-1-5-21-1000-2000-3000-1002"
+SYSTEM, ADMINS, OWNER_RIGHTS = "S-1-5-18", "S-1-5-32-544", "S-1-3-4"
+
+
+def acl_entry(sid: str, allow: bool = True, read: bool = True, inherit_only: bool = False) -> str:
+    flags = {"Allow": allow, "Read": read, "InheritOnly": inherit_only}
+    values = "; ".join(f"{key} = ${str(value).lower()}" for key, value in flags.items())
+    return f"@{{ Sid = '{sid}'; {values} }}"
+
+
+@needs_pwsh
+@pytest.mark.parametrize(
+    "owner, entries, expected",
+    [
+        # What Set-HealtOSPrivateAcl (protect-file.ps1, Write-PrivateBytes) writes.
+        (ME, [acl_entry(ME)], ""),
+        # Python's mkdir(mode=0o700) on Windows (pytest's temp dirs): SYSTEM, Administrators,
+        # OWNER RIGHTS, inherited by every file created inside.
+        (ME, [acl_entry(SYSTEM), acl_entry(ADMINS), acl_entry(OWNER_RIGHTS)], ""),
+        (ADMINS, [acl_entry(ME), acl_entry(OWNER_RIGHTS)], ""),
+        (SYSTEM, [acl_entry(OWNER_RIGHTS)], ""),
+        (OTHER_USER, [acl_entry(ME), acl_entry(OWNER_RIGHTS)], OWNER_RIGHTS),
+        ("", [acl_entry(OWNER_RIGHTS)], OWNER_RIGHTS),
+        (ME, [acl_entry(ME), acl_entry("S-1-1-0")], "S-1-1-0"),  # Everyone
+        (ME, [acl_entry("S-1-5-32-545")], "S-1-5-32-545"),  # Users
+        (ME, [acl_entry("S-1-5-11")], "S-1-5-11"),  # Authenticated Users
+        (ME, [acl_entry(ME), acl_entry(OTHER_USER)], OTHER_USER),
+        (ME, [acl_entry("S-1-1-0", allow=False)], ""),
+        (ME, [acl_entry("S-1-1-0", read=False)], ""),
+        (ME, [acl_entry("S-1-3-0", inherit_only=True)], ""),  # CREATOR OWNER template
+        (ME, [], ""),
+    ],
+)
+def test_key_acl_check_trusts_only_me_system_admins_and_trusted_owner(owner, entries, expected):
+    script = (
+        f". '{WINDOWS_DIR / 'common.ps1'}'; "
+        f"$sid = Get-HealtOSAclReader -CurrentSid '{ME}' -OwnerSid '{owner}' "
+        f"-Entries @({', '.join(entries)}); "
+        "Write-Output ('READER=' + $sid)"
+    )
+    result = pwsh("-Command", script)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip().splitlines()[-1] == f"READER={expected}"
+
+
+@needs_pwsh
+@pytest.mark.skipif(not IS_WINDOWS, reason="real Windows ACLs")
+def test_protect_file_result_passes_the_key_check(tmp_path: Path):
+    key = tmp_path / "backup.key"
+    key.write_text("AGE-SECRET-KEY-1SYNTHETICNOTAREALKEY\n", encoding="ascii")
+    protect = pwsh(
+        "-ExecutionPolicy", "Bypass", "-File", str(WINDOWS_DIR / "protect-file.ps1"), str(key)
+    )
+    assert protect.returncode == 0, protect.stderr
+    script = f". '{WINDOWS_DIR / 'common.ps1'}'; Write-Output ('PROBLEM=' + (Get-HealtOSAclProblem '{key}'))"
+    result = pwsh("-Command", script)
+    assert result.stdout.strip().splitlines()[-1] == "PROBLEM=", result.stderr
 
 
 @needs_pwsh

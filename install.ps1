@@ -1244,13 +1244,14 @@ function Install-HostJobs {
     if ($script:UmayChoice -eq 'yes') {
         Say-Step (M 'Umay bridge' 'Umay k\u00f6pr\u00fcs\u00fc')
         if ($DryRun) {
-            Say-Plan 'uv sync --frozen --no-dev'
+            Say-Plan ('uv sync --frozen --no-dev --python "{0}"' -f (Get-HealtOSBridgePython))
             Say-Plan ((M 'start the bridge now: {0}' 'k\u00f6pr\u00fc \u015fimdi ba\u015flat\u0131l\u0131r: {0}') -f (Join-Path $windowsDir 'start-umay-bridge.ps1'))
         } else {
             $uv = Find-Tool 'uv'
             Push-Location $script:RepoDir
-            # Runtime dependencies only, like install.sh (the bridge needs no development tools).
-            try { & $uv sync --frozen --no-dev | Out-Host } finally { Pop-Location }
+            # Runtime dependencies only, like install.sh (the bridge needs no development tools), on a
+            # Python that uv.lock has wheels for.
+            try { & $uv sync --frozen --no-dev --python (Get-HealtOSBridgePython) | Out-Host } finally { Pop-Location }
             if ($LASTEXITCODE -ne 0) { Say-Warn (M 'uv sync failed; the bridge task will retry at the next sign-in.' 'uv sync ba\u015far\u0131s\u0131z; k\u00f6pr\u00fc g\u00f6revi bir sonraki oturumda yeniden dener.') }
             $code = Invoke-ChildScript (Join-Path $windowsDir 'start-umay-bridge.ps1') @{}
             if ($code -ne 0) {

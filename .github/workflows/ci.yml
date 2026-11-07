@@ -123,7 +123,9 @@ jobs:
           version: "0.12.1"
           enable-cache: true
       - name: Installer tests
-        run: uv run --frozen --extra dev pytest -q tests/test_installer_unix.py tests/test_installer_windows.py
+        # A Python uv.lock has wheels for (macOS runners already ship Homebrew Python 3.15,
+        # psycopg-binary stops at cp314); the same range as BRIDGE_PYTHON in install.sh.
+        run: uv run --frozen --extra dev --python '>=3.12,<3.15' pytest -q tests/test_installer_unix.py tests/test_installer_windows.py
 
   installer-linux-docker:
     # Real end-to-end trial install with Docker on a Linux runner.

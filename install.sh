@@ -24,6 +24,11 @@ set -o pipefail
 REPO_URL="${HEALTOS_REPO_URL:-https://github.com/M3rgen/HealtOS.git}"
 RAW_URL="https://raw.githubusercontent.com/M3rgen/HealtOS"
 APP_UID=10001
+# Python for the Umay bridge's .venv: the newest Python a host offers (Homebrew already ships
+# 3.15) can be newer than every wheel in uv.lock (psycopg-binary, websockets: cp312-cp314), so
+# uv sync picks or downloads one in this range. Keep in step with install.ps1,
+# deploy/windows/start-umay-bridge.ps1 and the installer job in .github/workflows/ci.yml.
+BRIDGE_PYTHON='>=3.12,<3.15'
 
 # ---- options (shared contract with install.ps1) -------------------------------------
 LANG_SEL=""
@@ -1839,9 +1844,9 @@ uv_sync() {
   fi
   if [ "$UNIT_MODE" = system ]; then
     # Keep uv's Python inside the checkout: the service account cannot read /root.
-    (cd "$DIR" && export UV_PYTHON_INSTALL_DIR="$DIR/.uv-tool/python" && run uv sync --frozen --no-dev </dev/null)
+    (cd "$DIR" && export UV_PYTHON_INSTALL_DIR="$DIR/.uv-tool/python" && run uv sync --frozen --no-dev --python "$BRIDGE_PYTHON" </dev/null)
   else
-    (cd "$DIR" && run uv sync --frozen --no-dev </dev/null)
+    (cd "$DIR" && run uv sync --frozen --no-dev --python "$BRIDGE_PYTHON" </dev/null)
   fi
 }
 

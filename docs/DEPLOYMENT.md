@@ -274,8 +274,9 @@ in the [README](../README.md#optional-umay) first: your questions and the record
 are sent to OpenAI.
 
 1. Install the Codex CLI so `codex` is on `PATH`, and sign in with `codex login`.
-2. Install [uv](https://docs.astral.sh/uv/) and the project's runtime dependencies (uv downloads
-   Python 3.12 if the system Python is older): `uv sync --frozen --no-dev`.
+2. Install [uv](https://docs.astral.sh/uv/) and the project's runtime dependencies on a Python the
+   lock file has wheels for (uv downloads one if the system Python is older or newer):
+   `uv sync --frozen --no-dev --python '>=3.12,<3.15'`.
 3. Start the bridge: `uv run --frozen --no-dev python scripts/start_codex_bridge.py`. It copies your
    login into an isolated `~/.codex/healthos-bridge` home with shell, browser, plugin and multi-agent
    tools disabled, listens on the `docker0` address (never `0.0.0.0`; override with
