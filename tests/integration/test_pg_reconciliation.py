@@ -25,7 +25,10 @@ pytestmark = pytest.mark.integration
 async def test_0016_upgrade_preserves_raw_versions_and_immutable_receipts(
     database_url, alembic_config, monkeypatch
 ):
-    command.upgrade(alembic_config, "20261025_0015")
+    # The models carry the columns of head (0025: provider), which 0015 does not have, so
+    # the first sync is stored at head and the schema is then brought back to 0015, from
+    # which 0016 is upgraded with those rows and receipts in place.
+    command.upgrade(alembic_config, "head")
     engine = create_async_engine(database_url)
     sessions = async_sessionmaker(engine, expire_on_commit=False)
     monkeypatch.setattr(reconciliation, "datetime", Frozen)
@@ -35,6 +38,7 @@ async def test_0016_upgrade_preserves_raw_versions_and_immutable_receipts(
     runner = Runner(sessions, "sync")
     try:
         await runner.run(Client(Page([a, b, missing], None)))
+        command.downgrade(alembic_config, "20261025_0015")
         command.upgrade(alembic_config, "head")
         command.check(alembic_config)
         row, _, _ = await execute(sessions, Page([a, changed, new], None))

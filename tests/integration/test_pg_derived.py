@@ -48,6 +48,12 @@ async def test_0018_preserves_archive_history_manual_rows_and_guard_definitions(
         "JOIN pg_proc p ON p.oid=t.tgfoid WHERE NOT t.tgisinternal ORDER BY t.tgname"
     )
     try:
+        async with sessions() as session:
+            pristine_guards = (await session.execute(guards)).all()
+        # The models carry the columns of head (0025: provider), which 0017 does not have, so
+        # the rows are stored at head and the schema is then brought back to 0017, where the
+        # comparison starts (as in tests/test_derived_migration.py).
+        command.upgrade(alembic_config, "head")
         await store(sessions, "steps", steps(count=100))
         await store(sessions, "steps", steps(count=120))
         mutation = await raw_mutation(sessions, "heart-rate", "device")
@@ -64,6 +70,7 @@ async def test_0018_preserves_archive_history_manual_rows_and_guard_definitions(
                 )
             )
             session.add(WebhookStatusEvent(reason="signature_valid", occurred_at=T0))
+        command.downgrade(alembic_config, "20261025_0017")
         # Tables of later migrations (0022, 0023, 0024) do not exist at the 0017 target; 0025
         # adds only columns (provider, source_record_id) to the normalized tables.
         newer = {
@@ -84,6 +91,7 @@ async def test_0018_preserves_archive_history_manual_rows_and_guard_definitions(
         async with sessions() as session:
             before = await snapshot(session, newer)
             before_guards = (await session.execute(guards)).all()
+        assert before_guards == pristine_guards
         command.upgrade(alembic_config, "20261025_0019")
         async with sessions() as session:
             legacy_guards = (await session.execute(guards)).all()

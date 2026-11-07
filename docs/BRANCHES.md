@@ -87,6 +87,10 @@ git diff main eklenti/apple --stat  # must list only the extension's files and l
 ```
 
 - It is never merged into `dev`, `main` or `live`.
+- Its migrations chain after `main`'s head, so the branch owns two lines that `main` does not:
+  the `down_revision` of its first migration (a merge migration when `main` adds one) and
+  `HEAD` in `tests/integration/test_pg_migrations.py`, which names the branch's own head.
+  Resolve both on every `git merge main`.
 - The branch may be pushed to GitHub only (`git push github eklenti/apple`), never to the Gitea
   mirror.
 - The snapshot merges it automatically (see below).

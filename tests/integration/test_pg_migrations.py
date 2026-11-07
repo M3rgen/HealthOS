@@ -12,7 +12,7 @@ pytestmark = pytest.mark.integration
 
 FRESHNESS_INDEX = "ix_raw_health_data_type_freshness"
 AD_HOC_INDEX = "ix_raw_health_data_type_effective_time"
-HEAD = "20261107_0025"
+HEAD = "20261107_a001"  # Apple dalı: a001, 0025 üstüne biner; main birleşince burayı güncelle
 
 
 def _sync_url(database_url: str) -> str:

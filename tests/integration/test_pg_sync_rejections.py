@@ -1,11 +1,10 @@
-"""Rejected records against real PostgreSQL jsonb (see test_sync_rejections), and 0023's locks."""
+"""Rejected records against real PostgreSQL jsonb (see test_sync_rejections); 0023-0024 locks."""
 
 from argparse import Namespace
 
 import pytest
 from alembic import command
 from sqlalchemy import create_engine, text
-from test_pg_migrations import HEAD
 from test_sync_rejections import KINDS
 from test_sync_rejections import (
     test_a_failed_page_rolls_back_its_rejections_but_keeps_the_exchange as check_rollback,
@@ -25,6 +24,10 @@ from test_sync_rejections import (
 
 pytestmark = pytest.mark.integration
 PREVIOUS = "20261102_0022"
+# The last revision that adds only new tables: 0023 and 0024 take no lock on an existing table.
+# 0025 adds columns to the normalized tables, an ACCESS EXCLUSIVE lock that a running pg_dump
+# blocks until it ends, so head is not the target here.
+LOCK_FREE = "20261107_0024"
 
 
 @pytest.mark.parametrize("kind", KINDS)
@@ -48,7 +51,7 @@ async def test_postgres_partial_key_prevents_unanchored_repeats(pg_sessions):
     await check_unanchored(pg_sessions)
 
 
-def test_0023_runs_next_to_a_dump(database_url, alembic_config, monkeypatch):
+def test_0023_and_0024_run_next_to_a_dump(database_url, alembic_config, monkeypatch):
     command.upgrade(alembic_config, PREVIOUS)
     # Safety net for the test only: a wait for a lock fails after 20 s instead of hanging.
     monkeypatch.setenv("PGOPTIONS", "-c statement_timeout=20000")
@@ -61,10 +64,10 @@ def test_0023_runs_next_to_a_dump(database_url, alembic_config, monkeypatch):
         # What pg_dump holds on every table for the length of the dump.
         blocker.execute(text(f"LOCK TABLE {', '.join(tables)} IN ACCESS SHARE MODE"))
         alembic_config.cmd_opts = Namespace(x=[])
-        command.upgrade(alembic_config, HEAD)
+        command.upgrade(alembic_config, LOCK_FREE)
         blocker.rollback()
         with engine.connect() as connection:
-            assert connection.scalar(text("SELECT version_num FROM alembic_version")) == HEAD
+            assert connection.scalar(text("SELECT version_num FROM alembic_version")) == LOCK_FREE
     finally:
         blocker.close()
         engine.dispose()
