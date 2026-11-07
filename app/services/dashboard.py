@@ -10,6 +10,7 @@ from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
+from app.core.providers import APPLE
 from app.core.timeutil import as_utc
 from app.google_health.data_types import supported_data_types
 from app.models.eligibility import normalized_counted, normalized_quarantined, raw_counted
@@ -25,7 +26,7 @@ from app.models.manual import ManualMeasurement
 from app.models.state import RawHealthData
 from app.parsers.common import first_number, parse_date, payload_for
 from app.parsers.sleep import SLEEP_NUMERIC_ERROR, sleep_asleep_seconds
-from app.services import garmin_readers
+from app.services import apple_readers, garmin_readers
 from app.services.current_heart import heart_rate_samples
 from app.services.current_sleep import current_sleep, sleep_wake_window
 from app.services.current_steps import current_steps
@@ -47,6 +48,8 @@ from app.services.source_precedence import (
     resolve_samples,
 )
 
+# The source code of Apple Health data, whichever provider delivered it.
+HEALTH_KIT = "HEALTH_KIT"
 # The day values the dashboard resolves across sources (app/services/source_precedence.py).
 DAILY_METRICS = ("steps", "sleep_seconds", "resting_bpm", "hrv_ms", "spo2")
 
@@ -375,9 +378,12 @@ async def dashboard_data(
                 rows[day][key] = finite_number(value)
                 seen(day, key, item.raw_json)
 
-    # Garmin's values of the same days, resolved against Google's by the policy: the selected
-    # source's value is the day's value, the others stay listed; nothing is summed.
+    # Garmin's and Apple's values of the same days, resolved against Google's by the policy:
+    # the selected source's value is the day's value, the others stay listed; nothing is
+    # summed. Apple's values carry the source code HEALTH_KIT, like Apple data Google relays:
+    # on a day with both, Google's comes first and Apple's stays its alternative.
     garmin_days = await garmin_readers.daily_values(session, first, end_date, zone)
+    apple_days = await apple_readers.daily_values(session, first, end_date, zone)
     for day, values in rows.items():
         values["sources"] = {}
         for metric in DAILY_METRICS:
@@ -389,11 +395,14 @@ async def dashboard_data(
             garmin_value = garmin_days.get(day, {}).get(metric)
             if garmin_value is not None:
                 observations.append(Observation(GARMIN, garmin_value, provider=GARMIN))
+            apple_value = apple_days.get(day, {}).get(metric)
+            if apple_value is not None:
+                observations.append(Observation(HEALTH_KIT, apple_value, provider=APPLE))
             resolution = resolve(metric, observations, policy)
             values[metric] = resolution.value
             values["sources"][metric] = resolution.as_dict()
             if metric == "sleep_seconds" and resolution.selected is not None:
-                if resolution.selected.source == GARMIN:
+                if resolution.selected.provider in (GARMIN, APPLE):
                     values["sleep_assumptions"] = ["from_normalized_columns"]
 
     heart_hours, heart_sources = await _heart_chart(
@@ -520,13 +529,16 @@ async def _heart_chart(
 ) -> tuple[list[float | None], dict]:
     """The day's hourly heart-rate means, one source per minute: inside a selected workout
     window the activity policy picks (Garmin first), outside it the health policy (Fitbit
-    first); a source's samples are never averaged with another's. Returns the 24 means and
+    first); a source's samples are never averaged with another's. Apple's samples join
+    Google's HEALTH_KIT series only in the minutes Google's HEALTH_KIT samples leave empty
+    (the same Apple data relayed by Google is not counted twice). Returns the 24 means and
     the sources card (``source``, ``label``, ``alternatives``, ``activity_windows``)."""
     start = datetime.combine(day, time.min, zone).astimezone(UTC)
     stop = datetime.combine(day + timedelta(days=1), time.min, zone).astimezone(UTC)
     google = await heart_rate_samples(session, start, stop, source_filter)
     garmin = await garmin_readers.heart_rate_samples(session, start, stop)
-    if not garmin:
+    apple = await apple_readers.heart_rate_samples(session, start, stop)
+    if not garmin and not apple:
         # Google alone: the hourly means ``heart_rate_hours`` would give, from the samples
         # already read (every raw payload is parsed once).
         hours = hourly_means([(moment, bpm) for moment, bpm, _ in google], zone)
@@ -541,10 +553,18 @@ async def _heart_chart(
         (as_utc(item["start_time"]), as_utc(item["end_time"]))
         for item in await garmin_readers.workouts(session, start - timedelta(days=1), stop)
     ]
-    series = {}
+    series: dict[str, list[tuple[datetime, float]]] = {}
     for moment, bpm, platform in google:
         series.setdefault(google_source_of((platform,)), []).append((moment, bpm))
-    series[GARMIN] = garmin
+    if garmin:
+        series[GARMIN] = garmin
+    if apple:
+        relayed = {
+            moment.replace(second=0, microsecond=0) for moment, _ in series.get(HEALTH_KIT, ())
+        }
+        own = [item for item in apple if item[0].replace(second=0, microsecond=0) not in relayed]
+        if own:
+            series[HEALTH_KIT] = sorted([*series.get(HEALTH_KIT, []), *own])
     kept, chosen = resolve_samples(series, windows, policy)
     hours = hourly_means([(moment, bpm) for moment, bpm, _ in kept], zone)
     ranked = sorted(series, key=lambda code: (policy.rank(code, "health"), code))

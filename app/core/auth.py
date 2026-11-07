@@ -12,6 +12,7 @@ from starlette.datastructures import Headers
 from starlette.responses import JSONResponse, RedirectResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
+from app.core.apple_paths import APPLE_RECEIVER_PATH
 from app.core.host_validation import WEBHOOK_PATH, hostname
 
 COOKIE_NAME = "healthos_ui"
@@ -20,10 +21,12 @@ LOGIN_PATH = "/login"
 LOGOUT_PATH = "/logout"
 # Requests that must work without the UI token. The OAuth callback arrives as a
 # cross-site redirect (SameSite=Strict cookies are withheld) and is guarded by the
-# HMAC-signed state that only the authenticated /auth/google/start can mint.
+# HMAC-signed state that only the authenticated /auth/google/start can mint. The Apple
+# receiver checks its own bearer token (APPLE_RECEIVER_TOKEN_FILE), never the UI token.
 EXEMPT = frozenset(
     {
         ("POST", WEBHOOK_PATH),
+        ("POST", APPLE_RECEIVER_PATH),
         ("GET", "/health/live"),
         ("HEAD", "/health/live"),
         ("GET", LOGIN_PATH),

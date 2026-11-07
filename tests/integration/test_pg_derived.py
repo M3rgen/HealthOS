@@ -25,7 +25,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.google_health.data_types import REGISTRY
-from app.models import garmin, raw_rejections
+from app.models import apple, garmin, raw_rejections
 from app.models.derived_invalidation import BUILD_LOCK
 from app.models.state import WebhookEvent
 from app.models.webhook_status import WebhookStatusEvent
@@ -66,9 +66,21 @@ async def test_0018_preserves_archive_history_manual_rows_and_guard_definitions(
             session.add(WebhookStatusEvent(reason="signature_valid", occurred_at=T0))
         # Tables of later migrations (0022, 0023, 0024) do not exist at the 0017 target; 0025
         # adds only columns (provider, source_record_id) to the normalized tables.
-        newer = {"display_preferences", garmin.STATE, *raw_rejections.TABLES, *garmin.TABLES}
+        newer = {
+            "display_preferences",
+            garmin.STATE,
+            *raw_rejections.TABLES,
+            *garmin.TABLES,
+            *apple.TABLES,
+            apple.IMPORTS,
+            apple.SOURCES,
+        }
         # 0023's and 0024's guards on their own new tables exist at head only.
-        later = set(raw_rejections.PG_TRIGGER_SQL) | set(garmin.PG_TRIGGER_SQL)
+        later = (
+            set(raw_rejections.PG_TRIGGER_SQL)
+            | set(garmin.PG_TRIGGER_SQL)
+            | set(apple.PG_TRIGGER_SQL)
+        )
         async with sessions() as session:
             before = await snapshot(session, newer)
             before_guards = (await session.execute(guards)).all()

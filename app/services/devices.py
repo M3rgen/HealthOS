@@ -5,13 +5,18 @@ as ``Chains.members`` reads them), across every data type: "Google Fitbit Air" a
 Air" are one watch. The entry carries the newest form's name, the physical time of its newest
 record over all its data types (``raw_source_sightings.newest_record_at``) and a freshness
 status derived from it. The Garmin source (``garmin_raw_records``, pulled rather than seen
-through Google) is one more entry when the archive holds its records. Every entry says, per
-category, whether the device is the primary or a secondary source under the precedence
-policy (app/services/source_precedence.py). Read-only; nothing here writes.
+through Google) is one more entry when the archive holds its records. Each Apple Health source
+(``apple_sources``: Health Auto Export or an ``export.zip`` import, provider ``APPLE``, source
+code ``HEALTH_KIT``) is an entry of its own, or joins the Google entry of the same Apple
+device when Google relays it too (platform ``HEALTH_KIT`` and a matching name): one row with
+``providers: ["GOOGLE", "APPLE"]``. Every entry says, per category, whether the device is the
+primary or a secondary source under the precedence policy
+(app/services/source_precedence.py). Read-only; nothing here writes.
 """
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -20,6 +25,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.providers import APPLE
 from app.models.identity import RawSourceSighting
 from app.parsers.identity import stable_package
 from app.services.source_chain_evidence import Span
@@ -33,6 +39,8 @@ CONNECTED, DELAYED, DISCONNECTED = "bagli", "gecikmeli", "kopuk"
 STATUSES = (CONNECTED, DELAYED, DISCONNECTED)
 GOOGLE_OK, GOOGLE_UNAVAILABLE, GOOGLE_NOT_QUERIED = "ok", "unavailable", "not_queried"
 GARMIN_OK, GARMIN_OFF = "ok", "off"
+APPLE_OK, APPLE_OFF = "ok", "off"
+HEALTH_KIT = "HEALTH_KIT"
 
 
 @dataclass(frozen=True)
@@ -166,6 +174,105 @@ def garmin_device(
     }
 
 
+def _apple_form_factor(*names: object) -> str | None:
+    for name in names:
+        text = (_text(name) or "").casefold()
+        if "watch" in text:
+            return "WATCH"
+        if "iphone" in text:
+            return "PHONE"
+        if "ipad" in text:
+            return "TABLET"
+    return None
+
+
+def apple_device(
+    source: Mapping[str, Any],
+    *,
+    now: datetime,
+    policy: Policy,
+    thresholds: Thresholds = DEFAULT_THRESHOLDS,
+) -> dict[str, Any]:
+    """The Cihazlarım entry of one Apple Health source (``apple_readers.sources`` row).
+    ``first_seen``/``last_seen`` are the first and last import that carried it, ``last_data``
+    its newest record's time."""
+    name = source["source_name"]
+    model = _text(source.get("device"))
+    newest = source.get("last_data_at")
+    apple = model is not None and model.casefold().startswith(("apple", "iphone", "watch", "ipad"))
+    digest = hashlib.sha256(name.encode("utf-8")).hexdigest()[:10]
+    return {
+        "id": f"apple-{digest}",
+        "name": name,
+        "platform": HEALTH_KIT,
+        "provider": APPLE,
+        "providers": [APPLE],
+        "source_code": HEALTH_KIT,
+        "form_factor": _apple_form_factor(model, name),
+        "manufacturer": "Apple" if apple else None,
+        "model": model,
+        "application": None,
+        "recording_method": None,
+        "previous_names": [],
+        "fingerprints": [],
+        "data_types": list(source["data_types"]),
+        "data_type_count": len(source["data_types"]),
+        "first_seen": source["first_seen_at"].isoformat(),
+        "last_seen": source["last_seen_at"].isoformat(),
+        "last_data": newest.isoformat() if newest is not None else None,
+        "apple_last_import": source["last_seen_at"].isoformat(),
+        "apple_channels": list(source.get("channels") or []),
+        "status": thresholds.status(newest, now),
+        "precedence": precedence(HEALTH_KIT, policy),
+    }
+
+
+def attach_apple(
+    devices: list[dict[str, Any]],
+    sources: Iterable[Mapping[str, Any]],
+    *,
+    now: datetime,
+    policy: Policy,
+    thresholds: Thresholds = DEFAULT_THRESHOLDS,
+) -> None:
+    """Add the Apple sources to ``devices``: an Apple source joins the Google entry of
+    platform ``HEALTH_KIT`` whose name matches (``_matches``): ``providers`` gains ``APPLE``,
+    ``last_data`` (and the status) follow the newer of the two, ``apple_last_import`` and
+    ``apple_data_types`` are added. Any other Apple source is an entry of its own."""
+    for source in sources:
+        entry = apple_device(source, now=now, policy=policy, thresholds=thresholds)
+        match = next(
+            (
+                device
+                for device in devices
+                if device.get("provider") == GOOGLE
+                and device.get("source_code") == HEALTH_KIT
+                and _matches(device, entry)
+            ),
+            None,
+        )
+        if match is None:
+            devices.append(entry)
+            continue
+        providers = match.setdefault("providers", [GOOGLE])
+        if APPLE not in providers:
+            providers.append(APPLE)
+        if entry["last_data"] is not None and (
+            match["last_data"] is None or entry["last_data"] > match["last_data"]
+        ):
+            match["last_data"] = entry["last_data"]
+            match["status"] = thresholds.status(datetime.fromisoformat(entry["last_data"]), now)
+        previous = match.get("apple_last_import")
+        if previous is None or entry["apple_last_import"] > previous:
+            match["apple_last_import"] = entry["apple_last_import"]
+        match["apple_data_types"] = sorted(
+            {*match.get("apple_data_types", []), *entry["data_types"]}
+        )
+        match.setdefault("apple_sources", []).append(entry["name"])
+        if match.get("model") is None and entry["model"] is not None:
+            match["model"] = entry["model"]
+
+
 def sort_devices(devices: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Connected first; within a status the freshest device first (UTC ISO strings sort as
     instants), a device without a dated record last; the sorts are stable."""
@@ -291,10 +398,12 @@ async def device_report(
     """The Cihazlarım card: the archive's devices, with Google's paired-device sync times when
     ``paired_devices`` (an awaitable factory, ``DiscoveryService.devices``) answers. A Google
     failure never hides the archive: ``google`` is ``unavailable`` and the devices still come.
-    The Garmin source is listed (``garmin: ok``) when the archive holds Garmin records.
+    The Garmin source is listed (``garmin: ok``) when the archive holds Garmin records, the
+    Apple Health sources (``apple: ok``) when ``apple_sources`` has any.
     """
     from app.google_health.client import GoogleHealthError
     from app.google_health.oauth import OAuthError
+    from app.services.apple_readers import sources as apple_sources
     from app.services.garmin_readers import archive_summary
 
     now = now or datetime.now(UTC)
@@ -309,6 +418,11 @@ async def device_report(
             garmin_device(summary, name=garmin_name, now=now, policy=policy, thresholds=thresholds)
         )
         sort_devices(devices)
+    apple, found = APPLE_OFF, await apple_sources(session)
+    if found:
+        apple = APPLE_OK
+        attach_apple(devices, found, now=now, policy=policy, thresholds=thresholds)
+        sort_devices(devices)
     google, paired = GOOGLE_NOT_QUERIED, None
     if paired_devices is not None:
         try:
@@ -322,6 +436,7 @@ async def device_report(
         "thresholds": thresholds.as_dict(),
         "google": google,
         "garmin": garmin,
+        "apple": apple,
         "precedence": policy.as_dict(),
         "devices": devices,
         "google_unmatched": unmatched,

@@ -7,6 +7,10 @@ import asyncio
 import typer
 
 from app.cli._context import context
+from app.cli.apple_commands import apple_import as apple_import
+from app.cli.apple_commands import apple_normalize as apple_normalize
+from app.cli.apple_commands import apple_status as apple_status
+from app.cli.apple_commands import apple_token as apple_token
 from app.cli.archive_commands import FETCHED_SINCE_OPTION as FETCHED_SINCE_OPTION
 from app.cli.archive_commands import FROM_DB_OPTION as FROM_DB_OPTION
 from app.cli.archive_commands import OUTPUT_OPTION as OUTPUT_OPTION
@@ -75,6 +79,10 @@ for _command in (
     garmin_status,
     garmin_pull,
     garmin_backfill,
+    apple_token,
+    apple_import,
+    apple_status,
+    apple_normalize,
 ):
     app.command()(_command)
 

@@ -164,7 +164,11 @@ HEALTH_TOOL = {
         "precedence: when several devices report the same data, sport activities show Garmin "
         "first and every other health metric shows the Fitbit first; daily and devices return "
         "the selected source with the other sources as alternatives (never summed), and the "
-        "legacy daily fields hold the selected source's value. No SQL or "
+        "legacy daily fields hold the selected source's value. Apple Health sources "
+        "(Health Auto Export or an export.zip import) appear as provider APPLE with source "
+        "HEALTH_KIT, the code Google uses for the Apple data it relays (a day with both lists "
+        "Google's value first and Apple's as its alternative); Apple's hrv_ms is SDNN, not "
+        "RMSSD. No SQL or "
         "writes allowed. Reads refresh only a disposable derived cache; raw and manual data "
         "are never written. "
     ),

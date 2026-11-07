@@ -222,3 +222,77 @@ async def test_public_webhook_keeps_signature_validation(application):
         invalid = await client.post("/webhooks/google-health", json={"data": {}}, headers=headers)
         assert invalid.status_code == 401
         assert runtime.webhook_processor.ingest_verified.await_count == 1
+
+
+@pytest.fixture
+def apple_application(monkeypatch):
+    settings = Settings(
+        _env_file=None,
+        codex_bridge_token=None,
+        google_health_webhook_endpoint_uri="https://hooks.example/webhooks/google-health",
+        google_health_webhook_authorization="Bearer local-test",
+        apple_receiver_endpoint_uri="https://apple.example/webhooks/apple-health",
+    )
+    monkeypatch.setattr(main, "get_settings", lambda: settings)
+    monkeypatch.setattr(
+        main,
+        "build_runtime",
+        lambda *_: SimpleNamespace(webhook_status=SimpleNamespace(record=AsyncMock())),
+    )
+    application = main.create_app()
+
+    @application.get("/host-probe")
+    async def probe():
+        return {"reached": True}
+
+    return application
+
+
+async def test_apple_host_reaches_only_the_apple_receiver_post(apple_application):
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=apple_application), base_url="https://apple.example"
+    ) as client:
+        # The receiver is off by default: 404 comes from the route, past the host check.
+        receiver = await client.post("/webhooks/apple-health", json={"data": {}})
+        wrong_method = await client.get("/webhooks/apple-health")
+        trailing = await client.post("/webhooks/apple-health/", json={"data": {}})
+        google = await client.post("/webhooks/google-health", json={"type": "verification"})
+        private = await client.get("/host-probe")
+        upload = await client.post("/api/apple/import", content=b"x")
+    assert receiver.status_code == 404
+    assert wrong_method.status_code == trailing.status_code == 400
+    assert google.status_code == private.status_code == upload.status_code == 400
+
+
+async def test_google_host_does_not_reach_the_apple_receiver(apple_application):
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=apple_application), base_url="https://hooks.example"
+    ) as client:
+        apple = await client.post("/webhooks/apple-health", json={"data": {}})
+        google = await client.post(
+            "/webhooks/google-health",
+            json={"type": "verification"},
+            headers={"Authorization": "Bearer local-test"},
+        )
+    assert apple.status_code == 400
+    assert google.status_code == 201
+
+
+async def test_apple_receiver_path_needs_a_configured_host(application):
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=application), base_url="https://apple.example"
+    ) as client:
+        response = await client.post("/webhooks/apple-health", json={"data": {}})
+    assert response.status_code == 400
+
+
+def test_invalid_apple_endpoint_never_widens_the_host_set():
+    from app.core.host_validation import HostValidationMiddleware
+
+    for uri in (
+        "http://apple.example/webhooks/apple-health",
+        "https://apple.example/api/apple/import",
+        "https://[bad/webhooks/apple-health",
+    ):
+        middleware = HostValidationMiddleware(None, apple_endpoint_uri=uri)  # type: ignore[arg-type]
+        assert middleware.public == {}

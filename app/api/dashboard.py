@@ -14,6 +14,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import ManualWriteRoute, require_job_request
+from app.core.providers import APPLE, GOOGLE
 from app.core.timeutil import as_utc
 from app.db.session import get_session
 from app.models.eligibility import raw_counted
@@ -22,7 +23,7 @@ from app.models.identity import plan_each_query
 from app.models.manual import ManualMeasurement, ManualWorkout
 from app.models.manual_flags import REASON_LENGTH, TEST_FLAG
 from app.models.state import RawHealthData
-from app.services import garmin_readers
+from app.services import apple_readers, garmin_readers
 from app.services.current_workouts import current_workouts
 from app.services.dashboard import dashboard_data
 from app.services.dashboard_window import (
@@ -35,6 +36,7 @@ from app.services.manual_flags import active_flags, record_flag
 from app.services.source_precedence import (
     MANUAL,
     PRIMARY,
+    SECONDARY,
     Observation,
     Policy,
     label,
@@ -110,44 +112,102 @@ def workout_dict(row, source: str) -> dict:
     }
 
 
+def relayed_apple_workouts(rows: list[dict]) -> dict[str, str]:
+    """Apple workouts Google also lists: key of the Apple row -> key of the Google row.
+
+    Google relays Apple Health data with the source code ``HEALTH_KIT``, the code Apple's own
+    rows carry, so ``resolve_sessions`` (which never sets one source against itself) would
+    list both. An Apple row that overlaps a Google ``HEALTH_KIT`` row by at least half of the
+    shorter of the two is the same workout: it is folded under that row (the first such by
+    start time) instead of being listed again.
+    """
+    google = sorted(
+        (
+            row
+            for row in rows
+            if row["provider"] == GOOGLE and row["source_code"] == apple_readers.HEALTH_KIT
+        ),
+        key=lambda row: (row["start_time"], str(row["id"])),
+    )
+    folded: dict[str, str] = {}
+    for row in rows:
+        if row["provider"] != APPLE:
+            continue
+        match = next(
+            (
+                other
+                for other in google
+                if apple_readers.overlap_share(
+                    row["start_time"], row["end_time"], other["start_time"], other["end_time"]
+                )
+                >= apple_readers.SAME_WORKOUT
+            ),
+            None,
+        )
+        if match is not None:
+            folded[_workout_key(row)] = _workout_key(match)
+    return folded
+
+
+def _workout_key(row: dict) -> str:
+    return f"{row['source_code']}:{row['provider']}:{row['id']}"
+
+
+def _alternative(row: dict) -> dict:
+    return {
+        "id": row["id"],
+        "source": label(row["source_code"]),
+        "source_code": row["source_code"],
+        "start_time": row["start_time"],
+        "end_time": row["end_time"],
+    }
+
+
 def place_workouts(rows: list[dict], policy: Policy | None = None) -> list[dict]:
     """Label every row's source and place the device rows under the activity policy: a
     session that overlaps a higher-ranked source's session is ``secondary`` and listed among
     that session's ``alternatives``; nothing is merged or summed. Manual rows stay as they are.
+    An Apple workout Google also relays (``relayed_apple_workouts``) is ``secondary`` under
+    the Google row (or under the row that Google row is itself folded under).
     """
     policy = policy or Policy.from_settings()
+    folded = relayed_apple_workouts(rows)
+    placed = [row for row in rows if _workout_key(row) not in folded]
     placements = resolve_sessions(
         [
             Observation(
                 row["source_code"],
                 row,
                 provider=row["provider"],
-                record_id=f"{row['source_code']}:{row['id']}",
+                record_id=_workout_key(row),
                 start=row["start_time"],
                 end=row["end_time"],
             )
-            for row in rows
+            for row in placed
         ],
         policy,
     )
-    by_key = {f"{row['source_code']}:{row['id']}": row for row in rows}
+    by_key = {_workout_key(row): row for row in rows}
     for key, row in by_key.items():
+        if key in folded:
+            continue
         placement = placements[key]
         row["source"] = label(row["source_code"])
         row["priority"] = placement.priority
         row["group"] = (
             by_key[placement.group]["id"] if placement.group in by_key else placement.group
         )
-        row["alternatives"] = [
-            {
-                "id": item.value["id"],
-                "source": label(item.source),
-                "source_code": item.source,
-                "start_time": item.value["start_time"],
-                "end_time": item.value["end_time"],
-            }
-            for item in placement.alternatives
-        ]
+        row["alternatives"] = [_alternative(item.value) for item in placement.alternatives]
+    for key, holder_key in folded.items():
+        row, holder = by_key[key], by_key[holder_key]
+        primary = holder
+        if holder["priority"] == SECONDARY:
+            primary = next((other for other in placed if other["id"] == holder["group"]), holder)
+        row["source"] = label(row["source_code"])
+        row["priority"] = SECONDARY
+        row["group"] = primary["id"]
+        row["alternatives"] = []
+        primary["alternatives"].append(_alternative(row))
     return rows
 
 
@@ -176,6 +236,7 @@ async def workouts(
     await plan_each_query(session)
     rows = await current_workouts(session, start, stop)
     rows.extend(await garmin_readers.workouts(session, start, stop))
+    rows.extend(await apple_readers.workouts(session, start, stop))
     manual = (
         await session.scalars(
             select(ManualWorkout).where(

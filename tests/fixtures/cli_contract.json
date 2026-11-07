@@ -1,5 +1,5 @@
 {
-  "root_help": "                                                                                \n Usage: root [OPTIONS] COMMAND [ARGS]...                                        \n                                                                                \n Operate the Personal Health Data Mirror.                                       \n                                                                                \n╭─ Options ────────────────────────────────────────────────────────────────────╮\n│ --install-completion          Install completion for the current shell.      │\n│ --show-completion             Show completion for the current shell, to copy │\n│                               it or customize the installation.              │\n│ --help                        Show this message and exit.                    │\n╰──────────────────────────────────────────────────────────────────────────────╯\n╭─ Commands ───────────────────────────────────────────────────────────────────╮\n│ status                  Show synchronization and backfill status.            │\n│ backfill                Start or resume the historical backfill and wait for │\n│                         completion.                                          │\n│ sync                    Run incremental synchronization for one or every     │\n│                         configured data type.                                │\n│ reconcile               Re-read a recent window across every mirrored data   │\n│                         type.                                                │\n│ webhook-readiness       Report secret-safe Google Health subscriber          │\n│                         prerequisites.                                       │\n│ webhook-status          Show secret-safe local webhook receipt and           │\n│                         processing status.                                   │\n│ webhook-replay-pending  Retry stored pending and failed webhook elements     │\n│                         without a Google resend.                             │\n│ verify                  Check archive guards, payload and body hashes,       │\n│                         version history, and sync errors.                    │\n│ history                 List every stored version of raw records (oldest     │\n│                         first) as JSON.                                      │\n│ import-versions         Add payload versions (and whole records) that only   │\n│                         survive in old dumps.                                │\n│ identity-backfill       Decide source chains, add v2 aliases and link        │\n│                         duplicate rows of a record (idempotent).             │\n│ identity-decide         Decide what the reconciler left open: two sources    │\n│                         are one device, or two devices.                      │\n│ identity-sources        List a data type's source fingerprints: spans,       │\n│                         devices, chains (with review state),                 │\n│                         pairs kept apart, the owner's decisions, and what    │\n│                         the chain rule leaves open.                          │\n│ responses               List stored Google responses (newest first, metadata │\n│                         only) as JSON.                                       │\n│ export-response         Write one stored Google response body byte for byte  │\n│                         (metadata goes to stderr).                           │\n│ probe                   Probe accessible Google Health types without         │\n│                         archiving records or a backfill.                     │\n│ rejections              Eşitlemede reddedilen Google kayıtlarını listele,    │\n│                         onayla ya da dışa aktar.                             │\n│ garmin-status           Garmin Connect Personal API arşivinin çekme durumunu │\n│                         göster (değer ve sır içermez).                       │\n│ garmin-pull             Garmin'den son GARMIN_LOOKBACK_DAYS günü bir kez çek │\n│                         (zamanlayıcının yaptığı iş).                         │\n│ garmin-backfill         Garmin geçmişini parça parça çek; kesilirse aynı     │\n│                         sınırlarla kaldığı yerden sürer.                     │\n╰──────────────────────────────────────────────────────────────────────────────╯\n\n",
+  "root_help": "                                                                                \n Usage: root [OPTIONS] COMMAND [ARGS]...                                        \n                                                                                \n Operate the Personal Health Data Mirror.                                       \n                                                                                \n╭─ Options ────────────────────────────────────────────────────────────────────╮\n│ --install-completion          Install completion for the current shell.      │\n│ --show-completion             Show completion for the current shell, to copy │\n│                               it or customize the installation.              │\n│ --help                        Show this message and exit.                    │\n╰──────────────────────────────────────────────────────────────────────────────╯\n╭─ Commands ───────────────────────────────────────────────────────────────────╮\n│ status                  Show synchronization and backfill status.            │\n│ backfill                Start or resume the historical backfill and wait for │\n│                         completion.                                          │\n│ sync                    Run incremental synchronization for one or every     │\n│                         configured data type.                                │\n│ reconcile               Re-read a recent window across every mirrored data   │\n│                         type.                                                │\n│ webhook-readiness       Report secret-safe Google Health subscriber          │\n│                         prerequisites.                                       │\n│ webhook-status          Show secret-safe local webhook receipt and           │\n│                         processing status.                                   │\n│ webhook-replay-pending  Retry stored pending and failed webhook elements     │\n│                         without a Google resend.                             │\n│ verify                  Check archive guards, payload and body hashes,       │\n│                         version history, and sync errors.                    │\n│ history                 List every stored version of raw records (oldest     │\n│                         first) as JSON.                                      │\n│ import-versions         Add payload versions (and whole records) that only   │\n│                         survive in old dumps.                                │\n│ identity-backfill       Decide source chains, add v2 aliases and link        │\n│                         duplicate rows of a record (idempotent).             │\n│ identity-decide         Decide what the reconciler left open: two sources    │\n│                         are one device, or two devices.                      │\n│ identity-sources        List a data type's source fingerprints: spans,       │\n│                         devices, chains (with review state),                 │\n│                         pairs kept apart, the owner's decisions, and what    │\n│                         the chain rule leaves open.                          │\n│ responses               List stored Google responses (newest first, metadata │\n│                         only) as JSON.                                       │\n│ export-response         Write one stored Google response body byte for byte  │\n│                         (metadata goes to stderr).                           │\n│ probe                   Probe accessible Google Health types without         │\n│                         archiving records or a backfill.                     │\n│ rejections              Eşitlemede reddedilen Google kayıtlarını listele,    │\n│                         onayla ya da dışa aktar.                             │\n│ garmin-status           Garmin Connect Personal API arşivinin çekme durumunu │\n│                         göster (değer ve sır içermez).                       │\n│ garmin-pull             Garmin'den son GARMIN_LOOKBACK_DAYS günü bir kez çek │\n│                         (zamanlayıcının yaptığı iş).                         │\n│ garmin-backfill         Garmin geçmişini parça parça çek; kesilirse aynı     │\n│                         sınırlarla kaldığı yerden sürer.                     │\n│ apple-token             Health Auto Export alıcısının belirtecini oluştur    │\n│                         (dosya 600) ve bir kez göster.                       │\n│ apple-import            Sağlık uygulamasının dışa aktarmasını                │\n│                         (export.zip/export.xml) arşive al.                   │\n│ apple-status            Apple Sağlık alıcısının ayarını ve son içe           │\n│                         aktarmaları göster (değer ve sır içermez).           │\n│ apple-normalize         Arşivdeki Apple Sağlık kayıtlarını normalize         │\n│                         tablolara yeniden işle.                              │\n╰──────────────────────────────────────────────────────────────────────────────╯\n\n",
   "commands": {
     "status": {
       "help": "                                                                                \n Usage: root status [OPTIONS]                                                   \n                                                                                \n Show synchronization and backfill status.                                      \n                                                                                \n╭─ Options ────────────────────────────────────────────────────────────────────╮\n│ --help          Show this message and exit.                                  │\n╰──────────────────────────────────────────────────────────────────────────────╯\n\n",
@@ -669,6 +669,81 @@
           "type": "BOOL",
           "help": "Ağa çıkmadan ve yazmadan yalnız istek sayılarını göster.",
           "is_flag": true
+        }
+      ]
+    },
+    "apple-token": {
+      "help": "                                                                                \n Usage: root apple-token [OPTIONS]                                              \n                                                                                \n Health Auto Export alıcısının belirtecini oluştur (dosya 600) ve bir kez       \n göster.                                                                        \n                                                                                \n╭─ Options ────────────────────────────────────────────────────────────────────╮\n│ --rotate                Var olan belirteci yenisiyle değiştir.               │\n│ --file          <path>  Belirteç dosyası; varsayılan                         │\n│                         APPLE_RECEIVER_TOKEN_FILE.                           │\n│ --help                  Show this message and exit.                          │\n╰──────────────────────────────────────────────────────────────────────────────╯\n\n",
+      "parameters": [
+        {
+          "name": "rotate",
+          "opts": [
+            "--rotate"
+          ],
+          "secondary_opts": [],
+          "default": false,
+          "required": false,
+          "nargs": 1,
+          "multiple": false,
+          "type": "BOOL",
+          "help": "Var olan belirteci yenisiyle değiştir.",
+          "is_flag": true
+        },
+        {
+          "name": "file",
+          "opts": [
+            "--file"
+          ],
+          "secondary_opts": [],
+          "default": null,
+          "required": false,
+          "nargs": 1,
+          "multiple": false,
+          "type": "path",
+          "help": "Belirteç dosyası; varsayılan APPLE_RECEIVER_TOKEN_FILE.",
+          "is_flag": false
+        }
+      ]
+    },
+    "apple-import": {
+      "help": "                                                                                \n Usage: root apple-import [OPTIONS] {path}                                      \n                                                                                \n Sağlık uygulamasının dışa aktarmasını (export.zip/export.xml) arşive al.       \n                                                                                \n╭─ Arguments ──────────────────────────────────────────────────────────────────╮\n│ *    path      <path>  export.zip veya export.xml. [required]                │\n╰──────────────────────────────────────────────────────────────────────────────╯\n╭─ Options ────────────────────────────────────────────────────────────────────╮\n│ --help          Show this message and exit.                                  │\n╰──────────────────────────────────────────────────────────────────────────────╯\n\n",
+      "parameters": [
+        {
+          "name": "path",
+          "opts": [
+            "path"
+          ],
+          "secondary_opts": [],
+          "default": null,
+          "required": true,
+          "nargs": 1,
+          "multiple": false,
+          "type": "path",
+          "help": "export.zip veya export.xml.",
+          "is_flag": null
+        }
+      ]
+    },
+    "apple-status": {
+      "help": "                                                                                \n Usage: root apple-status [OPTIONS]                                             \n                                                                                \n Apple Sağlık alıcısının ayarını ve son içe aktarmaları göster (değer ve sır    \n içermez).                                                                      \n                                                                                \n╭─ Options ────────────────────────────────────────────────────────────────────╮\n│ --help          Show this message and exit.                                  │\n╰──────────────────────────────────────────────────────────────────────────────╯\n\n",
+      "parameters": []
+    },
+    "apple-normalize": {
+      "help": "                                                                                \n Usage: root apple-normalize [OPTIONS]                                          \n                                                                                \n Arşivdeki Apple Sağlık kayıtlarını normalize tablolara yeniden işle.           \n                                                                                \n╭─ Options ────────────────────────────────────────────────────────────────────╮\n│ --since        <str>  İlk gün, YYYY-AA-GG.                                   │\n│ --help                Show this message and exit.                            │\n╰──────────────────────────────────────────────────────────────────────────────╯\n\n",
+      "parameters": [
+        {
+          "name": "since",
+          "opts": [
+            "--since"
+          ],
+          "secondary_opts": [],
+          "default": null,
+          "required": false,
+          "nargs": 1,
+          "multiple": false,
+          "type": "STRING",
+          "help": "İlk gün, YYYY-AA-GG.",
+          "is_flag": false
         }
       ]
     }

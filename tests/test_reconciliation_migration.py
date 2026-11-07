@@ -11,7 +11,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
-from app.models import garmin, raw_rejections
+from app.models import apple, garmin, raw_rejections
 from app.models.reconciliation import ReconciliationResult, ReconciliationRun
 from app.services import reconciliation_reports as reports
 
@@ -35,6 +35,9 @@ def test_populated_report_prevents_downgrade_and_survives_upgrade_check(tmp_path
             *raw_rejections.TABLES,
             *garmin.TABLES,
             garmin.STATE,
+            *apple.TABLES,
+            apple.IMPORTS,
+            apple.SOURCES,
         }
         with Session(engine) as session, session.begin():
             run_id = uuid.uuid4()

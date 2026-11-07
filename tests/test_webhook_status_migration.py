@@ -12,7 +12,7 @@ from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
-from app.models import garmin, raw_rejections, webhook_status
+from app.models import apple, garmin, raw_rejections, webhook_status
 from app.models.state import WebhookEvent
 from app.models.webhook_status import WebhookStatusEvent
 
@@ -50,6 +50,9 @@ def test_upgrade_keeps_raw_archive_and_populated_diagnostics_refuse_downgrade(
             *raw_rejections.TABLES,
             *garmin.TABLES,
             garmin.STATE,
+            *apple.TABLES,
+            apple.IMPORTS,
+            apple.SOURCES,
         }
         command.check(config)
         with engine.connect() as connection:
@@ -131,6 +134,7 @@ def test_guard_upgrade_and_downgrade_preserve_populated_evidence(tmp_path, monke
             **{name: sql for name, (_, sql) in webhook_status.SQLITE_TRIGGER_SQL.items()},
             **{name: sql for name, (_, sql) in raw_rejections.SQLITE_TRIGGER_SQL.items()},
             **{name: sql for name, (_, sql) in garmin.SQLITE_TRIGGER_SQL.items()},
+            **{name: sql for name, (_, sql) in apple.SQLITE_TRIGGER_SQL.items()},
         }
         for statement in (
             "UPDATE webhook_status_events SET reason = 'challenge'",

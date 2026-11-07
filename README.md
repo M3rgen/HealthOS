@@ -175,6 +175,30 @@ docker compose exec app health-mirror backfill
 
 Backfills save progress by type and time window; rerun an interrupted backfill to resume it. Reconciliation and incremental synchronization pick up late-arriving records.
 
+## Optional: Apple Watch / Apple Health
+
+Apple Health data can come in directly, without Google, through two gates. Both are optional;
+nothing is fetched from Apple, and the data stays in your database like everything else.
+
+- **Upload the Health app's export.** On the iPhone: Health › your profile picture › *Export All
+  Health Data*, and move `export.zip` to the computer that runs HealtOS. On the System page,
+  "Apple Sağlık içe aktar" › choose the file › *Yükle*. The file is read as a stream (large
+  exports of several gigabytes work), the page shows progress and a summary, and uploading a newer
+  export later adds only the new records. Native installs can also run
+  `health-mirror apple-import export.zip`.
+- **Keep it current with Health Auto Export.** The [Health Auto Export](https://help.healthyapps.dev/en/health-auto-export/export-format)
+  iOS app (its REST API automation is a paid feature) can post your data on a schedule. This
+  gate is **off by default**: create a token with `health-mirror apple-token`, set
+  `APPLE_RECEIVER_ENABLED=true`, expose only `POST /webhooks/apple-health` through your own HTTPS
+  tunnel or reverse proxy and set `APPLE_RECEIVER_ENDPOINT_URI` to that URL, then add an
+  automation with that URL, the header `Authorization: Bearer <token>`, JSON, export version 2.
+
+Apple data is shown under the source "Apple Sağlık" and follows the same source precedence as
+the other sources; overlapping Watch and iPhone samples are never counted twice. The receiver
+was built from the app's published format with synthetic test data, not from a real phone. The
+settings, the security model and the details are in the
+[technical reference](docs/REFERENCE.md#apple-health-github-version).
+
 ## Optional: Umay
 
 Umay is a calm, mythology-inspired companion for exploring your health history. It first discovers what your archive contains, then requests the summaries or original records it needs to answer. Its tools cannot modify the archive, and it does not diagnose or suggest medication or doses. Responses are informational.
@@ -194,7 +218,7 @@ HealtOS is built for one person keeping their own records on their own hardware.
 - **Personal and single-user.** There is one access token, no accounts and no hosted database. There is no application telemetry.
 - **Read-only towards Google.** Only read scopes are requested; nothing is written back to Google Health.
 - **Raw data is preserved.** Source payloads, verbatim responses and record versions are kept; corrections, test-entry flags and identity decisions are recorded alongside the data instead of overwriting it.
-- **Nothing listens publicly.** The application port binds to `127.0.0.1` and PostgreSQL has no published port. The dashboard and administrative API stay private behind `APP_UI_TOKEN` and an SSH tunnel; a public deployment exposes only the webhook route, with request-size and rate limits.
+- **Nothing listens publicly.** The application port binds to `127.0.0.1` and PostgreSQL has no published port. The dashboard and administrative API stay private behind `APP_UI_TOKEN` and an SSH tunnel; a public deployment exposes only the webhook route (and, if you enable it, the Apple receiver route with its own token), with request-size and rate limits.
 - **Secrets stay local.** OAuth refresh tokens are encrypted in PostgreSQL; keep the encryption key separately. Real health records, secrets, logs, backups and local verification outputs are excluded from this repository.
 
 ### Backups

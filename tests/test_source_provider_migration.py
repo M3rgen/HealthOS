@@ -73,7 +73,6 @@ def test_upgrade_adds_two_columns_per_table_and_keeps_rows_triggers_and_views(da
             for table in _migration().TABLES
         }
     command.upgrade(config, REVISION)
-    command.check(config)
     with engine.connect() as connection:
         assert set(connection.execute(OBJECTS).tuples()) == objects  # nothing rebuilt or lost
         for table in _migration().TABLES:
@@ -83,6 +82,9 @@ def test_upgrade_adds_two_columns_per_table_and_keeps_rows_triggers_and_views(da
             text("SELECT google_data_point_id, count, provider, source_record_id FROM steps")
         ).one()
     assert row == ("synthetic:one", 1234, GOOGLE, None)  # backfilled by the default, unchanged
+    # The metadata matches the schema at head (later revisions only add their own tables).
+    command.upgrade(config, "head")
+    command.check(config)
 
 
 def test_downgrade_drops_the_columns_but_refuses_while_a_garmin_row_exists(database):

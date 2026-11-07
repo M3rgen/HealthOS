@@ -110,3 +110,11 @@ from app.models import derived_invalidation as derived_invalidation
 from app.models.garmin import GarminApiResponse as GarminApiResponse
 from app.models.garmin import GarminPullState as GarminPullState
 from app.models.garmin import GarminRawRecord as GarminRawRecord
+
+# After Garmin's: the Apple tables' guards register last (20261107_a001).
+# isort: off
+from app.models.apple import AppleImport as AppleImport
+from app.models.apple import ApplePayload as ApplePayload
+from app.models.apple import AppleRawRecord as AppleRawRecord
+from app.models.apple import AppleSource as AppleSource
+# isort: on

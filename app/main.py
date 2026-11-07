@@ -13,6 +13,7 @@ from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
 
 from app.api import (
+    apple,
     auth,
     backfill,
     codex,
@@ -127,6 +128,10 @@ def create_app() -> FastAPI:
     application.state.settings = settings
     application.state.runtime = runtime
     application.state.write_limits = WriteLimits(settings)
+    # Apple Health (app/api/apple.py): the receiver's own request budgets and the session
+    # factory its imports write through.
+    application.state.apple_limits = apple.AppleLimits(settings)
+    application.state.apple_sessions = SessionLocal
     # Login sessions (in memory; a restart logs the browser out).
     application.state.ui_sessions = ui_sessions = SessionStore()
     # Starlette runs the last-added middleware first: headers, host check, UI token.
@@ -134,6 +139,7 @@ def create_app() -> FastAPI:
     application.add_middleware(
         HostValidationMiddleware,
         webhook_endpoint_uri=settings.google_health_webhook_endpoint_uri,
+        apple_endpoint_uri=settings.apple_receiver_endpoint_uri,
     )
     application.add_middleware(SecurityHeadersMiddleware, docs_enabled=docs)
     application.include_router(health.router)
@@ -149,6 +155,7 @@ def create_app() -> FastAPI:
     application.include_router(settings_api.router)
     application.include_router(devices.router)
     application.include_router(garmin.router)
+    application.include_router(apple.router)
     static = Path(__file__).parent / "static"
     if static.is_dir():
         application.mount("/assets", StaticFiles(directory=static / "assets"), name="assets")

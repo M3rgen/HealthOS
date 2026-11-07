@@ -32,6 +32,12 @@ in this file.
   a deployment without Garmin data except the new `sources`, `precedence`, `priority` and
   `alternatives` fields in the dashboard, workouts and devices responses.
 
+- `20261107_a001` (GitHub version only: the Apple Health extension) adds four tables
+  (`apple_payloads` and `apple_raw_records`, append-only; `apple_imports` and `apple_sources`,
+  bookkeeping) after `20261107_0025`; only new tables and their guards, no existing table is
+  altered or referenced. Its downgrade refuses while either archive table holds a row. Nothing
+  changes for a deployment that never imports Apple data: the receiver is off by default.
+
 ### Fixed
 
 - The nightly identity reconciler no longer gives up on a data type the daily Google
@@ -91,6 +97,19 @@ in this file.
   date picker and the appearance dialog.
 
 ### Added
+
+- **Apple Watch / Apple Health, two gates (GitHub version only).** Upload the Health app's
+  `export.zip` (or `export.xml`) on the System page ("Apple Sağlık içe aktar") or with
+  `health-mirror apple-import PATH`: streamed, constant memory, multi-gigabyte files work, a
+  re-upload adds only what is missing. Or let the Health Auto Export iOS app post to
+  `POST /webhooks/apple-health`: off by default (`APPLE_RECEIVER_ENABLED`), bearer token from a
+  file (`health-mirror apple-token`), optional https host admitted for that path only
+  (`APPLE_RECEIVER_ENDPOINT_URI`), body and request limits. Records are archived first
+  (append-only), then normalized with `provider = 'APPLE'` and source code `HEALTH_KIT`, so the
+  precedence policy, the dashboard, the workout list, Cihazlarım and Umay see them; Watch and
+  iPhone samples and the two gates are never added together. HRV from Apple is SDNN and is kept
+  apart from RMSSD. The receiver follows the app's published format; its fixtures are synthetic
+  ([docs/REFERENCE.md](docs/REFERENCE.md#apple-health-github-version)).
 
 - Source precedence (the maintainer's decision of 7 November 2026): when several devices report
   the same data, sport activities show Garmin first and every other health metric shows the

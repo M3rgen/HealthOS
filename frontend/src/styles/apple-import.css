@@ -1,0 +1,16 @@
+/* Scoped to the Apple Health import panel on the System page. */
+.apple-import-panel{position:relative;padding:14px 20px;margin-bottom:16px;min-width:0}
+.apple-import-panel .panel-heading{flex-wrap:wrap;align-items:baseline}
+.apple-import-panel h2{font-size:18px}
+#apple-import-help{margin-top:6px;overflow-wrap:anywhere}
+.apple-import-form{display:flex;flex-wrap:wrap;align-items:center;gap:10px;margin-top:10px;min-width:0}
+.apple-import-form label{font-size:13px;color:var(--muted)}
+#apple-import-file{flex:1 1 220px;min-width:0;max-width:100%;font-size:13px;padding:7px 8px}
+#apple-import-file::file-selector-button{font:inherit;color:var(--text);background:var(--surface);border:1px solid var(--line);border-radius:6px;padding:4px 10px;margin-right:10px;cursor:pointer}
+#apple-import-start{flex:0 0 auto}
+.apple-import-progress{display:block;width:100%;height:8px;margin-top:12px;accent-color:var(--amber)}
+#apple-import-status{margin-top:8px;font-size:13px;line-height:1.6;overflow-wrap:anywhere;max-height:min(24dvh,160px);overflow:auto;overscroll-behavior:contain}
+#apple-import-status:empty{display:none}
+#apple-import-status.bad{color:var(--heart-icon)}
+#apple-import-receiver{margin-top:6px;overflow-wrap:anywhere}
+@media(max-width:540px){.apple-import-panel{padding:12px}.apple-import-form{gap:8px}#apple-import-start{width:100%}}

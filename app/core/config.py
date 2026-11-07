@@ -118,6 +118,21 @@ class Settings(BaseSettings):
     # What the Garmin source is called in Cihazlarım (the Personal API exposes no device model).
     garmin_device_name: str = Field(default="Garmin", min_length=1, max_length=120)
 
+    # Apple Health (app/apple, app/api/apple.py). Two ways in, both writing the archive's own
+    # Apple tables: an upload of the Health app's export.zip/export.xml from the local UI
+    # (always available, behind the UI token like every private route), and a receiver for
+    # the Health Auto Export iOS app's REST API automation, off unless enabled. The receiver
+    # admits only requests that carry the token kept in APPLE_RECEIVER_TOKEN_FILE; with
+    # APPLE_RECEIVER_ENDPOINT_URI set, that https host may reach the receiver path, nothing else.
+    apple_receiver_enabled: bool = False
+    apple_receiver_token_file: Path = Path("~/.config/healthos/apple-receiver-token")
+    apple_receiver_endpoint_uri: str | None = None
+    apple_receiver_max_body_bytes: int = Field(
+        default=32 * 1024 * 1024, ge=1024 * 1024, le=256 * 1024 * 1024
+    )
+    apple_receiver_requests_per_minute: int = Field(default=30, ge=1, le=1_000)
+    apple_import_max_upload_bytes: int = Field(default=8 * 1024**3, ge=1024 * 1024, le=64 * 1024**3)
+
     # Source precedence (app/services/source_precedence.py): when two sources report the same
     # data (same type, overlapping time) the first listed source is shown, the others stay
     # visible as alternatives; nothing is summed. Comma-separated source codes, most preferred
@@ -170,6 +185,26 @@ class Settings(BaseSettings):
         if any(not code.replace("_", "").isalnum() for code in codes):
             raise ValueError("source codes are letters, digits and underscores (FITBIT, GARMIN)")
         return ",".join(codes)
+
+    @field_validator("apple_receiver_endpoint_uri", mode="before")
+    @classmethod
+    def valid_apple_endpoint(cls, value: object) -> object:
+        if value is None or (isinstance(value, str) and not value.strip()):
+            return None
+        if not isinstance(value, str):
+            raise ValueError("APPLE_RECEIVER_ENDPOINT_URI must be a URL")
+        from urllib.parse import urlsplit
+
+        from app.core.apple_paths import APPLE_RECEIVER_PATH
+
+        parts = urlsplit(value.strip())
+        if parts.scheme != "https" or not parts.hostname or parts.path != APPLE_RECEIVER_PATH:
+            raise ValueError(
+                f"APPLE_RECEIVER_ENDPOINT_URI must be an https URL ending in {APPLE_RECEIVER_PATH}"
+            )
+        if parts.query or parts.fragment or parts.username or parts.password:
+            raise ValueError("APPLE_RECEIVER_ENDPOINT_URI takes no query, fragment or user info")
+        return value.strip()
 
     @field_validator("app_ui_token", mode="before")
     @classmethod

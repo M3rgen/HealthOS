@@ -404,6 +404,8 @@ Copy `.env.example` to `.env`; never commit `.env`.
 | `DEVICES_CONNECTED_HOURS`, `DEVICES_DELAYED_DAYS` | Cihazlarım status thresholds: a device whose newest record is at most `DEVICES_CONNECTED_HOURS` old (default 48) is `bagli`, older than `DEVICES_DELAYED_DAYS` (default 7) `kopuk`, `gecikmeli` in between |
 | `GARMIN_ENABLED`, `GARMIN_API_KEY_FILE`, `GARMIN_PULL_INTERVAL_MINUTES`, `GARMIN_LOOKBACK_DAYS` | Optional read-only pull from the Garmin Connect Personal API (off by default; the key is read from a file, default `~/.config/garmin/connect-personal-api-key`; every 120 minutes outside 02:00–03:59 UTC; the last 3 days; see [Garmin Connect Personal API](#garmin-connect-personal-api)) |
 | `GARMIN_DEVICE_NAME` | What Cihazlarım calls the Garmin source (default `Garmin`; the Personal API exposes no device model) |
+| `APPLE_RECEIVER_ENABLED`, `APPLE_RECEIVER_TOKEN_FILE`, `APPLE_RECEIVER_ENDPOINT_URI` | Health Auto Export receiver (GitHub version; off by default; bearer token read from a file, default `~/.config/healthos/apple-receiver-token`; the optional https endpoint URI admits its host for `POST /webhooks/apple-health` only; see [Apple Health](#apple-health-github-version)) |
+| `APPLE_RECEIVER_MAX_BODY_BYTES`, `APPLE_RECEIVER_REQUESTS_PER_MINUTE`, `APPLE_IMPORT_MAX_UPLOAD_BYTES` | Receiver body limit (default 32 MiB) and request budget (default 30 per minute, authorized and unauthorized apart); largest `export.zip` upload (default 8 GiB) |
 | `SOURCE_PRECEDENCE_ACTIVITY`, `SOURCE_PRECEDENCE_HEALTH` | Which source is shown first when several report the same data: sport activities `GARMIN,FITBIT,HEALTH_KIT`, every other health metric `FITBIT,GARMIN,HEALTH_KIT` by default; the others stay visible as alternatives, nothing is summed; reverse a line to reverse the rule (see [Source precedence](#source-precedence)) |
 | `CODEX_BRIDGE_BIND_HOST`, `CODEX_BRIDGE_URL`, `CODEX_BRIDGE_TOKEN` | Optional Umay bridge address and token; manual launcher preserves configured URLs, service reads existing credentials |
 
@@ -1018,7 +1020,9 @@ The Garmin source is one more entry (`id: garmin`, `provider: GARMIN`, named by
 `GARMIN_DEVICE_NAME`) when `garmin_raw_records` holds a record: its `data_types` are the pulled
 kinds, `last_seen` the last successful pull (`garmin_last_pull`), `last_data` the newest
 normalized Garmin row and `status` follows the same thresholds. Every entry carries `precedence`
-([Source precedence](#source-precedence)); the response says `garmin: ok|off`.
+([Source precedence](#source-precedence)); the response says `garmin: ok|off`. Apple Health
+sources imported directly are entries too, merged into a Google `HEALTH_KIT` device of the same
+name ([Apple Health](#apple-health-github-version)); the response says `apple: ok|off`.
 
 ## Raw record versions
 
@@ -1164,6 +1168,9 @@ CLI and hand-written SQL alike (`health-mirror verify` checks that the guards ar
 | Exact HTTP response bodies from the Garmin Connect Personal API ([below](#garmin-connect-personal-api)) | `garmin_api_responses` | append-only (trigger); SHA-256 of the stored bytes |
 | Every distinct payload of a Garmin record (per kind and calendar day or activity) | `garmin_raw_records` | append-only (trigger); a changed payload is a new row, the earlier row stays; readers take the newest |
 | Garmin rows of the normalized tables (`provider = 'GARMIN'`, key `garmin:<kind>:<key>`) | `steps`, `heart_rate`, `sleep_sessions`, `exercise_sessions`, … | rebuilt from `garmin_raw_records` by comparison (unchanged rows untouched, changed rows updated in place); the raw archive stays the truth |
+| Health Auto Export request bodies ([Apple Health](#apple-health-github-version)) | `apple_payloads` | append-only (trigger); one row per distinct body (SHA-256), never `Authorization` |
+| Every distinct version of an Apple Health record (export.xml or Health Auto Export) | `apple_raw_records` | append-only (trigger); a changed payload of the same record is a new row; readers take the newest |
+| Apple rows of the normalized tables (`provider = 'APPLE'`, key `apple:<channel>:<kind>:<key>`) | `steps`, `heart_rate`, `sleep_sessions`, … | rebuilt from `apple_raw_records` by comparison; the raw archive stays the truth |
 | Test-entry flags on manual measurements (`mark` / `unmark`) | `manual_measurement_flag_events` | append-only (trigger); the latest per measurement is current, the measurement is unchanged |
 
 ### Verbatim Google responses
@@ -1641,6 +1648,201 @@ a Garmin row (tested: `tests/test_garmin_normalize.py`). The identity layer keys
 `platform`, so a `GARMIN` source could never chain to the Fitbit. Garmin's own pull state and
 freshness are in `GET /api/garmin/status` and the Cihazlarım entry.
 
+## Apple Health (GitHub version)
+
+Apple Watch and iPhone data can be brought into HealthOS directly, through two gates. Both are
+part of the published (GitHub) version only; they are kept on a separate branch (`eklenti/apple`,
+see [Branches](BRANCHES.md)) and are not installed on the maintainer's own server, which receives
+Apple data, if at all, through Google Health (`HEALTH_KIT` records). Neither gate is a new external
+service: HealthOS fetches nothing from Apple. Gate 2 is a file the owner exports from the Health
+app; gate 1 is a request the owner's own phone sends (Health Auto Export is an app on the phone,
+not a cloud API), so the rule against new external services is not touched.
+
+| Gate | What arrives | Default | Endpoint |
+|---|---|---|---|
+| 1. Health Auto Export receiver | JSON from the [Health Auto Export](https://help.healthyapps.dev/en/health-auto-export/export-format) iOS app's *REST API* automation (paid feature of that app) | **off** | `POST /webhooks/apple-health` |
+| 2. Manual export upload | the Health app's `export.zip` (or the `export.xml` inside it) | available | System › "Apple Sağlık içe aktar", `POST /api/apple/import`, or `health-mirror apple-import PATH` |
+
+**Gate 2: export.zip.** In the Health app: profile picture › *Export All Health Data*. The
+archive is a zip with `apple_health_export/export.xml` (its name is localized in some languages;
+the importer finds the file by its content: the first `.xml` entry other than `export_cda.xml`
+whose first 64 KiB contain `<HealthData`), `export_cda.xml`, workout routes (`.gpx`) and ECG
+files. Only the main XML is read; the other entries are skipped (their file names are kept in a
+workout's `routes`). The upload is streamed: the zip is read in arrival order (local file headers,
+deflate or stored, zip64), the XML is parsed with an expat push parser (no tree is built, memory
+stays constant: a 50 MB synthetic stream peaks at a few MB in the tests), and every 2,000 records
+are archived, normalized and committed. Nothing is written to disk or held whole in memory, so a
+multi-gigabyte `export.xml` works; the request simply runs until the file is read. The XML's
+internal DTD (ELEMENT/ATTLIST declarations) is accepted; any `<!ENTITY` declaration, an external
+DTD and undeclared entities are refused (no entity expansion, no external fetch). Limits:
+`APPLE_IMPORT_MAX_UPLOAD_BYTES` (default 8 GiB) for the upload, 64 GiB decompressed per zip
+(zip-bomb guard); encrypted entries and stored entries with a data descriptor are refused. One
+import runs at a time per process (a second upload answers 409). If the upload breaks off, the
+records committed so far stay and the import row is marked `failed`; **uploading the same export
+again (or a newer one) adds only what is missing**: every record version is stored once.
+
+From `export.xml`: every `<Record>` (quantity, category and other types, with its
+`MetadataEntry` children and HRV beat-to-beat lists), `<Correlation>` (blood pressure; its child
+records are also records of their own), `<Workout>` (attributes, metadata, events, statistics,
+route file names; unknown nested elements under `children`) and `<ActivitySummary>`. `<Me>` (date
+of birth, sex, blood type), `<ExportDate>` (kept as the import's `export_date`),
+`ClinicalRecord`, `Audiogram`, `VisionPrescription` and other top-level elements are counted as
+skipped, not stored.
+
+**Gate 1: Health Auto Export.** The receiver is off unless `APPLE_RECEIVER_ENABLED=true`, and even
+then it answers only requests carrying `Authorization: Bearer <token>` with the token kept in
+`APPLE_RECEIVER_TOKEN_FILE` (default `~/.config/healthos/apple-receiver-token`, at least 32
+characters, read at every request, so replacing the file rotates it without a restart; never in
+`.env`, the database or a log). `health-mirror apple-token` writes a new token (directory 700, file
+600; `--rotate` to replace one, `--file PATH` for another location) and prints the header line
+once. The route is exempt from `APP_UI_TOKEN` (it has its own token) and from no other check:
+
+| Order | Check | Answer |
+|---|---|---|
+| 1 | `APPLE_RECEIVER_ENABLED` is false | 404 |
+| 2 | request budget, authorized and unauthorized counted apart (`APPLE_RECEIVER_REQUESTS_PER_MINUTE`, default 30 each) | 429 |
+| 3 | token file missing, unreadable or shorter than 32 characters | 503 |
+| 4 | no single `Authorization: Bearer` header equal to the token (constant-time comparison) | 401 |
+| 5 | body over `APPLE_RECEIVER_MAX_BODY_BYTES` (default 32 MiB; use the app's *Batch Requests* for large ranges) | 413 |
+| 6 | body not strict JSON (UTF-8, no duplicate keys, no NaN/Infinity) or no `data` object | 400 (the authenticated body is still kept) |
+| — | otherwise | 200 `{"status": "ok" \| "duplicate", "records", "new", "rows", "skipped", "invalid"}` |
+
+Every authenticated body is kept byte for byte in `apple_payloads` with its SHA-256 and the app's
+descriptive headers (`automation-name`, `automation-id`, `automation-aggregation`,
+`automation-period`, `session-id`, `content-type`, `user-agent`; never `Authorization`); a body
+sent again is not stored twice and answers `duplicate`. From `data.metrics[]` every data point
+becomes a record (`{metric, units, aggregation, point}`), from `data.workouts[]` every workout
+(version 1 or 2); `stateOfMind`, `ecg`, `medications`, `symptoms`, `cycleTracking`,
+`heartRateNotifications` stay in the stored body only and are counted as skipped. A metric
+point's identity is its metric, the automation's aggregation, its dates and its source: when the
+app re-sends a running day total with a larger value, the new value is a new version of the same
+record and the readers take the newest.
+
+> [!NOTE]
+> The receiver follows Health Auto Export's published format
+> ([export format](https://help.healthyapps.dev/en/health-auto-export/export-format),
+> [health metrics](https://help.healthyapps.dev/en/health-auto-export/export-format/health-metrics),
+> [workouts](https://help.healthyapps.dev/en/health-auto-export/export-format/workouts),
+> [REST API automation](https://help.healthyapps.dev/en/health-auto-export/automations/rest-api)).
+> It has not been tested against a payload from a real phone: the test fixtures are synthetic,
+> built from the documented field names. Metric names the documentation does not list
+> explicitly (`resting_heart_rate`, `heart_rate_variability`, `blood_oxygen_saturation`,
+> `weight_body_mass`, …) follow the app's snake_case naming; an unrecognized name is still
+> archived and normalized into `scalar_metrics` as `apple:<name>`, never dropped. Reports from
+> real use are welcome.
+
+**Reaching the receiver.** The app stays bound to `127.0.0.1` (rule 4). The phone needs an https
+address, which the owner provides with their own tunnel or reverse proxy that forwards **only**
+`POST /webhooks/apple-health` to `127.0.0.1:8000` and keeps the public `Host` header (the
+[Cloudflare Tunnel](CLOUDFLARE_TUNNEL.md) setup of the Google webhook works the same way with an
+ingress rule for this path; Caddy or Tailscale Funnel work too). Set `APPLE_RECEIVER_ENDPOINT_URI`
+to that https URL (it must end in `/webhooks/apple-health`): the host validation then admits that
+host for `POST /webhooks/apple-health` only; every other path and method from it answers 400, and
+a request reaching the receiver over loopback works without it. In Compose, mount the token file
+read-only and point `APPLE_RECEIVER_TOKEN_FILE` at the mount (commented example in
+`docker-compose.yml`); the file must be readable by the container user (uid 10001), e.g.
+`chown 10001 <file> && chmod 600 <file>` on the host.
+
+**Health Auto Export settings** (Automations › new › *REST API*): URL = the endpoint URI;
+*HTTP Headers*: `Authorization` = `Bearer <token>`; *Export Format*: JSON; *Export Version*: 2;
+*Data Type*: Health Metrics (a second automation for Workouts); *Summarize Data*: on (smaller
+requests; sleep then arrives as one night per point) or off (raw samples and sleep stages);
+*Time Grouping*: minutes or hours; *Date Range*: Since Last Sync; *Batch Requests*: on. The app's
+run log (*View Activity Logs*) shows the receiver's answer.
+
+**Tables** (migration `20261107_a001`, only new tables): `apple_payloads` and `apple_raw_records`
+are append-only (UPDATE/DELETE/TRUNCATE refused by trigger, checked by `health-mirror verify`);
+`apple_raw_records` holds one row per record version (unique channel, kind, key and body
+SHA-256; `channel` `export` or `hae`, `kind` `quantity`/`category`/`record`/`workout`/
+`activity-summary`/`hae-metric`/`hae-workout`, `type` the HealthKit identifier or the metric
+name, the body as received, source name, device model, start and end). `apple_imports` (status,
+progress and counts of each upload, CLI import or receiver request) and `apple_sources` (per
+Health source: device model, first and last import, newest data, data types, channels) are
+bookkeeping. The downgrade refuses while either archive table holds a row.
+
+**Normalization.** Records go into the shared normalized tables with `provider = 'APPLE'`
+(`app/services/apple_normalize.py`), idempotent by comparison like Garmin's: a second run writes
+nothing; when several versions of one record arrive, the newest wins.
+`health-mirror apple-normalize [--since YYYY-MM-DD]` rebuilds the rows from the archive.
+
+| Apple type (export identifier without `HK…TypeIdentifier` / Health Auto Export name) | Table | Notes |
+|---|---|---|
+| `StepCount` / `step_count` | `steps` | |
+| `DistanceWalkingRunning`, `DistanceCycling`, `DistanceSwimming`, `DistanceWheelchair`, `DistanceDownhillSnowSports` / `*_distance` | `distance` | metres (from m, km, mi, ft, yd, cm) |
+| `ActiveEnergyBurned` / `active_energy`, `BasalEnergyBurned` / `basal_energy_burned` | `energy_expenditure` | kcal (from kcal, Cal, kJ, J, cal); active and basal told apart by the type in `source_record_id` |
+| `HeartRate` / `heart_rate` | `heart_rate` | Health Auto Export: `Avg` (Min/Max stay in the archive) |
+| `RestingHeartRate` / `resting_heart_rate` | `resting_heart_rate` | |
+| `HeartRateVariabilitySDNN` / `heart_rate_variability` | `heart_rate_variability` | **SDNN, not RMSSD**: `rmssd` stays NULL, the value is `metrics.sdnn_ms` |
+| `OxygenSaturation` / `blood_oxygen_saturation` | `oxygen_saturation` | percent (a fraction ≤ 1 is multiplied by 100) |
+| `RespiratoryRate`, `VO2Max`, `BodyMass` | `respiratory_rate`, `vo2_max`, `weight` | weight in kg (from lb, g, oz, st) |
+| `BodyTemperature`, `AppleSleepingWristTemperature` | `temperature` | °C (from °F) |
+| `SleepAnalysis` / `sleep_analysis` (export, and Health Auto Export with Summarize Data off) | `sleep_sessions` | one row per segment; the stage (`core`, `deep`, `rem`, `awake`, `asleep`, `in_bed`) is the last part of `source_record_id` |
+| `sleep_analysis` with Summarize Data on | `sleep_sessions` | one row per night (`sleepStart`–`sleepEnd`, else the in-bed times), stage hours as seconds |
+| `Workout` / Health Auto Export workouts (v1, v2) | `exercise_sessions` | type without `HKWorkoutActivityType`, or the app's name; calories and distance from the attributes, the workout statistics or the app's `activeEnergyBurned`/`distance` |
+| every other quantity or metric, `ActivitySummary`, other category records, blood pressure | `scalar_metrics` as `apple:<type>[:<field>]` | with its unit; nothing silently dropped |
+
+A record without a usable time or value is counted as skipped; correlations are skipped because
+their child records are normalized themselves. An Apple row's `google_data_point_id` is
+`apple:<channel>:<kind>:<key>[:<part>]` (no Google id can equal it), `source_record_id`
+`<channel>:<type>:<key>[:<part>]`, `device` the Health source name (`sourceName`; the model is in
+`apple_sources` and Cihazlarım) and `source_timezone` the record's UTC offset. As for Garmin,
+every Google reader stays Google-only (an Apple row has no `raw_health_data` row).
+
+**No double counting.** Apple's export holds overlapping samples from several sources (the Watch
+and the iPhone both count steps), and an owner may use both gates. The Apple readers
+(`app/services/apple_readers.py`) therefore never add sources or gates together:
+
+- steps: per gate, each sample is split proportionally into local hours; per hour the single
+  source with the most steps counts; the day is the sum of its hours and the larger of the two
+  gates' totals;
+- sleep: per gate and source, the union of asleep segments only (never in-bed or awake);
+  segments less than 3 hours apart are one night, assigned to the local day it ends (the
+  dashboard's rule); a summarized night counts by its `totalSleep`; the source with the most
+  sleep, then the larger gate;
+- resting heart rate: the newest record of the local day; HRV (SDNN) and SpO₂: the daily mean,
+  one sample per timestamp across both gates; heart-rate samples: one per timestamp;
+- workouts: an export workout and a Health Auto Export workout overlapping by at least half of
+  the shorter one are one workout (the export copy is kept).
+
+**Precedence and Cihazlarım.** Apple values take part in [Source precedence](#source-precedence)
+with the source code `HEALTH_KIT` (shown as "Apple Sağlık"), the same code Google uses for the
+Apple data it relays, so the policy has one name for Apple whichever way the data came; `provider`
+(`APPLE` or `GOOGLE`) tells the ways apart. When Google relays a `HEALTH_KIT` value for the same
+day, Google's is shown first and the direct Apple value is its alternative (never summed); the
+hourly heart chart takes Apple samples only in minutes Google's `HEALTH_KIT` samples leave empty,
+and an Apple workout overlapping a Google `HEALTH_KIT` workout by at least half of the shorter one
+is folded under it as `secondary`. Cihazlarım lists every Health source (`id: apple-…`,
+`provider: APPLE`, `source_code: HEALTH_KIT`, the device model, the last import and the newest
+data); a source whose name matches a Google `HEALTH_KIT` device (the same comparison as Google's
+paired devices: brand prefix dropped, one name containing the other) is merged into that row
+(`providers: ["GOOGLE", "APPLE"]`, the newer `last_data`); names that do not match, for example
+after a device was renamed, stay two rows. The response says `apple: ok|off`. Umay's
+`health_archive` reads the same values (`daily`, `devices`).
+
+**Status and CLI.**
+
+```sh
+health-mirror apple-token [--rotate] [--file PATH]   # receiver token: written once, printed once
+health-mirror apple-import PATH                      # export.zip or export.xml (native installs; no size limit)
+health-mirror apple-status                           # receiver settings and the last 10 imports (JSON)
+health-mirror apple-normalize [--since YYYY-MM-DD]   # rebuild the normalized Apple rows from the archive
+```
+
+`GET /api/apple/status` (UI token) returns `receiver` (`enabled`, `token_file_present`,
+`endpoint_configured`, `path`), `running` (the live progress of an import in this process, or
+null), the last ten `imports` and the Health `sources`; no record values, no secrets. In Docker
+prefer the System page upload (the container's `/tmp` is a memory-backed tmpfs and its
+filesystem is read-only); an import row left `running` by a crash stays so (it is not failed at
+startup, which could wrongly fail a concurrent CLI import).
+
+**Keeping the Apple branch current (maintainers).** `eklenti/apple` takes `main` by merge, never
+rebase. Migrations: `20261107_a001` follows `20261107_0025`; when `main` gains a revision, add a
+merge revision on the branch with `down_revision = ("<Apple head>", "<main head>")`; never edit an
+existing revision. `tests/test_apple_migration.py` and the snapshot script fail while there are
+two heads. The lines the branch changes in shared files (`tests/test_migrations.py` table count,
+`scripts/verify_compose.py` expected revision, the table lists of a few migration tests) are the
+expected merge conflicts.
+
 ## Source precedence
 
 When two sources report the same data, the interface shows one and keeps the other visible;
@@ -1654,7 +1856,8 @@ maintainer's decision of 7 November 2026, reviewed after a week:
 
 A *source code* is the device platform a record came from, whatever delivered it: Google
 records carry `dataSource.platform` (`FITBIT`, `HEALTH_KIT`, `HEALTH_CONNECT`; `GOOGLE` when it is
-missing or a value was made from records of several platforms), Garmin rows are `GARMIN`,
+missing or a value was made from records of several platforms), Garmin rows are `GARMIN`, Apple
+Health rows imported directly `HEALTH_KIT` (provider `APPLE`, [Apple Health](#apple-health-github-version)),
 owner-entered rows `MANUAL`. A source the policy does not list ranks after every listed one
 (`GOOGLE` right after them). **To reverse a rule, reorder its line** (`GARMIN,FITBIT` →
 `FITBIT,GARMIN`) and restart; the stored rows do not change. Manual entries are never resolved
@@ -1705,13 +1908,14 @@ pass a `Policy` explicitly.
 - `GET /google-health/devices` (sanitized paired-device metadata)
 - `GET /api/devices` (Cihazlarım: the archive's devices with their freshness status, see
   [Devices](#devices))
+- `POST /webhooks/apple-health` (Health Auto Export receiver, its own token, off by default), `POST /api/apple/import` (export.zip/export.xml upload) and `GET /api/apple/status` ([Apple Health](#apple-health-github-version))
 - `GET /api/garmin/status` and `GET /api/garmin/daily?from=YYYY-MM-DD&to=YYYY-MM-DD` ([Garmin Connect Personal API](#garmin-connect-personal-api)); `daily` says per metric whether Garmin is the primary or a secondary source ([Source precedence](#source-precedence))
 
 Interactive OpenAPI documentation (`/docs`, `/redoc`, `/openapi.json`) is served only outside
 production (`APP_ENV` other than `production`, e.g. with `docker-compose.dev.yml` or `make run`):
 its page needs inline scripts and the jsDelivr CDN, an exception the login-cookie origin should not
 carry in production. Every route except
-`/health/live`, the login page, the OAuth callback and the webhook requires the UI token.
+`/health/live`, the login page, the OAuth callback, the Google webhook and the Apple receiver (which has its own token) requires the UI token.
 
 ## Database backup and restore
 

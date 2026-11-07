@@ -15,6 +15,7 @@ import { describeSyncError } from './sync-errors.js';
 import { setupCoverage } from './coverage.js';
 import { setupWebhookStatus } from './webhook-status.js';
 import { setupDevices } from './devices.js';
+import './styles/apple-import.css';
 import { setupBodyLoader } from './body-loader.js';
 import { createDisplayPreferences } from './display-preferences.js';
 
@@ -406,6 +407,7 @@ async function loadSystem() {
   coveragePanel.refresh();
   webhookPanel.refresh();
   devicesPanel.refresh();
+  appleRefresh();
   try {
     const rows = await request('/sync/status');
     $('sync-rows').innerHTML = rows.length
@@ -575,6 +577,13 @@ const workouts = setupWorkouts({
 const coveragePanel = setupCoverage({ request, getZone: () => zone, getToday: today, escape });
 const webhookPanel = setupWebhookStatus({ request, getZone: () => zone });
 const devicesPanel = setupDevices({ request, getZone: () => zone, escape });
+// The Apple Health import panel is loaded on the first visit to the System page, outside the
+// initial bundle (docs/PERFORMANCE_BUDGET.md).
+let applePanel = null;
+function appleRefresh() {
+  applePanel ??= import('./apple-import.js').then(module => module.setupAppleImport({ request, getZone: () => zone }));
+  applePanel.then(panel => panel.refresh()).catch(() => { applePanel = null; });
+}
 // Asked in parallel with the first refresh, so the first paint never waits for it.
 const firstDisplaySync = display.sync();
 await refresh();

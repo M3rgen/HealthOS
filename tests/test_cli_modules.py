@@ -36,6 +36,7 @@ EXPORTS = {
     "webhook_commands": "webhook_readiness webhook_status webhook_replay_pending",
     "rejection_commands": "rejections",
     "garmin_commands": "garmin_status garmin_pull garmin_backfill KINDS_OPTION",
+    "apple_commands": "apple_token apple_import apple_status apple_normalize",
 }
 
 
@@ -44,7 +45,7 @@ def test_entry_point_and_flat_registration_are_unchanged():
     assert project["project"]["scripts"]["health-mirror"] == "app.cli.main:app"
     assert not cli.app.registered_groups
     callbacks = [item.callback for item in cli.app.registered_commands]
-    assert len(callbacks) == len(set(callbacks)) == 20
+    assert len(callbacks) == len(set(callbacks)) == 24
     assert [callback.__name__.replace("_", "-") for callback in callbacks] == list(
         CONTRACT["commands"]
     )
@@ -95,7 +96,7 @@ def test_command_modules_import_before_the_entry_point(module):
             "-c",
             f"import app.cli.{module}; import sys; "
             "assert 'app.cli.main' not in sys.modules; import app.cli.main; "
-            "assert len(app.cli.main.app.registered_commands) == 20",
+            "assert len(app.cli.main.app.registered_commands) == 24",
         ],
         capture_output=True,
         text=True,

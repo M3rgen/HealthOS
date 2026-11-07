@@ -9,7 +9,7 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.core.config import get_settings
-from app.models import derived_invalidation, garmin
+from app.models import apple, derived_invalidation, garmin
 
 
 def _migration(suffix):
@@ -103,16 +103,24 @@ async def test_upgrade_and_downgrade_preserve_all_existing_triggers(tmp_path, mo
             session.add(WebhookStatusEvent(reason="signature_valid", occurred_at=T0))
         command.downgrade(config, "20261025_0019")
         # Tables of later migrations (0022, 0023, 0024) do not exist at the 0019 target.
-        newer = {"display_preferences", garmin.STATE, *raw_rejections.TABLES, *garmin.TABLES}
+        newer = {
+            "display_preferences",
+            garmin.STATE,
+            *raw_rejections.TABLES,
+            *garmin.TABLES,
+            *apple.TABLES,
+            apple.IMPORTS,
+            apple.SOURCES,
+        }
         # 0023's and 0024's guards are expected at head only; verify names them missing at 0019.
         later = {
             name: sql
-            for module in (raw_rejections, garmin)
+            for module in (raw_rejections, garmin, apple)
             for name, (_, sql) in module.SQLITE_TRIGGER_SQL.items()
         }
         at_0019 = [
             f"protective trigger missing: {table}.{name}"
-            for module in (raw_rejections, garmin)
+            for module in (raw_rejections, garmin, apple)
             for name, (table, _) in module.SQLITE_TRIGGER_SQL.items()
         ]
         async with sessions() as session:
