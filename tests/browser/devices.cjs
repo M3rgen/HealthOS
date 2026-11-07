@@ -25,7 +25,7 @@ run(async () => {
     for (const viewport of sizes) {
       // Brussels on a New York machine: every shown time must follow the chosen zone.
       const context = await browser.newContext({viewport, timezoneId:'America/New_York'});
-      await context.addInitScript(() => localStorage.setItem('healtos.timezone.v2', 'Europe/Brussels'));
+      await context.addInitScript(() => localStorage.setItem('healthos.timezone.v2', 'Europe/Brussels'));
       const page = await context.newPage();
       await page.clock.setFixedTime(new Date(fx.NOW));
       const errors = []; page.on('pageerror', error => errors.push(error.message));

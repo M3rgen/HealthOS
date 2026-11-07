@@ -10,9 +10,9 @@ writes it once) and is passed to the bridge in the environment, like the systemd
 EnvironmentFile. Without a token the task stops and logs why.
 
 Python: the checkout's .venv (uv sync --frozen --no-dev) when present, otherwise
-`uv run --frozen --no-dev` on a Python from Get-HealtOSBridgePython. The Codex CLI
+`uv run --frozen --no-dev` on a Python from Get-HealthOSBridgePython. The Codex CLI
 must be installed with npm and signed in (`codex login`); see docs/legacy/WINDOWS.md. Output is
-appended to %LOCALAPPDATA%\HealtOS\logs\umay-bridge.log; the bridge's own log is bridge.log in
+appended to %LOCALAPPDATA%\HealthOS\logs\umay-bridge.log; the bridge's own log is bridge.log in
 %USERPROFILE%\.codex\healthos-bridge.
 
 Registered by deploy/windows/register-tasks.ps1 -Umay; run it by hand to test:
@@ -22,7 +22,7 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'common.ps1')
 
 $root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
-$logDir = Get-HealtOSLogDir
+$logDir = Get-HealthOSLogDir
 if (-not (Test-Path -LiteralPath $logDir -PathType Container)) {
     New-Item -ItemType Directory -Path $logDir -Force | Out-Null
 }
@@ -32,11 +32,11 @@ $launcher = Join-Path $PSScriptRoot 'umay_bridge_task.py'
 
 function Add-LogLine {
     param([string]$Text)
-    $stamp = Get-HealtOSUtcStamp "yyyy'-'MM'-'dd'T'HH':'mm':'ss'Z'"
+    $stamp = Get-HealthOSUtcStamp "yyyy'-'MM'-'dd'T'HH':'mm':'ss'Z'"
     [System.IO.File]::AppendAllText($log, "=== $stamp $Text`n", $utf8)
 }
 
-$token = Get-HealtOSDotEnvValue -File (Join-Path $root '.env') -Name 'CODEX_BRIDGE_TOKEN'
+$token = Get-HealthOSDotEnvValue -File (Join-Path $root '.env') -Name 'CODEX_BRIDGE_TOKEN'
 if (-not $token) {
     Add-LogLine 'CODEX_BRIDGE_TOKEN is empty in .env: run install.ps1 -Umay yes once. The bridge was not started.'
     exit 1
@@ -47,17 +47,17 @@ if (Test-Path -LiteralPath $python -PathType Leaf) {
     $file = $python
     $arguments = @($launcher)
 } else {
-    $file = Find-HealtOSCommand 'uv'
+    $file = Find-HealthOSCommand 'uv'
     if (-not $file) {
         Add-LogLine 'uv was not found (winget install -e --id astral-sh.uv)'
         exit 1
     }
-    $arguments = @('run', '--frozen', '--no-dev', '--python', (Get-HealtOSBridgePython), '--project', $root, 'python', $launcher)
+    $arguments = @('run', '--frozen', '--no-dev', '--python', (Get-HealthOSBridgePython), '--project', $root, 'python', $launcher)
 }
 
 $info = New-Object System.Diagnostics.ProcessStartInfo
 $info.FileName = $file
-$info.Arguments = (@($arguments | ForEach-Object { ConvertTo-HealtOSArgument $_ }) -join ' ')
+$info.Arguments = (@($arguments | ForEach-Object { ConvertTo-HealthOSArgument $_ }) -join ' ')
 $info.UseShellExecute = $false
 $info.CreateNoWindow = $true
 $info.WorkingDirectory = $root
@@ -72,7 +72,7 @@ $process = [System.Diagnostics.Process]::Start($info)
 $stdout = $process.StandardOutput.ReadToEndAsync()
 $stderr = $process.StandardError.ReadToEndAsync()
 $process.WaitForExit()
-$stamp = Get-HealtOSUtcStamp "yyyy'-'MM'-'dd'T'HH':'mm':'ss'Z'"
+$stamp = Get-HealthOSUtcStamp "yyyy'-'MM'-'dd'T'HH':'mm':'ss'Z'"
 [System.IO.File]::AppendAllText($log,
     "=== $stamp exit $($process.ExitCode)`n" + $stdout.Result + $stderr.Result, $utf8)
 exit $process.ExitCode

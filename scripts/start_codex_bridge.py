@@ -173,7 +173,7 @@ async def healthy(token, host):
                         "id": 1,
                         "method": "initialize",
                         "params": {
-                            "clientInfo": {"name": "healtos_probe", "version": "0.1.0"},
+                            "clientInfo": {"name": "healthos_probe", "version": "0.1.0"},
                         },
                     }
                 )
@@ -211,7 +211,7 @@ def main():
     token = token or secrets.token_urlsafe(48)
     if not foreground and asyncio.run(healthy(token, host)):
         update_env(token)
-        print(f"healthOS Codex köprüsü zaten çalışıyor ({host}:{PORT}).")
+        print(f"HealthOS Codex köprüsü zaten çalışıyor ({host}:{PORT}).")
         if host != "127.0.0.1" and asyncio.run(healthy(token, "127.0.0.1")):
             print(
                 "Uyarı: köprü loopback'te de yanıt veriyor; eski bir sürüm tüm arayüzlerde "
@@ -296,7 +296,7 @@ def main():
         if asyncio.run(healthy(token, host)):
             update_env(token)
             (bridge_home / "bridge.pid").write_text(str(process.pid), encoding="utf-8")
-            print(f"healthOS Codex köprüsü başlatıldı ({host}:{PORT}, ChatGPT aboneliği).")
+            print(f"HealthOS Codex köprüsü başlatıldı ({host}:{PORT}, ChatGPT aboneliği).")
             print("Siteyi güncelle: docker compose up -d --build app")
             print(f"Tanılama günlüğü: {bridge_home / 'bridge.log'}")
             return

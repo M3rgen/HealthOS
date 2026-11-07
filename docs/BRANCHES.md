@@ -1,6 +1,6 @@
 # Branches
 
-HealtOS is developed on a private Git mirror and published on GitHub. A few features run only on
+HealthOS is developed on a private Git mirror and published on GitHub. A few features run only on
 the maintainer's own server; others are published but not run by the maintainer. Both live on
 separate extension branches so that neither tree needs hand-pruning before a release.
 
@@ -11,7 +11,7 @@ separate extension branches so that neither tree needs hand-pruning before a rel
 | `dev` | Continuous work. Feature and fix branches merge here first. Contains no extension code. | No |
 | `main` | Stable. Updated from `dev` when a batch is verified. Contains no extension code; its tree, merged with the GitHub-only extensions and less the snapshot exclusions, is what GitHub `main` shows. | Yes, as a snapshot |
 | `eklenti/<name>` (private) | One private extension, nothing else. Starts from `main` and carries only the extension's own files and lines. | **Never** |
-| `eklenti/<name>` (GitHub-only) | One published extension the maintainer does not run, e.g. `eklenti/apple`. Same shape as a private one. Never on the Gitea mirror, never in `live`. | Yes, as part of the snapshot (the branch itself may be pushed too) |
+| `eklenti/<name>` (GitHub-only) | One published extension the maintainer does not run, e.g. `eklenti/apple`. Same shape as a private one. Never on the Gitea mirror, never in `live`. | **Only** as part of the snapshot; the branch itself is never pushed (see below) |
 | `live` | `main` merged with every private extension branch. The commit installed on the maintainer's VM. | **Never** |
 
 ```mermaid
@@ -91,8 +91,12 @@ git diff main eklenti/apple --stat  # must list only the extension's files and l
   the `down_revision` of its first migration (a merge migration when `main` adds one) and
   `HEAD` in `tests/integration/test_pg_migrations.py`, which names the branch's own head.
   Resolve both on every `git merge main`.
-- The branch may be pushed to GitHub only (`git push github eklenti/apple`), never to the Gitea
-  mirror.
+- The branch is **never pushed anywhere**: not to the Gitea mirror, and not to GitHub either.
+  It branches off the private `main`, so pushing it publishes the private repository's entire
+  history (authors, excluded files, private extensions that were later removed). Only the
+  snapshot commit, which carries a tree and no ancestry, goes to GitHub. (Learned on
+  7 November 2026, when `eklenti/apple` was pushed as a branch; the branch was deleted the same
+  day, but its commits stay fetchable by SHA until GitHub garbage-collects them.)
 - The snapshot merges it automatically (see below).
 - `scripts/check_no_extension.sh` (`main dev`) must stay clean, and so must
   `scripts/check_no_extension.sh --github-only live`.

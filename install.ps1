@@ -1,10 +1,10 @@
 <#
-HealtOS installer for Windows 10/11 with Docker Desktop (WSL 2 backend).
+HealthOS installer for Windows 10/11 with Docker Desktop (WSL 2 backend).
 Windows PowerShell 5.1 and PowerShell 7. The Windows counterpart of install.sh: same options,
 same questions, same .env rules.
 
-  irm https://raw.githubusercontent.com/M3rgen/HealtOS/main/install.ps1 | iex
-  & ([scriptblock]::Create((irm https://raw.githubusercontent.com/M3rgen/HealtOS/v0.2.2/install.ps1))) -Ref v0.2.2
+  irm https://raw.githubusercontent.com/M3rgen/HealthOS/main/install.ps1 | iex
+  & ([scriptblock]::Create((irm https://raw.githubusercontent.com/M3rgen/HealthOS/v0.2.2/install.ps1))) -Ref v0.2.2
   powershell -ExecutionPolicy Bypass -File .\install.ps1 [-DryRun] [-Help]
 
 Safety: .env is never overwritten (it is copied to .env.bak-<UTC stamp> first and existing
@@ -40,15 +40,15 @@ param(
 # process only: no administrator rights, nothing is stored. (A policy set by Group Policy still
 # wins; PowerShell 7 on macOS/Linux has no execution policy.)
 try { Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force -ErrorAction Stop } catch { $null = $_ }
-$HEALTOS_INSTALLER_VERSION = "0.2.2"
+$HEALTHOS_INSTALLER_VERSION = "0.2.2"
 
-$HealtOSRepoUrl = 'https://github.com/M3rgen/HealtOS.git'
-$HealtOSRawUrl = 'https://raw.githubusercontent.com/M3rgen/HealtOS'
-$HealtOSInstallerFile = $MyInvocation.MyCommand.Path
-$HealtOSExtraArgs = @($args)
-$HealtOSPlatforms = @('linux', 'raspberrypi', 'nas', 'macos', 'windows', 'vps')
+$HealthOSRepoUrl = 'https://github.com/M3rgen/HealthOS.git'
+$HealthOSRawUrl = 'https://raw.githubusercontent.com/M3rgen/HealthOS'
+$HealthOSInstallerFile = $MyInvocation.MyCommand.Path
+$HealthOSExtraArgs = @($args)
+$HealthOSPlatforms = @('linux', 'raspberrypi', 'nas', 'macos', 'windows', 'vps')
 # COMPOSE_FILE entries the installer manages; every other entry is the user's and is kept.
-$HealtOSManagedCompose = @('docker-compose.yml', 'docker-compose.dev.yml', 'docker-compose.garmin.yml',
+$HealthOSManagedCompose = @('docker-compose.yml', 'docker-compose.dev.yml', 'docker-compose.garmin.yml',
     'docker-compose.apple.yml', 'docker-compose.windows.yml')
 
 # ---------------------------------------------------------------------------------------------
@@ -86,7 +86,7 @@ function Say-Plan {
 function Stop-Installer {
     param([int]$Code, [string]$Message)
     $exception = New-Object System.Exception($Message)
-    $record = New-Object System.Management.Automation.ErrorRecord($exception, 'HealtOSInstallerExit',
+    $record = New-Object System.Management.Automation.ErrorRecord($exception, 'HealthOSInstallerExit',
         [System.Management.Automation.ErrorCategory]::NotSpecified, $Code)
     throw $record
 }
@@ -136,10 +136,10 @@ function ConvertFrom-YesNo {
 
 function Show-Usage {
     $english = @'
-HealtOS installer for Windows 10/11 (Docker Desktop, WSL 2 backend)
+HealthOS installer for Windows 10/11 (Docker Desktop, WSL 2 backend)
 
 Usage: .\install.ps1 [options]
-  irm https://raw.githubusercontent.com/M3rgen/HealtOS/main/install.ps1 | iex
+  irm https://raw.githubusercontent.com/M3rgen/HealthOS/main/install.ps1 | iex
 
 Options (the same as install.sh):
   -Lang en|tr                  language (asked; English preselected)
@@ -150,7 +150,8 @@ Options (the same as install.sh):
                                full: production mode, needs Google and webhook values
   -Sources google,garmin,apple data sources, comma separated, or `none`
                                (default: google in full mode, none in trial)
-  -Dir PATH                    checkout directory (default: this checkout, else %USERPROFILE%\healtos)
+  -Dir PATH                    checkout directory (default: this checkout, else %USERPROFILE%\healthos;
+                               an existing %USERPROFILE%\healtos checkout is reused)
   -Ref REF                     git ref to clone when bootstrapping (default: main)
   -GarminKeyFile PATH          Garmin Connect Personal API key file
   -GoogleClientId ID           Google OAuth client ID
@@ -171,10 +172,10 @@ backups. Exit codes: 0 ok, 1 a step failed, 2 bad arguments or unsupported envir
 Linux server is the recommended platform for an always-on install.
 '@
     $turkish = @'
-Windows 10/11 i\u00e7in HealtOS kurulumu (Docker Desktop, WSL 2 altyap\u0131s\u0131)
+Windows 10/11 i\u00e7in HealthOS kurulumu (Docker Desktop, WSL 2 altyap\u0131s\u0131)
 
 Kullan\u0131m: .\\install.ps1 [se\u00e7enekler]
-  irm https://raw.githubusercontent.com/M3rgen/HealtOS/main/install.ps1 | iex
+  irm https://raw.githubusercontent.com/M3rgen/HealthOS/main/install.ps1 | iex
 
 Se\u00e7enekler (install.sh ile ayn\u0131):
   -Lang en|tr                  dil (sorulur; \u0130ngilizce \u00f6nse\u00e7ili)
@@ -185,7 +186,8 @@ Se\u00e7enekler (install.sh ile ayn\u0131):
                                full: \u00fcretim kipi, Google ve webhook de\u011ferleri gerekir
   -Sources google,garmin,apple veri kaynaklar\u0131, virg\u00fclle ya da `none`
                                (varsay\u0131lan: full kipte google, trial kipte none)
-  -Dir YOL                     kurulum klas\u00f6r\u00fc (varsay\u0131lan: bu klon, yoksa %USERPROFILE%\\healtos)
+  -Dir YOL                     kurulum klas\u00f6r\u00fc (varsay\u0131lan: bu klon, yoksa %USERPROFILE%\\healthos;
+                               var olan %USERPROFILE%\\healtos klonu kullan\u0131l\u0131r)
   -Ref REF                     klonlanacak git ref'i (varsay\u0131lan: main)
   -GarminKeyFile YOL           Garmin Connect Personal API anahtar dosyas\u0131
   -GoogleClientId ID           Google OAuth istemci kimli\u011fi
@@ -219,14 +221,14 @@ S\u00fcrekli a\u00e7\u0131k bir kurulum i\u00e7in \u00f6nerilen platform Linux s
 # Arguments
 
 function Test-Arguments {
-    if ($HealtOSExtraArgs.Count -gt 0) {
-        Stop-Installer 2 ((M 'unknown option or argument: {0} (see -Help)' 'bilinmeyen se\u00e7enek ya da arg\u00fcman: {0} (-Help''e bak\u0131n)') -f ($HealtOSExtraArgs -join ' '))
+    if ($HealthOSExtraArgs.Count -gt 0) {
+        Stop-Installer 2 ((M 'unknown option or argument: {0} (see -Help)' 'bilinmeyen se\u00e7enek ya da arg\u00fcman: {0} (-Help''e bak\u0131n)') -f ($HealthOSExtraArgs -join ' '))
     }
     if ($Lang -and @('en', 'tr') -notcontains $Lang.ToLowerInvariant()) {
         Stop-Installer 2 ((M '-Lang must be en or tr, not {0}' '-Lang en ya da tr olmal\u0131, {0} de\u011fil') -f $Lang)
     }
-    if ($Platform -and $HealtOSPlatforms -notcontains $Platform.ToLowerInvariant()) {
-        Stop-Installer 2 ((M '-Platform must be one of {0}' '-Platform \u015funlardan biri olmal\u0131: {0}') -f ($HealtOSPlatforms -join ', '))
+    if ($Platform -and $HealthOSPlatforms -notcontains $Platform.ToLowerInvariant()) {
+        Stop-Installer 2 ((M '-Platform must be one of {0}' '-Platform \u015funlardan biri olmal\u0131: {0}') -f ($HealthOSPlatforms -join ', '))
     }
     if ($Mode -and @('trial', 'full') -notcontains $Mode.ToLowerInvariant()) {
         Stop-Installer 2 (M '-Mode must be trial or full' '-Mode trial ya da full olmal\u0131')
@@ -304,8 +306,17 @@ function Test-Checkout {
 }
 
 function Get-DefaultDir {
-    if ((Test-IsWindowsHost) -and $env:USERPROFILE) { return (Join-Path $env:USERPROFILE 'healtos') }
-    return (Join-Path $HOME 'healtos')
+    $base = $HOME
+    if ((Test-IsWindowsHost) -and $env:USERPROFILE) { $base = $env:USERPROFILE }
+    $path = Join-Path $base 'healthos'
+    # Up to 0.2.2 the default was the misspelled 'healtos': an existing checkout there stays
+    # where it is (nothing is moved) while the new default holds none.
+    $legacy = Join-Path $base 'healtos'
+    if (-not (Test-Checkout $path) -and (Test-Checkout $legacy)) {
+        Say ((M 'Using the existing checkout {0} (the default before the rename to HealthOS); nothing is moved.' 'Var olan {0} klonu kullan\u0131l\u0131yor (HealthOS ad\u0131ndan \u00f6nceki varsay\u0131lan); hi\u00e7bir \u015fey ta\u015f\u0131nmaz.') -f $legacy)
+        return $legacy
+    }
+    return $path
 }
 
 function Find-Tool {
@@ -321,7 +332,7 @@ function Find-Tool {
 
 function Resolve-Checkout {
     $scriptDir = ''
-    if ($HealtOSInstallerFile) { $scriptDir = Split-Path -Parent $HealtOSInstallerFile }
+    if ($HealthOSInstallerFile) { $scriptDir = Split-Path -Parent $HealthOSInstallerFile }
     if ($Dir) {
         $target = [System.IO.Path]::GetFullPath($ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Dir))
     } elseif (Test-Checkout $scriptDir) {
@@ -330,7 +341,7 @@ function Resolve-Checkout {
         return (Get-Location).ProviderPath
     } else {
         $target = Get-DefaultDir
-        $target = Read-Answer (M 'Install directory (HealtOS will be cloned here)' 'Kurulum dizini (HealtOS buraya klonlan\u0131r)') $target
+        $target = Read-Answer (M 'Install directory (HealthOS will be cloned here)' 'Kurulum dizini (HealthOS buraya klonlan\u0131r)') $target
         $target = [System.IO.Path]::GetFullPath($ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($target))
     }
     if (Test-Checkout $target) { return $target }
@@ -342,23 +353,23 @@ function Invoke-Bootstrap {
     param([string]$Target)
     $ref = $Ref
     if (-not $ref) { $ref = 'main' }
-    Say-Step (M 'Getting HealtOS' 'HealtOS indiriliyor')
+    Say-Step (M 'Getting HealthOS' 'HealthOS indiriliyor')
     if ((Test-Path -LiteralPath $Target) -and @(Get-ChildItem -LiteralPath $Target -Force).Count -gt 0) {
-        Stop-Installer 2 ((M '{0} exists, is not empty and is not a HealtOS checkout; nothing was changed. Choose another -Dir.' '{0} var, bo\u015f de\u011fil ve bir HealtOS klonu de\u011fil; hi\u00e7bir \u015fey de\u011fi\u015ftirilmedi. Ba\u015fka bir -Dir se\u00e7in.') -f $Target)
+        Stop-Installer 2 ((M '{0} exists, is not empty and is not a HealthOS checkout; nothing was changed. Choose another -Dir.' '{0} var, bo\u015f de\u011fil ve bir HealthOS klonu de\u011fil; hi\u00e7bir \u015fey de\u011fi\u015ftirilmedi. Ba\u015fka bir -Dir se\u00e7in.') -f $Target)
     }
     $git = Find-Tool 'git'
     if ($DryRun) {
         if (-not $git) { Say-Warn (M 'git was not found; install it with: winget install -e --id Git.Git' 'git bulunamad\u0131; \u015funu kurun: winget install -e --id Git.Git') }
-        Say-Plan "git clone --branch $ref $HealtOSRepoUrl `"$Target`""
+        Say-Plan "git clone --branch $ref $HealthOSRepoUrl `"$Target`""
         Say-Plan ((M 'run {0} from the clone with the same options' 'klondaki {0} ayn\u0131 se\u00e7eneklerle \u00e7al\u0131\u015ft\u0131r\u0131l\u0131r') -f (Join-Path $Target 'install.ps1'))
         Say (M 'Dry run: nothing was cloned. Run the installer inside a checkout with -DryRun to preview the .env as well.' 'Deneme \u00e7al\u0131\u015fmas\u0131: hi\u00e7bir \u015fey klonlanmad\u0131. .env \u00f6nizlemesi i\u00e7in kurulumu bir klonun i\u00e7inde -DryRun ile \u00e7al\u0131\u015ft\u0131r\u0131n.')
         Stop-Installer 0 ''
     }
     if (-not $git) {
-        Stop-Installer 2 (M 'git is required to download HealtOS. Install it with: winget install -e --id Git.Git (or https://git-scm.com/download/win), open a new PowerShell window and run the installer again.' 'HealtOS''u indirmek i\u00e7in git gerekli. \u015eununla kurun: winget install -e --id Git.Git (ya da https://git-scm.com/download/win), yeni bir PowerShell penceresi a\u00e7\u0131p kurulumu yeniden \u00e7al\u0131\u015ft\u0131r\u0131n.')
+        Stop-Installer 2 (M 'git is required to download HealthOS. Install it with: winget install -e --id Git.Git (or https://git-scm.com/download/win), open a new PowerShell window and run the installer again.' 'HealthOS''u indirmek i\u00e7in git gerekli. \u015eununla kurun: winget install -e --id Git.Git (ya da https://git-scm.com/download/win), yeni bir PowerShell penceresi a\u00e7\u0131p kurulumu yeniden \u00e7al\u0131\u015ft\u0131r\u0131n.')
     }
-    Say ((M 'Cloning {0} ({1}) into {2}' '{0} ({1}) {2} klas\u00f6r\u00fcne klonlan\u0131yor') -f $HealtOSRepoUrl, $ref, $Target)
-    & $git clone --branch $ref $HealtOSRepoUrl $Target
+    Say ((M 'Cloning {0} ({1}) into {2}' '{0} ({1}) {2} klas\u00f6r\u00fcne klonlan\u0131yor') -f $HealthOSRepoUrl, $ref, $Target)
+    & $git clone --branch $ref $HealthOSRepoUrl $Target
     if ($LASTEXITCODE -ne 0) { Stop-Installer 1 (M 'git clone failed.' 'git clone ba\u015far\u0131s\u0131z oldu.') }
     $cloned = Join-Path $Target 'install.ps1'
     if (-not (Test-Path -LiteralPath $cloned -PathType Leaf)) {
@@ -428,7 +439,7 @@ function Select-Platform {
     if ($Platform) {
         $chosen = $Platform.ToLowerInvariant()
     } else {
-        $index = Read-Menu 'Where will HealtOS run?' 'HealtOS nerede \u00e7al\u0131\u015facak?' 5 @(
+        $index = Read-Menu 'Where will HealthOS run?' 'HealthOS nerede \u00e7al\u0131\u015facak?' 5 @(
             'Linux server / VM (Debian, Ubuntu, Fedora...; Proxmox VM/LXC) - recommended for an always-on install',
             'Linux sunucu / sanal makine (Debian, Ubuntu, Fedora...; Proxmox VM/LXC) - s\u00fcrekli a\u00e7\u0131k kurulum i\u00e7in \u00f6nerilen',
             'Raspberry Pi / ARM64 board - 64-bit OS required; 4 GB+ RAM recommended; first build is slow',
@@ -441,7 +452,7 @@ function Select-Platform {
             'Windows 10/11, Docker Desktop (WSL 2) ile - bu bilgisayar',
             'Cloud VPS - like Linux; open the dashboard through an SSH tunnel',
             'Bulut VPS - Linux gibi; panel SSH t\u00fcneliyle a\u00e7\u0131l\u0131r')
-        $chosen = $HealtOSPlatforms[$index - 1]
+        $chosen = $HealthOSPlatforms[$index - 1]
     }
     if ($chosen -ne 'windows') {
         Show-OtherPlatform $chosen
@@ -452,7 +463,7 @@ function Select-Platform {
 
 function Show-OtherPlatform {
     param([string]$Chosen)
-    $oneLiner = "curl -fsSL $HealtOSRawUrl/main/install.sh | bash"
+    $oneLiner = "curl -fsSL $HealthOSRawUrl/main/install.sh | bash"
     switch ($Chosen) {
         'nas' {
             Say (M 'A NAS is set up through its own web interface: follow the NAS section of docs/INSTALL.md. Over SSH on the NAS you can run:' 'NAS kendi web aray\u00fcz\u00fcyle kurulur: docs/INSTALL.tr.md i\u00e7indeki NAS b\u00f6l\u00fcm\u00fcn\u00fc izleyin. NAS''ta SSH ile \u015funu \u00e7al\u0131\u015ft\u0131rabilirsiniz:')
@@ -600,7 +611,7 @@ function Select-HostJobs {
         $script:BackupsChoice = Read-YesNo (M 'Daily encrypted backup at 03:30 (Task Scheduler)?' 'Her g\u00fcn 03:30''da \u015fifreli yedek (G\u00f6rev Zamanlay\u0131c\u0131s\u0131)?') $default
     }
     if ($Autostart) { $script:AutostartChoice = $Autostart.ToLowerInvariant() } else {
-        $script:AutostartChoice = Read-YesNo (M 'Start Docker Desktop (and HealtOS) when you sign in?' 'Oturum a\u00e7\u0131l\u0131nca Docker Desktop (ve HealtOS) ba\u015flas\u0131n m\u0131?') 'yes'
+        $script:AutostartChoice = Read-YesNo (M 'Start Docker Desktop (and HealthOS) when you sign in?' 'Oturum a\u00e7\u0131l\u0131nca Docker Desktop (ve HealthOS) ba\u015flas\u0131n m\u0131?') 'yes'
     }
     if ($Umay) { $script:UmayChoice = $Umay.ToLowerInvariant() } else {
         $script:UmayChoice = Read-YesNo (M 'Umay bridge as a sign-in task (needs the Codex CLI signed in to ChatGPT)?' 'Umay k\u00f6pr\u00fcs\u00fc oturum g\u00f6revi olarak (ChatGPT''ye giri\u015f yapm\u0131\u015f Codex CLI gerekir)?') 'no'
@@ -938,7 +949,7 @@ function Get-ComposeFiles {
         }
     }
     foreach ($file in $existing) {
-        if ($HealtOSManagedCompose -notcontains (ConvertTo-ComposeName $file) -and $files -notcontains $file) {
+        if ($HealthOSManagedCompose -notcontains (ConvertTo-ComposeName $file) -and $files -notcontains $file) {
             $files += $file
         }
     }
@@ -1034,7 +1045,7 @@ function Write-EnvFile {
         Write-PrivateBytes -Path $temporary -Bytes $utf8.GetBytes($text)
         [System.IO.File]::Replace($temporary, $envFile, [NullString]::Value)
         # Replace keeps the old file's permissions: narrow them again.
-        Set-HealtOSPrivateAcl -Path $envFile
+        Set-HealthOSPrivateAcl -Path $envFile
         Say (M '  Filled only missing or empty keys; existing values were not changed.' '  Yaln\u0131z eksik veya bo\u015f anahtarlar dolduruldu; var olan de\u011ferler de\u011fi\u015ftirilmedi.')
     } else {
         Say (M '  .env already complete; not modified.' '  .env zaten tam; de\u011fi\u015ftirilmedi.')
@@ -1081,8 +1092,28 @@ function Get-MissingProduction {
 # Secrets outside .env: backup key, Apple receiver token
 
 function Get-ConfigDir {
-    if ((Test-IsWindowsHost) -and $env:APPDATA) { return (Join-Path $env:APPDATA 'HealtOS') }
-    return (Join-Path (Join-Path $HOME '.config') 'healtos')
+    if ((Test-IsWindowsHost) -and $env:APPDATA) { return (Join-Path $env:APPDATA 'HealthOS') }
+    return (Join-Path (Join-Path $HOME '.config') 'healthos')
+}
+
+function Copy-LegacyConfig {
+    # Files in the config directory under the misspelled name used up to 0.2.2 (HealtOS:
+    # backup.key, backup.env) are copied to the new directory when missing there, readable only
+    # by you. The old directory and its files are never moved, changed or deleted.
+    $old = Get-HealthOSLegacyConfigDir
+    $new = Get-ConfigDir
+    if (-not (Test-Path -LiteralPath $old -PathType Container)) { return }
+    foreach ($item in @(Get-ChildItem -LiteralPath $old -Force -File)) {
+        $target = Join-Path $new $item.Name
+        if (Test-Path -LiteralPath $target) { continue }
+        if ($DryRun) {
+            Say-Plan ((M 'copy {0} to {1} (readable only by you; the original is kept)' '{0}, {1} konumuna kopyalan\u0131rd\u0131 (yaln\u0131z siz okuyabilirsiniz; as\u0131l dosya korunur)') -f $item.FullName, $target)
+            continue
+        }
+        if (-not (Test-Path -LiteralPath $new -PathType Container)) { Initialize-PrivateDirectory $new }
+        Write-PrivateBytes -Path $target -Bytes ([System.IO.File]::ReadAllBytes($item.FullName))
+        Say ((M '  Copied {0} to {1} (old name HealtOS; the original is kept).' '  {0}, {1} konumuna kopyaland\u0131 (eski ad HealtOS; as\u0131l dosya korunur).') -f $item.FullName, $target)
+    }
 }
 
 function Get-UserHome {
@@ -1094,7 +1125,7 @@ function Initialize-PrivateDirectory {
     param([string]$Path)
     if (Test-Path -LiteralPath $Path -PathType Container) { return }
     New-Item -ItemType Directory -Path $Path -Force | Out-Null
-    Set-HealtOSPrivateAcl -Path $Path -Directory
+    Set-HealthOSPrivateAcl -Path $Path -Directory
 }
 
 function Write-PrivateBytes {
@@ -1107,7 +1138,7 @@ function Write-PrivateBytes {
     if ($Existing) { $mode = [System.IO.FileMode]::OpenOrCreate }
     $stream = New-Object System.IO.FileStream($Path, $mode, [System.IO.FileAccess]::Write, [System.IO.FileShare]::None)
     $stream.Dispose()
-    Set-HealtOSPrivateAcl -Path $Path
+    Set-HealthOSPrivateAcl -Path $Path
     $stream = New-Object System.IO.FileStream($Path, [System.IO.FileMode]::Truncate,
         [System.IO.FileAccess]::Write, [System.IO.FileShare]::None)
     try {
@@ -1130,13 +1161,13 @@ function Protect-SecretFile {
     # content is never touched).
     param([string]$Path)
     if (-not $Path -or -not (Test-Path -LiteralPath $Path -PathType Leaf)) { return }
-    $problem = Get-HealtOSAclProblem $Path
+    $problem = Get-HealthOSAclProblem $Path
     if (-not $problem) { return }
     if ($DryRun) {
         Say-Plan ((M 'would make {0} readable only by you (it is {1})' '{0} yaln\u0131z sizin okuyabilece\u011finiz hale getirilirdi (\u015fu an: {1})') -f $Path, $problem)
         return
     }
-    Set-HealtOSPrivateAcl -Path $Path
+    Set-HealthOSPrivateAcl -Path $Path
     Say ((M '  {0} is now readable only by you (the content is unchanged).' '  {0} art\u0131k yaln\u0131z sizin taraf\u0131n\u0131zdan okunabilir (i\u00e7erik de\u011fi\u015fmedi).') -f $Path)
 }
 
@@ -1189,6 +1220,10 @@ function Initialize-BackupKey {
     if (Test-Path -LiteralPath $script:BackupKey -PathType Leaf) {
         Say ((M '  Existing backup key kept: {0}' '  Mevcut yedek anahtar\u0131 korundu: {0}') -f $script:BackupKey)
         Protect-SecretFile $script:BackupKey
+    } elseif ($DryRun -and (Test-Path -LiteralPath (Join-Path (Get-HealthOSLegacyConfigDir) 'backup.key') -PathType Leaf)) {
+        # Copy-LegacyConfig would have copied it by now.
+        Say ((M '  The backup key would be copied from the old HealtOS directory and kept: {0}' '  Yedek anahtar\u0131 eski HealtOS klas\u00f6r\u00fcnden kopyalan\u0131r ve korunur: {0}') -f $script:BackupKey)
+        return
     } elseif ($DryRun) {
         Say-Plan ('age-keygen -o "{0}"  ' -f $script:BackupKey + (M '(readable only by you)' '(yaln\u0131z siz okuyabilirsiniz)'))
         return
@@ -1200,7 +1235,7 @@ function Initialize-BackupKey {
         if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $script:BackupKey -PathType Leaf)) {
             Stop-Installer 1 ((M 'Could not create the backup key {0}.' 'Yedek anahtar\u0131 {0} olu\u015fturulamad\u0131.') -f $script:BackupKey)
         }
-        Set-HealtOSPrivateAcl -Path $script:BackupKey
+        Set-HealthOSPrivateAcl -Path $script:BackupKey
         Say ((M '  Created the backup key {0} (readable only by you).' '  Yedek anahtar\u0131 {0} olu\u015fturuldu (yaln\u0131z siz okuyabilirsiniz).') -f $script:BackupKey)
     }
     if ($keygen -and -not $DryRun) {
@@ -1221,6 +1256,7 @@ function Invoke-ChildScript {
 
 function Install-HostJobs {
     $windowsDir = Join-Path (Join-Path $script:RepoDir 'deploy') 'windows'
+    Copy-LegacyConfig
     if ($script:AutostartChoice -eq 'yes') {
         Say-Step (M 'Autostart' 'Otomatik ba\u015flatma')
         $code = Invoke-ChildScript (Join-Path (Join-Path $script:RepoDir 'scripts') 'enable-docker-desktop-autostart.ps1') @{ DryRun = [bool]$DryRun }
@@ -1244,7 +1280,7 @@ function Install-HostJobs {
     if ($script:UmayChoice -eq 'yes') {
         Say-Step (M 'Umay bridge' 'Umay k\u00f6pr\u00fcs\u00fc')
         if ($DryRun) {
-            Say-Plan ('uv sync --frozen --no-dev --python "{0}"' -f (Get-HealtOSBridgePython))
+            Say-Plan ('uv sync --frozen --no-dev --python "{0}"' -f (Get-HealthOSBridgePython))
             Say-Plan ((M 'start the bridge now: {0}' 'k\u00f6pr\u00fc \u015fimdi ba\u015flat\u0131l\u0131r: {0}') -f (Join-Path $windowsDir 'start-umay-bridge.ps1'))
         } else {
             $uv = Find-Tool 'uv'
@@ -1254,7 +1290,7 @@ function Install-HostJobs {
             # line: PowerShell does not quote '<' or '>', and a uv.cmd shim would hand them to
             # cmd.exe as redirections.
             $previousPython = $env:UV_PYTHON
-            $env:UV_PYTHON = Get-HealtOSBridgePython
+            $env:UV_PYTHON = Get-HealthOSBridgePython
             try { & $uv sync --frozen --no-dev | Out-Host } finally {
                 Pop-Location
                 $env:UV_PYTHON = $previousPython
@@ -1262,14 +1298,14 @@ function Install-HostJobs {
             if ($LASTEXITCODE -ne 0) { Say-Warn (M 'uv sync failed; the bridge task will retry at the next sign-in.' 'uv sync ba\u015far\u0131s\u0131z; k\u00f6pr\u00fc g\u00f6revi bir sonraki oturumda yeniden dener.') }
             $code = Invoke-ChildScript (Join-Path $windowsDir 'start-umay-bridge.ps1') @{}
             if ($code -ne 0) {
-                Say-Warn ((M 'The bridge did not start (is "codex login" done?). Log: {0}' 'K\u00f6pr\u00fc ba\u015flamad\u0131 ("codex login" yap\u0131ld\u0131 m\u0131?). G\u00fcnl\u00fck: {0}') -f (Join-Path (Get-HealtOSLogDir) 'umay-bridge.log'))
+                Say-Warn ((M 'The bridge did not start (is "codex login" done?). Log: {0}' 'K\u00f6pr\u00fc ba\u015flamad\u0131 ("codex login" yap\u0131ld\u0131 m\u0131?). G\u00fcnl\u00fck: {0}') -f (Join-Path (Get-HealthOSLogDir) 'umay-bridge.log'))
             }
         }
     }
 }
 
 function Start-Stack {
-    Say-Step (M 'Starting HealtOS' 'HealtOS ba\u015flat\u0131l\u0131yor')
+    Say-Step (M 'Starting HealthOS' 'HealthOS ba\u015flat\u0131l\u0131yor')
     if ($DryRun) {
         Say-Plan ((M 'docker compose up -d --build (in {0}; COMPOSE_FILE from .env)' 'docker compose up -d --build ({0} i\u00e7inde; COMPOSE_FILE .env''den)') -f $script:RepoDir)
         Say-Plan ((M 'wait for http://127.0.0.1:{0}/health/live' 'http://127.0.0.1:{0}/health/live beklenir') -f (Get-AppPort))
@@ -1279,7 +1315,7 @@ function Start-Stack {
     # The host owns the backup metadata directory; create it before Compose would.
     $statusDir = Get-EnvValue 'BACKUP_STATUS_HOST_DIR'
     if (-not $statusDir) { $statusDir = './backup-status' }
-    $statusDir = Resolve-HealtOSPath -Path $statusDir -Base $script:RepoDir
+    $statusDir = Resolve-HealthOSPath -Path $statusDir -Base $script:RepoDir
     if (-not (Test-Path -LiteralPath $statusDir -PathType Container)) { New-Item -ItemType Directory -Path $statusDir -Force | Out-Null }
     Say (M 'The first build downloads and builds the images; this takes a few minutes.' '\u0130lk derleme imajlar\u0131 indirip olu\u015fturur; birka\u00e7 dakika s\u00fcrer.')
     Push-Location $script:RepoDir
@@ -1307,13 +1343,13 @@ function Start-Stack {
     for ($i = 0; $i -lt 120; $i++) {
         try {
             $response = Invoke-WebRequest -Uri $url -UseBasicParsing -TimeoutSec 5
-            if ($response.StatusCode -eq 200) { Say (M 'HealtOS is up.' 'HealtOS \u00e7al\u0131\u015f\u0131yor.') Green; return $true }
+            if ($response.StatusCode -eq 200) { Say (M 'HealthOS is up.' 'HealthOS \u00e7al\u0131\u015f\u0131yor.') Green; return $true }
         } catch {
             $null = $_
         }
         Start-Sleep -Seconds 5
     }
-    Stop-Installer 1 (M 'HealtOS did not answer /health/live within 10 minutes. See: docker compose ps; docker compose logs --tail=100 app' 'HealtOS 10 dakika i\u00e7inde /health/live''a yan\u0131t vermedi. Bak\u0131n: docker compose ps; docker compose logs --tail=100 app')
+    Stop-Installer 1 (M 'HealthOS did not answer /health/live within 10 minutes. See: docker compose ps; docker compose logs --tail=100 app' 'HealthOS 10 dakika i\u00e7inde /health/live''a yan\u0131t vermedi. Bak\u0131n: docker compose ps; docker compose logs --tail=100 app')
 }
 
 # ---------------------------------------------------------------------------------------------
@@ -1327,7 +1363,7 @@ function Show-Summary {
     if ($DryRun) {
         Say ((M '  Dry run finished: nothing was installed or started. Preview: {0}' '  Deneme bitti: hi\u00e7bir \u015fey kurulmad\u0131 ya da ba\u015flat\u0131lmad\u0131. \u00d6nizleme: {0}') -f $script:EnvResult)
     } elseif ($Started) {
-        Say (M '  HealtOS is running.' '  HealtOS \u00e7al\u0131\u015f\u0131yor.') Green
+        Say (M '  HealthOS is running.' '  HealthOS \u00e7al\u0131\u015f\u0131yor.') Green
     } elseif ($Missing.Count -gt 0) {
         Say (M '  Configured, NOT started: the values below are still missing.' '  Yap\u0131land\u0131r\u0131ld\u0131, BA\u015eLATILMADI: a\u015fa\u011f\u0131daki de\u011ferler h\u00e2l\u00e2 eksik.') Yellow
     } else {
@@ -1379,7 +1415,7 @@ function Show-Summary {
         }
     }
     if ($script:BackupsChoice -eq 'yes') {
-        Say ((M '  - Backups: daily at 03:30 (Task Scheduler: HealtOS Backup). Run one now: powershell -ExecutionPolicy Bypass -File .\scripts\backup.ps1  Log: {0}' '  - Yedekler: her g\u00fcn 03:30''da (G\u00f6rev Zamanlay\u0131c\u0131s\u0131: HealtOS Backup). \u015eimdi bir tane: powershell -ExecutionPolicy Bypass -File .\\scripts\\backup.ps1  G\u00fcnl\u00fck: {0}') -f (Join-Path (Get-HealtOSLogDir) 'backup.log'))
+        Say ((M '  - Backups: daily at 03:30 (Task Scheduler: HealthOS Backup). Run one now: powershell -ExecutionPolicy Bypass -File .\scripts\backup.ps1  Log: {0}' '  - Yedekler: her g\u00fcn 03:30''da (G\u00f6rev Zamanlay\u0131c\u0131s\u0131: HealthOS Backup). \u015eimdi bir tane: powershell -ExecutionPolicy Bypass -File .\\scripts\\backup.ps1  G\u00fcnl\u00fck: {0}') -f (Join-Path (Get-HealthOSLogDir) 'backup.log'))
         if ($script:BackupKey) {
             Say ''
             Say ((M '  !!! COPY THE BACKUP KEY OFF THIS MACHINE NOW: {0}' '  !!! YEDEK ANAHTARINI \u015e\u0130MD\u0130 BU MAK\u0130NEN\u0130N DI\u015eINA KOPYALAYIN: {0}') -f $script:BackupKey) Red
@@ -1389,10 +1425,10 @@ function Show-Summary {
         }
     }
     if ($script:AutostartChoice -eq 'yes') {
-        Say (M '  - Autostart: Docker Desktop starts when you sign in and brings HealtOS back; nothing runs until someone signs in.' '  - Otomatik ba\u015flatma: Docker Desktop oturum a\u00e7\u0131l\u0131nca ba\u015flar ve HealtOS''u geri getirir; biri oturum a\u00e7madan hi\u00e7bir \u015fey \u00e7al\u0131\u015fmaz.')
+        Say (M '  - Autostart: Docker Desktop starts when you sign in and brings HealthOS back; nothing runs until someone signs in.' '  - Otomatik ba\u015flatma: Docker Desktop oturum a\u00e7\u0131l\u0131nca ba\u015flar ve HealthOS''u geri getirir; biri oturum a\u00e7madan hi\u00e7bir \u015fey \u00e7al\u0131\u015fmaz.')
     }
     if ($script:UmayChoice -eq 'yes') {
-        Say ((M '  - Umay: the bridge starts at sign-in (Task Scheduler: HealtOS Umay bridge). Log: {0}' '  - Umay: k\u00f6pr\u00fc oturum a\u00e7\u0131l\u0131nca ba\u015flar (G\u00f6rev Zamanlay\u0131c\u0131s\u0131: HealtOS Umay bridge). G\u00fcnl\u00fck: {0}') -f (Join-Path (Get-HealtOSLogDir) 'umay-bridge.log'))
+        Say ((M '  - Umay: the bridge starts at sign-in (Task Scheduler: HealthOS Umay bridge). Log: {0}' '  - Umay: k\u00f6pr\u00fc oturum a\u00e7\u0131l\u0131nca ba\u015flar (G\u00f6rev Zamanlay\u0131c\u0131s\u0131: HealthOS Umay bridge). G\u00fcnl\u00fck: {0}') -f (Join-Path (Get-HealthOSLogDir) 'umay-bridge.log'))
     }
     if ($script:Notes.Count -gt 0) {
         Say ''
@@ -1406,7 +1442,7 @@ function Show-Summary {
 # ---------------------------------------------------------------------------------------------
 # Main
 
-function Invoke-HealtOSInstaller {
+function Invoke-HealthOSInstaller {
     $script:InstallLang = 'en'
     if ($Lang -and @('en', 'tr') -contains $Lang.ToLowerInvariant()) { $script:InstallLang = $Lang.ToLowerInvariant() }
     $script:Unattended = [bool]$NonInteractive
@@ -1419,14 +1455,14 @@ function Invoke-HealtOSInstaller {
     if ($Help) { Show-Usage; return 0 }
     Select-Language
     Write-Host ''
-    Write-Host "HealtOS installer $HEALTOS_INSTALLER_VERSION" -ForegroundColor Cyan
+    Write-Host "HealthOS installer $HEALTHOS_INSTALLER_VERSION" -ForegroundColor Cyan
     $arch = $env:PROCESSOR_ARCHITECTURE
     if (-not $arch) { $arch = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture }
     Say ((M 'Detected: {0} ({1})' 'Alg\u0131lanan: {0} ({1})') -f (Get-HostLabel), $arch)
     if ($noTerminal) { Say (M 'No terminal for questions: continuing with options and defaults.' 'Soru i\u00e7in terminal yok: se\u00e7enekler ve varsay\u0131lanlarla devam ediliyor.') }
     if ($DryRun) { Say (M 'Dry run: every action is printed, nothing is changed.' 'Deneme \u00e7al\u0131\u015fmas\u0131: her ad\u0131m yaz\u0131l\u0131r, hi\u00e7bir \u015fey de\u011fi\u015ftirilmez.') }
     if (-not (Test-IsWindowsHost) -and -not $DryRun) {
-        Stop-Installer 2 ((M 'install.ps1 installs HealtOS on Windows. On {0} use install.sh: curl -fsSL {1}/main/install.sh | bash' 'install.ps1 HealtOS''u Windows''a kurar. {0} \u00fczerinde install.sh kullan\u0131n: curl -fsSL {1}/main/install.sh | bash') -f (Get-HostLabel), $HealtOSRawUrl)
+        Stop-Installer 2 ((M 'install.ps1 installs HealthOS on Windows. On {0} use install.sh: curl -fsSL {1}/main/install.sh | bash' 'install.ps1 HealthOS''u Windows''a kurar. {0} \u00fczerinde install.sh kullan\u0131n: curl -fsSL {1}/main/install.sh | bash') -f (Get-HostLabel), $HealthOSRawUrl)
     }
     Select-Platform
     $script:RepoDir = Resolve-Checkout
@@ -1465,21 +1501,21 @@ function Confirm-Plan {
 }
 
 $script:BoundParameters = $PSBoundParameters
-$HealtOSExitCode = 0
+$HealthOSExitCode = 0
 try {
     # Last value: stray output of a native command must never become the exit code.
-    $HealtOSExitCode = [int](@(Invoke-HealtOSInstaller)[-1])
+    $HealthOSExitCode = [int](@(Invoke-HealthOSInstaller)[-1])
 } catch {
-    if ($_.FullyQualifiedErrorId -like 'HealtOSInstallerExit*') {
-        $HealtOSExitCode = [int]$_.TargetObject
+    if ($_.FullyQualifiedErrorId -like 'HealthOSInstallerExit*') {
+        $HealthOSExitCode = [int]$_.TargetObject
         if ($_.Exception.Message) {
-            if ($HealtOSExitCode -eq 0) { Write-Host $_.Exception.Message } else { [Console]::Error.WriteLine($_.Exception.Message) }
+            if ($HealthOSExitCode -eq 0) { Write-Host $_.Exception.Message } else { [Console]::Error.WriteLine($_.Exception.Message) }
         }
     } else {
-        $HealtOSExitCode = 1
+        $HealthOSExitCode = 1
         [Console]::Error.WriteLine(((M 'Installer failed: {0}' 'Kurulum ba\u015far\u0131s\u0131z: {0}') -f $_.Exception.Message))
         [Console]::Error.WriteLine((M 'Nothing was deleted. Fix the cause and run the installer again; it is safe to repeat.' 'Hi\u00e7bir \u015fey silinmedi. Nedeni giderip kurulumu yeniden \u00e7al\u0131\u015ft\u0131r\u0131n; tekrarlamak g\u00fcvenlidir.'))
     }
 }
-if ($HealtOSInstallerFile) { exit $HealtOSExitCode }
-$global:LASTEXITCODE = $HealtOSExitCode
+if ($HealthOSInstallerFile) { exit $HealthOSExitCode }
+$global:LASTEXITCODE = $HealthOSExitCode

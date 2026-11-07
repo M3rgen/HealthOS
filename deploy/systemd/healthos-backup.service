@@ -3,7 +3,7 @@
 # Template: install.sh installs this unit with every /opt/healthos replaced by the
 # checkout directory; without root it installs a user-unit variant (systemctl --user,
 # lingering on) with the root-only lines removed and /etc/healthos replaced by
-# ~/.config/healtos. Installing by hand from another directory: change those paths too.
+# ~/.config/healthos. Installing by hand from another directory: change those paths too.
 #
 # Install (adjust /opt/healthos to the directory holding docker-compose.yml):
 #   sudo install -m 644 deploy/systemd/healthos-backup.service deploy/systemd/healthos-backup.timer \

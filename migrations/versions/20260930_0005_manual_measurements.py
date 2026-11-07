@@ -1,4 +1,4 @@
-"""Add separate manual body measurements for HealtOS."""
+"""Add separate manual body measurements for HealthOS."""
 
 import sqlalchemy as sa
 from alembic import op

@@ -1,4 +1,4 @@
-# Contributing to HealtOS
+# Contributing to HealthOS
 
 Focused fixes, documentation improvements, and reproducible bug reports are welcome. Before starting a large change, open an issue describing the problem and proposed scope.
 

@@ -1,6 +1,6 @@
 # Deployment
 
-This is the supported way to run HealtOS for real: one Debian VM running Docker Compose, the
+This is the supported way to run HealthOS for real: one Debian VM running Docker Compose, the
 dashboard reachable only through an SSH tunnel, and a Cloudflare Tunnel that forwards nothing but
 Google's webhook. Day-two procedures (updates, key rotation, restore drills, diagnosis) are in the
 [runbook](RUNBOOK.md). For a quick local trial without Google, the [README](../README.md#get-started)
@@ -81,7 +81,7 @@ Docker starts at boot, and the containers come back on their own (`restart: unle
 ## 2. Get the code
 
 ```sh
-sudo git clone https://github.com/M3rgen/HealtOS.git /opt/healthos
+sudo git clone https://github.com/M3rgen/HealthOS.git /opt/healthos
 sudo chown -R "$USER" /opt/healthos
 cd /opt/healthos
 cp .env.example .env
@@ -222,7 +222,7 @@ Webhooks make new records arrive within minutes; without them the daily (7-day) 
    which rejected the missing authorization).
 3. Run `docker compose exec app health-mirror webhook-readiness`; every value must be `true`.
 4. Register the subscriber with Google using the endpoint URI and authorization value from `.env`
-   (HealtOS does not register it for you; follow [Google's webhook guide](https://developers.google.com/health/webhooks)).
+   (HealthOS does not register it for you; follow [Google's webhook guide](https://developers.google.com/health/webhooks)).
 
 Step-by-step commands are in [CLOUDFLARE_TUNNEL.md](CLOUDFLARE_TUNNEL.md). In the app, the public
 hostname from `GOOGLE_HEALTH_WEBHOOK_ENDPOINT_URI` is accepted only for `POST /webhooks/google-health`;
@@ -251,7 +251,7 @@ to start when the disk is short of space and never deletes backups to make room;
 and see [disk space for backups](RUNBOOK.md#disk-space-for-backups). Each run writes its result to
 `BACKUP_HOST_DIR/last-backup-status.json`, and a failure is logged at `crit` by
 `healthos-backup-failure.service`. Copy that directory off the VM with whatever you already
-use; HealtOS ships no off-site copy. **Store the age identity (or `/etc/healthos/backup.key`) in a
+use; HealthOS ships no off-site copy. **Store the age identity (or `/etc/healthos/backup.key`) in a
 password manager, not only on the VM: without it no backup can be read.** Without `age`, a mode-600 `/etc/healthos/backup.key` passphrase
 file switches the script to `gpg --symmetric`. Prove a backup with the restore drill in the
 [runbook](RUNBOOK.md#backup-verify-and-restore-drill); details are in the

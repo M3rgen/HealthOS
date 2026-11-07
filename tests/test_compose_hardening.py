@@ -79,7 +79,7 @@ def test_ui_smoke_script_compiles_and_authenticates():
 
 
 def test_ui_smoke_title_check_matches_the_served_page():
-    # The repo is HealtOS, the product HealthOS; the smoke test must look for the latter.
+    # The smoke test must look for the title the served page really has.
     import re
 
     from scripts.verify_compose import UI_SMOKE_SCRIPT

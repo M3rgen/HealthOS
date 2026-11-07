@@ -83,6 +83,16 @@ backup_dir="${backup_dir:-./backups}"
 status_dir="$(setting BACKUP_STATUS_HOST_DIR)"
 status_dir="${status_dir:-./backup-status}"
 key_file="${BACKUP_KEY_FILE:-/etc/healthos/backup.key}"
+# Up to 0.2.2 the installer kept user keys under the misspelled name (~/.config/healtos,
+# ~/Library/Application Support/HealtOS). It now copies them to the healthos directory; until
+# that has happened, a missing key is looked up at the old path.
+if [ ! -e "$key_file" ]; then
+  legacy_key="$(printf '%s' "$key_file" | sed -e 's|/healthos/|/healtos/|' -e 's|/HealthOS/|/HealtOS/|')"
+  if [ "$legacy_key" != "$key_file" ] && [ -f "$legacy_key" ]; then
+    echo "backup: $key_file not found; using the old path $legacy_key (re-run the installer to copy it)" >&2
+    key_file="$legacy_key"
+  fi
+fi
 recipient="${BACKUP_AGE_RECIPIENT:-}"
 
 output=""

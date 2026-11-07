@@ -5,10 +5,11 @@
 // change that could not reach it is marked pending and sent by the next sync that does
 // (last write wins).
 import { request } from './api.js';
+import { migrateLegacyKeys } from './legacy-names.js';
 
 export const SCHEMA_VERSION = 1;
 const REMOTE_URL = '/api/settings/display';
-const KEYS = { timezone: 'healtos.timezone.v2', motion: 'healtos.motion' };
+const KEYS = { timezone: 'healthos.timezone.v2', motion: 'healthos.motion' };
 // Same rule as TimeZoneChoice in app/api/settings.py; Intl then decides if the zone exists.
 const ZONE = /^(auto|[A-Za-z][A-Za-z0-9_+-]*(\/[A-Za-z0-9_+-]+){0,2})$/;
 
@@ -42,9 +43,10 @@ export function cleanPreferences(value, validZone) {
 export function createDisplayPreferences({
   validZone,
   url = REMOTE_URL,
-  pendingKey = 'healtos.display.pending',
+  pendingKey = 'healthos.display.pending',
   onStatus = () => {},
 }) {
+  migrateLegacyKeys(); // Before the first read: keys kept under the old product name.
   const read = () => {
     const motion = stored(KEYS.motion);
     return cleanPreferences(

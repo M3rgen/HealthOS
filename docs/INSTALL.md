@@ -1,4 +1,4 @@
-# Installing HealtOS
+# Installing HealthOS
 
 *Türkçe: [INSTALL.tr.md](INSTALL.tr.md).*
 
@@ -8,7 +8,7 @@ troubleshooting. The installer only automates the steps of the manual setup in t
 [README](../README.md#manual-setup) and the [deployment guide](DEPLOYMENT.md); you can always do
 them by hand instead.
 
-**The default is a Linux server.** HealtOS is meant to run on a machine that stays on: a Linux
+**The default is a Linux server.** HealthOS is meant to run on a machine that stays on: a Linux
 server or VM, a Raspberry Pi or a NAS. A desktop or laptop works too, but the archive only stays
 current while it is awake.
 
@@ -32,38 +32,38 @@ as root it installs system units, as a normal user it installs user units, and a
 `sudo` is printed for you to run:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/M3rgen/HealtOS/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/M3rgen/HealthOS/main/install.sh | bash
 ```
 
 **Windows 10/11** (PowerShell, as your normal user):
 
 ```powershell
-irm https://raw.githubusercontent.com/M3rgen/HealtOS/main/install.ps1 | iex
+irm https://raw.githubusercontent.com/M3rgen/HealthOS/main/install.ps1 | iex
 ```
 
 **A fixed release** instead of the current `main` (here v0.2.2):
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/M3rgen/HealtOS/v0.2.2/install.sh | bash -s -- --ref v0.2.2
+curl -fsSL https://raw.githubusercontent.com/M3rgen/HealthOS/v0.2.2/install.sh | bash -s -- --ref v0.2.2
 ```
 
 ```powershell
-& ([scriptblock]::Create((irm https://raw.githubusercontent.com/M3rgen/HealtOS/v0.2.2/install.ps1))) -Ref v0.2.2
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/M3rgen/HealthOS/v0.2.2/install.ps1))) -Ref v0.2.2
 ```
 
 **Prefer to read the script before running it?** Clone first, read `install.sh` or `install.ps1`,
 then run it from the checkout; it then uses that checkout and clones nothing:
 
 ```sh
-git clone https://github.com/M3rgen/HealtOS.git
-cd HealtOS
+git clone https://github.com/M3rgen/HealthOS.git
+cd HealthOS
 less install.sh
 ./install.sh            # or: ./install.sh --dry-run   to see every action first
 ```
 
 ```powershell
-git clone https://github.com/M3rgen/HealtOS.git
-cd HealtOS
+git clone https://github.com/M3rgen/HealthOS.git
+cd HealthOS
 notepad .\install.ps1
 powershell -ExecutionPolicy Bypass -File .\install.ps1     # or add -DryRun
 ```
@@ -74,14 +74,14 @@ A coding agent with shell access (Claude Code, OpenAI Codex CLI or similar) can 
 installation for you by following [AI_INSTALL.md](AI_INSTALL.md). Give it this prompt:
 
 ```text
-Install HealtOS on this computer by following https://raw.githubusercontent.com/M3rgen/HealtOS/main/docs/AI_INSTALL.md — ask me before any step that needs admin rights or my accounts, and never delete data.
+Install HealthOS on this computer by following https://raw.githubusercontent.com/M3rgen/HealthOS/main/docs/AI_INSTALL.md — ask me before any step that needs admin rights or my accounts, and never delete data.
 ```
 
 Ready to run in a terminal:
 
 ```sh
-claude "Install HealtOS on this computer by following https://raw.githubusercontent.com/M3rgen/HealtOS/main/docs/AI_INSTALL.md — ask me before any step that needs admin rights or my accounts, and never delete data."
-codex "Install HealtOS on this computer by following https://raw.githubusercontent.com/M3rgen/HealtOS/main/docs/AI_INSTALL.md — ask me before any step that needs admin rights or my accounts, and never delete data."
+claude "Install HealthOS on this computer by following https://raw.githubusercontent.com/M3rgen/HealthOS/main/docs/AI_INSTALL.md — ask me before any step that needs admin rights or my accounts, and never delete data."
+codex "Install HealthOS on this computer by following https://raw.githubusercontent.com/M3rgen/HealthOS/main/docs/AI_INSTALL.md — ask me before any step that needs admin rights or my accounts, and never delete data."
 ```
 
 Or paste the prompt into Claude Code, Codex or any other agent that can run commands. The agent
@@ -95,7 +95,7 @@ In order:
 1. Checks the host: Git, Docker with Compose v2 and a running Docker engine. If something is
    missing it says how to install it on your OS and stops (exit code 2); it installs no system
    packages by itself.
-2. If it is not running inside a HealtOS checkout, clones `https://github.com/M3rgen/HealtOS.git`
+2. If it is not running inside a HealthOS checkout, clones `https://github.com/M3rgen/HealthOS.git`
    at `--ref` (default `main`) into the checkout directory.
 3. Asks the questions below (or takes them from flags).
 4. Writes `.env`: new secrets only where a value is missing, an existing `.env` is copied to
@@ -141,7 +141,7 @@ Every question has a preselected answer; Enter accepts it. The questions are in 
    paste the key and it is saved there); for Apple, whether to enable the Health Auto Export
    receiver (default no) and its HTTPS address.
 5. **Checkout directory.** Only when it has to clone: `/opt/healthos` when run as root on Linux,
-   otherwise `~/healtos` (`%USERPROFILE%\healtos` on Windows). The directory must be empty or
+   otherwise `~/healthos` (`%USERPROFILE%\healthos` on Windows). The directory must be empty or
    missing; the installer never clones over existing files.
 6. **Daily encrypted backup.** Default yes in full mode, no in trial mode. If no backup key exists,
    it offers to create one; see [Backups](#backups).
@@ -190,14 +190,14 @@ are still missing. Your data stays in the same database volume.
 | `--platform linux\|raspberrypi\|nas\|macos\|windows\|vps` | `-Platform …` | Target platform (see the table above). |
 | `--mode trial\|full` | `-Mode trial\|full` | Default `trial` on a first run; on a re-run the mode of the existing `.env` (see [Trial and full mode](#trial-and-full-mode)). An explicit value always wins. |
 | `--sources google,garmin,apple` or `none` | `-Sources …` | Comma-separated data sources. |
-| `--dir PATH` | `-Dir PATH` | Checkout directory. Default: the current checkout if run inside one; otherwise Linux `/opt/healthos` (root) or `~/healtos`, macOS `~/healtos`, Windows `%USERPROFILE%\healtos`. |
+| `--dir PATH` | `-Dir PATH` | Checkout directory. Default: the current checkout if run inside one; otherwise Linux `/opt/healthos` (root) or `~/healthos`, macOS `~/healthos`, Windows `%USERPROFILE%\healthos`. |
 | `--ref REF` | `-Ref REF` | Git branch or tag to clone when bootstrapping (default `main`). |
 | `--garmin-key-file PATH` | `-GarminKeyFile PATH` | Garmin Personal API key file on the host. An explicit path that does not exist is an error (exit code 2). Without the flag, a missing default key file leaves Garmin off with a note and exit code 0. |
 | `--google-client-id ID` | `-GoogleClientId ID` | Google OAuth client ID. |
 | `--google-client-secret S` | `-GoogleClientSecret S` | Google OAuth client secret. |
 | `--apple-receiver yes\|no` | `-AppleReceiver yes\|no` | Enable the Health Auto Export receiver (default no). |
 | `--backups yes\|no` | `-Backups yes\|no` | Schedule the daily encrypted backup (default yes in full mode, no in trial mode). |
-| `--autostart yes\|no` | `-Autostart yes\|no` | Bring HealtOS back after a reboot (default yes). |
+| `--autostart yes\|no` | `-Autostart yes\|no` | Bring HealthOS back after a reboot (default yes). |
 | `--umay yes\|no` | `-Umay yes\|no` | Install the Umay bridge as a service (default no). |
 | `--yes`, `--non-interactive` | `-NonInteractive` | Never prompt; take the flags and the defaults. |
 | `--dry-run` | `-DryRun` | Print every action without doing it: no clone, no Docker, no service. The `.env` it would write goes to `--env-out` (default `<dir>/.env.dry-run`); it never overwrites a real file. |
@@ -231,7 +231,7 @@ Examples:
 
 ## What the installer changes, and what it never does
 
-HealtOS keeps every record and every backup; the installer follows the same rule.
+HealthOS keeps every record and every backup; the installer follows the same rule.
 
 - **`.env` is copied before every change.** If it exists, it is first copied to
   `.env.bak-<UTC stamp>` (older `.bak` files are kept). Then the installer fills keys that are
@@ -283,7 +283,7 @@ Proxmox: a VM, or an LXC container with nesting enabled for Docker.
 sudo apt install git age python3      # Fedora: sudo dnf install git age python3
 sudo systemctl enable --now docker
 docker compose version
-curl -fsSL https://raw.githubusercontent.com/M3rgen/HealtOS/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/M3rgen/HealthOS/main/install.sh | bash
 ```
 
 **Root or your own user.**
@@ -292,13 +292,13 @@ curl -fsSL https://raw.githubusercontent.com/M3rgen/HealtOS/main/install.sh | ba
   in `/opt/healthos`, units in `/etc/systemd/system/`, backup key `/etc/healthos/backup.key`.
   This matches the [deployment guide](DEPLOYMENT.md).
 - **As your own user** (the user must be able to run `docker`, i.e. be in the `docker` group):
-  checkout in `~/healtos`, backup key `~/.config/healtos/backup.key`. Interactively the installer
+  checkout in `~/healthos`, backup key `~/.config/healthos/backup.key`. Interactively the installer
   offers to stop here so you can re-run it with `sudo` for system units instead. The units are installed as
   systemd **user** units (`~/.config/systemd/user/`, managed with `systemctl --user`), and
   lingering is turned on (`loginctl enable-linger`) so they run without an open login session.
 
 **systemd units** (from [`deploy/systemd/`](../deploy/systemd/), with the checkout path filled in;
-as user units, `/etc/healthos` becomes `~/.config/healtos`):
+as user units, `/etc/healthos` becomes `~/.config/healthos`):
 
 | Unit | What it does |
 | --- | --- |
@@ -341,7 +341,7 @@ Then open <http://localhost:8000> (or <http://healthos.localhost:8000>, see
 ### Raspberry Pi and other ARM64 boards
 
 - **64-bit OS required:** Raspberry Pi OS (64-bit) or Ubuntu Server for ARM64. Every image
-  HealtOS uses is built for amd64 and arm64; 32-bit ARM (armv7) is not supported, because Node.js
+  HealthOS uses is built for amd64 and arm64; 32-bit ARM (armv7) is not supported, because Node.js
   and `uv` publish no armv7 build. The installer refuses a 32-bit system (exit code 2); check with
   `uname -m`, which must print `aarch64`. A Pi 3 or newer can run a 64-bit OS.
 - **RAM:** 4 GB or more recommended (Pi 4 or Pi 5). 2 GB can run the stack but the first build
@@ -373,7 +373,7 @@ for building the image (2 GB free). Keep the project on a regular data volume, n
   shared folder (for example `/volume1/docker` on Synology, `/share/Container` on QNAP,
   `/mnt/user/appdata` on Unraid, a dataset under `/mnt/<pool>` on TrueNAS) and run
   `./install.sh --platform nas --no-start` from a fresh clone, or the one-liner with
-  `--dir <that folder>/healtos`.
+  `--dir <that folder>/healthos`.
 - *Without Git on the NAS:* on another computer, clone the repository and run
   `./install.sh --platform nas --dry-run --env-out ./nas.env`. Copy the checkout to the NAS
   share and save `nas.env` there as `.env`. Its secrets are real; file paths in it (for example a
@@ -403,13 +403,13 @@ Many NAS systems ship Python but not `age`; place the static `age` binary from i
 once as root and copy it off the NAS:
 
 ```sh
-sudo sh -c 'umask 077; mkdir -p /root/.config/healtos && age-keygen -o /root/.config/healtos/backup.key'
+sudo sh -c 'umask 077; mkdir -p /root/.config/healthos && age-keygen -o /root/.config/healthos/backup.key'
 ```
 
 Then schedule this command daily at 03:30, as root, with the NAS's own scheduler:
 
 ```sh
-cd <checkout> && BACKUP_KEY_FILE=/root/.config/healtos/backup.key /bin/bash scripts/backup.sh
+cd <checkout> && BACKUP_KEY_FILE=/root/.config/healthos/backup.key /bin/bash scripts/backup.sh
 ```
 
 Synology: *Control Panel* › *Task Scheduler* › *User-defined script*, user root; QNAP:
@@ -429,21 +429,21 @@ Git (`xcode-select --install` or Homebrew); for backups `brew install age` and P
 (`brew install python`; the `python3` of the Xcode command line tools is too old).
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/M3rgen/HealtOS/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/M3rgen/HealthOS/main/install.sh | bash
 ```
 
-The installer detects macOS and preselects it. Checkout: `~/healtos`. Backup key:
-`~/Library/Application Support/HealtOS/backup.key`.
+The installer detects macOS and preselects it. Checkout: `~/healthos`. Backup key:
+`~/Library/Application Support/HealthOS/backup.key`.
 
-- **Backups and the bridge** run as launchd agents of your user: `org.healtos.backup` (daily at
-  03:30) and `org.healtos.bridge` (optional), installed in `~/Library/LaunchAgents/` from the
-  templates in `deploy/launchd/`. List them with `launchctl list | grep -i healtos`; run a backup
-  now with `launchctl kickstart gui/$(id -u)/org.healtos.backup`. Logs: `~/Library/Logs/HealtOS/`.
+- **Backups and the bridge** run as launchd agents of your user: `org.healthos.backup` (daily at
+  03:30) and `org.healthos.bridge` (optional), installed in `~/Library/LaunchAgents/` from the
+  templates in `deploy/launchd/`. List them with `launchctl list | grep -i healthos`; run a backup
+  now with `launchctl kickstart gui/$(id -u)/org.healthos.backup`. Logs: `~/Library/Logs/HealthOS/`.
 - **Autostart:** Docker Desktop: *Settings* › *General* › *Start Docker Desktop when you sign in*.
   OrbStack starts at login by default. Colima: `brew services start colima`. The containers then
   come back on their own.
 - **Sleep:** a sleeping Mac neither synchronizes nor backs up. launchd runs a missed 03:30 backup
-  after waking, but not for a Mac that was switched off. For a Mac that should run HealtOS around
+  after waking, but not for a Mac that was switched off. For a Mac that should run HealthOS around
   the clock, set *System Settings* › *Energy* to prevent automatic sleep.
 
 ### Windows 10 and 11
@@ -455,25 +455,25 @@ or `winget install Git.Git`; `winget install FiloSottile.age` for backups. Windo
 and PowerShell 7 both work.
 
 ```powershell
-irm https://raw.githubusercontent.com/M3rgen/HealtOS/main/install.ps1 | iex
+irm https://raw.githubusercontent.com/M3rgen/HealthOS/main/install.ps1 | iex
 ```
 
 The installer detects Windows and preselects it. It lists every platform, but installs only the
 Windows one on this PC; for another choice it prints the command to run on that machine. Checkout:
-`%USERPROFILE%\healtos`. Backup key: `%APPDATA%\HealtOS\backup.key`, readable only by your
+`%USERPROFILE%\healthos`. Backup key: `%APPDATA%\HealthOS\backup.key`, readable only by your
 account. If Git or Docker Desktop is missing or the Docker engine is not running, it prints the
 `winget` command or the fix and stops with exit code 2.
 
-- **Backups** run as the Task Scheduler task `\HealtOS\HealtOS Backup` of your user, daily at
+- **Backups** run as the Task Scheduler task `\HealthOS\HealthOS Backup` of your user, daily at
   03:30, with `scripts\backup.ps1` (same behaviour as `scripts/backup.sh`). List the tasks with
-  `Get-ScheduledTask -TaskPath '\HealtOS\'`; run a backup now with
-  `Start-ScheduledTask -TaskPath '\HealtOS\' -TaskName 'HealtOS Backup'`. Logs:
-  `%LOCALAPPDATA%\HealtOS\logs\`.
+  `Get-ScheduledTask -TaskPath '\HealthOS\'`; run a backup now with
+  `Start-ScheduledTask -TaskPath '\HealthOS\' -TaskName 'HealthOS Backup'`. Logs:
+  `%LOCALAPPDATA%\HealthOS\logs\`.
 - **Autostart:** Docker Desktop starts only after you sign in. The installer runs
   [`scripts/enable-docker-desktop-autostart.ps1`](../scripts/enable-docker-desktop-autostart.ps1),
   which adds Docker Desktop to your user's startup entries; the containers then come back with
-  `restart: unless-stopped`. Until someone signs in, HealtOS is not running.
-- **Umay bridge** (optional) runs as the scheduled task `\HealtOS\HealtOS Umay bridge` at
+  `restart: unless-stopped`. Until someone signs in, HealthOS is not running.
+- **Umay bridge** (optional) runs as the scheduled task `\HealthOS\HealthOS Umay bridge` at
   sign-in; see
   [Windows notes](legacy/WINDOWS.md#umay-bridge-on-windows) for the Codex CLI setup.
 - **Running a local copy:** if PowerShell refuses `.\install.ps1` because of the execution
@@ -604,18 +604,18 @@ Every platform uses the same backup semantics as [`scripts/backup.sh`](../script
   | Platform | Key file | Scheduler | Run one backup now |
   | --- | --- | --- | --- |
   | Linux (root), Raspberry Pi, VPS | `/etc/healthos/backup.key` (root, mode 600) | systemd timer | `sudo systemctl start healthos-backup.service` |
-  | Linux (own user) | `~/.config/healtos/backup.key` (mode 600) | systemd user timer | `systemctl --user start healthos-backup.service` |
-  | NAS | `/root/.config/healtos/backup.key` (create with `age-keygen -o`) | NAS task scheduler | `BACKUP_KEY_FILE=/root/.config/healtos/backup.key bash scripts/backup.sh` |
-  | macOS | `~/Library/Application Support/HealtOS/backup.key` | launchd agent | `launchctl kickstart gui/$(id -u)/org.healtos.backup` |
-  | Windows | `%APPDATA%\HealtOS\backup.key` (only your account) | Task Scheduler | `powershell -ExecutionPolicy Bypass -File .\scripts\backup.ps1` |
+  | Linux (own user) | `~/.config/healthos/backup.key` (mode 600) | systemd user timer | `systemctl --user start healthos-backup.service` |
+  | NAS | `/root/.config/healthos/backup.key` (create with `age-keygen -o`) | NAS task scheduler | `BACKUP_KEY_FILE=/root/.config/healthos/backup.key bash scripts/backup.sh` |
+  | macOS | `~/Library/Application Support/HealthOS/backup.key` | launchd agent | `launchctl kickstart gui/$(id -u)/org.healthos.backup` |
+  | Windows | `%APPDATA%\HealthOS\backup.key` (only your account) | Task Scheduler | `powershell -ExecutionPolicy Bypass -File .\scripts\backup.ps1` |
 
 - **Keep a copy of the key off the host**, for example in a password manager, together with
   `GOOGLE_TOKEN_ENCRYPTION_KEY`. Without the key every backup is unreadable. A key that exists only
   on the host is lost with the host.
-- Stronger option: create the identity on another machine (`age-keygen -o healtos-backup.age`) and
+- Stronger option: create the identity on another machine (`age-keygen -o healthos-backup.age`) and
   put only its public key on the host as `BACKUP_AGE_RECIPIENT` (Linux: in
   `/etc/healthos/backup.env`). Then a stolen host cannot read its own backups.
-- **Copy the backups off the host too** with whatever you already use; HealtOS ships no off-site
+- **Copy the backups off the host too** with whatever you already use; HealthOS ships no off-site
   copy.
 - **Prove a backup** with the restore drill, which never touches the live database:
   `make restore FILE=backups/health-<stamp>.dump.age` (Windows:
@@ -627,7 +627,7 @@ Every platform uses the same backup semantics as [`scripts/backup.sh`](../script
 Updating is the same on every platform: take a backup, pull, run the installer again.
 
 ```sh
-cd ~/healtos                 # or /opt/healthos, or %USERPROFILE%\healtos
+cd ~/healthos                 # or /opt/healthos, or %USERPROFILE%\healthos
 make backup                  # or: bash scripts/backup.sh  (Windows: .\scripts\backup.ps1)
 git pull --ff-only
 ./install.sh                 # Windows: .\install.ps1
@@ -645,6 +645,26 @@ migration details: [runbook](RUNBOOK.md#update-the-application).
 To stay on a release, check out its tag (`git fetch --tags && git checkout v0.2.2`) before
 running the installer.
 
+### Updating an install from 0.2.2 or earlier (the old name "HealtOS")
+
+Up to 0.2.2 the project was published as "HealtOS", and some names on your machine still use that
+spelling. Running the new installer keeps everything working; no data, key or backup is moved or deleted:
+
+- A checkout in `~/healtos` (`%USERPROFILE%\healtos`) stays the default as long as there is no
+  `~/healthos`; the installer says so.
+- Files in `~/.config/healtos`, `~/Library/Application Support/HealtOS` (macOS) or
+  `%APPDATA%\HealtOS` (Windows), such as `backup.key` and `backup.env`, are **copied** to the new
+  `healthos` / `HealthOS` directory when missing there (still readable only by you). The originals
+  stay; keep your off-host copy of the backup key as it is. Until the copy exists, `backup.sh` and
+  `backup.ps1` use the old key path.
+- macOS: the `org.healtos.backup` and `org.healtos.bridge` agents are stopped and replaced by
+  `org.healthos.*`; the old plists stay in `~/Library/LaunchAgents/` as `*.plist.bak-<UTC stamp>`.
+- Windows: the tasks `\HealtOS\HealtOS Backup` and `\HealtOS\HealtOS Umay bridge` are unregistered
+  after `\HealthOS\HealthOS Backup` and `\HealthOS\HealthOS Umay bridge` are registered.
+- `HEALTOS_REPO_URL` still works for `install.sh` (with a note); use `HEALTHOS_REPO_URL`.
+- New logs go to `~/Library/Logs/HealthOS` and `%LOCALAPPDATA%\HealthOS\logs`; the old log
+  folders stay as they are.
+
 ## Stopping and uninstalling without losing data
 
 Your archive lives in the Docker volume `postgres_data`, your backups in `BACKUP_HOST_DIR`. Neither
@@ -658,17 +678,17 @@ docker compose down          # remove the containers and network; the volume sta
 **Never run `docker compose down -v` or `docker volume rm`:** they delete the database volume and
 with it every record that is not in a backup. The installer never does either.
 
-To remove HealtOS from a host while keeping the data:
+To remove HealthOS from a host while keeping the data:
 
 1. Take a final backup and copy it, the backup key and `.env` off the host.
 2. `docker compose down` (without `-v`).
 3. Remove the scheduled jobs:
    - Linux: `sudo systemctl disable --now healthos-backup.timer healthos-bridge.service`
      (user units: `systemctl --user disable --now …`).
-   - macOS: `launchctl bootout gui/$(id -u)/org.healtos.backup` (and `org.healtos.bridge`); the
+   - macOS: `launchctl bootout gui/$(id -u)/org.healthos.backup` (and `org.healthos.bridge`); the
      `.plist` files in `~/Library/LaunchAgents/` can stay.
-   - Windows: `Disable-ScheduledTask -TaskPath '\HealtOS\' -TaskName 'HealtOS Backup'` (and
-     `'HealtOS Umay bridge'`), or *Disable* in Task Scheduler.
+   - Windows: `Disable-ScheduledTask -TaskPath '\HealthOS\' -TaskName 'HealthOS Backup'` (and
+     `'HealthOS Umay bridge'`), or *Disable* in Task Scheduler.
 4. Leave the checkout, `.env`, the `.env.bak-*` copies and the `backups` folder where they are, or
    move them to an archive. The volume `postgres_data` stays in Docker until you decide otherwise.
 
@@ -709,8 +729,8 @@ Re-running the installer in the same checkout later picks up the same `.env` and
 
 - `Cannot connect to the Docker daemon`: start Docker Desktop, OrbStack or `colima start`.
 - Colima runs out of memory during the build: `colima start --memory 4`.
-- A launchd agent does not run: `launchctl print gui/$(id -u)/org.healtos.backup` shows its state
-  and last exit code; the log path is in `~/Library/LaunchAgents/org.healtos.backup.plist`.
+- A launchd agent does not run: `launchctl print gui/$(id -u)/org.healthos.backup` shows its state
+  and last exit code; the log path is in `~/Library/LaunchAgents/org.healthos.backup.plist`.
 
 **Windows**
 

@@ -324,7 +324,7 @@ async def test_http_date_windows(dashboard_dates, path, end, days, zone, status)
         assert response.content.startswith(b"\xef\xbb\xbf")
         assert len(response.text.splitlines()) == days + 1
         assert response.headers["cache-control"] == "no-store"
-        assert f'filename="healtos-{end}.csv"' in response.headers["content-disposition"]
+        assert f'filename="healthos-{end}.csv"' in response.headers["content-disposition"]
     else:
         assert response.json()["end_date"] == end
         assert len(response.json()["days"]) == days

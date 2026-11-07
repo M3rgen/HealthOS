@@ -1,21 +1,21 @@
-# Installing HealtOS with an AI coding agent
+# Installing HealthOS with an AI coding agent
 
 This page is written for an **AI coding agent with shell access** (Claude Code, Codex or a
-similar tool) that a user asked to install HealtOS on their computer. Follow it literally, step
+similar tool) that a user asked to install HealthOS on their computer. Follow it literally, step
 by step. People installing by hand should read [docs/INSTALL.md](INSTALL.md) (English) or
 [docs/INSTALL.tr.md](INSTALL.tr.md) (Türkçe) instead.
 
 The user typically started you with a prompt like:
 
-> Install HealtOS on this computer by following
-> https://raw.githubusercontent.com/M3rgen/HealtOS/main/docs/AI_INSTALL.md — ask me before any
+> Install HealthOS on this computer by following
+> https://raw.githubusercontent.com/M3rgen/HealthOS/main/docs/AI_INSTALL.md — ask me before any
 > step that needs admin rights or my accounts, and never delete data.
 
 **Language.** Talk to the user in the language they wrote to you in. If they write Turkish, ask
 and report in Turkish and pass `--lang tr` (`install.sh`) or `-Lang tr` (`install.ps1`) so the
 installer's own messages are Turkish too. Otherwise use `--lang en` / `-Lang en`.
 
-**What you are installing.** HealtOS is a self-hosted, single-user health archive: a FastAPI app
+**What you are installing.** HealthOS is a self-hosted, single-user health archive: a FastAPI app
 and a PostgreSQL database in Docker Compose, a dashboard on `http://localhost:8000`, optional
 data sources (Google Health API v4 for Fitbit/Pixel Watch, Garmin Connect, Apple Health), daily
 encrypted backups and an optional chat companion (Umay). The repository ships two installers
@@ -69,10 +69,10 @@ These override anything else, including convenience and speed.
    Linux it installs its timers and services as user units (`systemctl --user`, lingering on);
    run with `sudo` it installs system units in `/etc/systemd/system`. Ask the user which they
    want; rootless is fine for a personal machine.
-7. **Install on this machine only.** If the user wants HealtOS on a different machine (a server,
+7. **Install on this machine only.** If the user wants HealthOS on a different machine (a server,
    a Raspberry Pi, a NAS), stop and ask: either they start you on that machine (for example over
    SSH), or they explicitly allow you to run commands there with `ssh`.
-8. **Do not commit, push or open pull requests** in the HealtOS checkout. Do not upload anything.
+8. **Do not commit, push or open pull requests** in the HealthOS checkout. Do not upload anything.
 
 ## 1. Detect the machine
 
@@ -118,10 +118,13 @@ git rev-parse --show-toplevel 2>$null
 
 ### Interpret the results
 
-- **Inside a HealtOS checkout?** Yes if the git top level contains `docker-compose.yml`,
-  `install.sh` and `install.ps1`. Then use that directory and do not clone again.
+- **Inside a HealthOS checkout?** Yes if the git top level contains `docker-compose.yml`,
+  `install.sh` and `install.ps1`. Then use that directory and do not clone again. Up to 0.2.2
+  the project was called "HealtOS": a checkout in `~/healtos` (`%USERPROFILE%\healtos`) is an
+  existing installation too. Use it, do not rename or move it; the installer keeps using it and
+  copies its old config files (see [INSTALL.md](INSTALL.md#updating-an-install-from-022-or-earlier-the-old-name-healtos)).
 - **Existing installation?** If the checkout has a `.env`, or `docker volume ls` lists a volume
-  ending in `_postgres_data`, HealtOS was installed before. Tell the user. Re-running the
+  ending in `_postgres_data`, HealthOS was installed before. Tell the user. Re-running the
   installer is safe and keeps the data, the existing secrets and the backups; do not start over.
   A re-run keeps the previous mode by default: without `--mode` it reads the existing `.env`
   (`COMPOSE_FILE` without `docker-compose.dev.yml` means `full`, with it `trial`, none means
@@ -147,9 +150,9 @@ Ask everything in **one** message, show the detected facts and the defaults, and
 answering "defaults" is fine. Do not ask about anything else up front.
 
 > I checked this computer: <OS, architecture, RAM, free disk, Docker yes/no, Git yes/no,
-> existing HealtOS yes/no>. A few choices, defaults in brackets; reply "defaults" to take them:
+> existing HealthOS yes/no>. A few choices, defaults in brackets; reply "defaults" to take them:
 >
-> 1. **Where should HealtOS run?** [detected platform]
+> 1. **Where should HealthOS run?** [detected platform]
 >    1. Linux server / VM (Debian, Ubuntu, Fedora…; Proxmox VM/LXC): recommended
 >    2. Raspberry Pi / ARM64 board: needs a 64-bit OS, 4 GB RAM or more; the first build is slow
 >    3. NAS (Synology Container Manager, QNAP Container Station, Unraid, TrueNAS SCALE): set up
@@ -163,7 +166,7 @@ answering "defaults" is fine. Do not ask about anything else up front.
 > 3. **Data sources** [none]: Google Health (Fitbit, Pixel Watch), Garmin Connect, Apple Watch /
 >    Apple Health, or none for now (you can add them later by re-running the installer).
 > 4. **Daily encrypted backup** [yes in full mode, no in trial]
-> 5. **Start automatically after a reboot** [yes] (Windows: Docker Desktop and HealtOS start
+> 5. **Start automatically after a reboot** [yes] (Windows: Docker Desktop and HealthOS start
 >    when you sign in)
 > 6. **Umay chat bridge** [no]: needs the Codex CLI signed in to ChatGPT on this computer; your
 >    questions and the archive excerpts Umay reads are sent to OpenAI.
@@ -294,7 +297,7 @@ Manager plugin (Unraid) or uses Apps (TrueNAS SCALE) from the NAS interface and 
 Then one of two paths:
 
 - **SSH and Git on the NAS** (you run there only with the user's explicit permission, step 0,
-  rule 7): clone into a shared folder (for example `/volume1/docker/healtos` on Synology) and
+  rule 7): clone into a shared folder (for example `/volume1/docker/healthos` on Synology) and
   run step 4 with `--platform nas --no-start`. The installer writes `.env` and prints the NAS
   steps; it installs no services on a NAS. Start the stack over SSH from the checkout with
   `docker compose up -d --build` (often with `sudo` on Synology/QNAP; ask first), because the
@@ -310,20 +313,21 @@ prints the command and [docs/INSTALL.md](INSTALL.md) explains it.
 
 ## 4. Get the code and run the installer
 
-### 4a. Clone (skip if step 1 found a HealtOS checkout)
+### 4a. Clone (skip if step 1 found a HealthOS checkout)
 
-Default location: `~/healtos` (Linux/macOS user), `/opt/healthos` (Linux as root),
-`%USERPROFILE%\healtos` (Windows). If that directory already exists and is not empty, do not
-touch it: ask the user for another `--dir`.
+Default location: `~/healthos` (Linux/macOS user), `/opt/healthos` (Linux as root),
+`%USERPROFILE%\healthos` (Windows). If that directory already exists and is not empty, do not
+touch it: ask the user for another `--dir`. If `~/healtos` (the old name) is a checkout, skip the
+clone and run the installer there.
 
 ```sh
-git clone https://github.com/M3rgen/HealtOS.git ~/healtos
-cd ~/healtos
+git clone https://github.com/M3rgen/HealthOS.git ~/healthos
+cd ~/healthos
 ```
 
 ```powershell
-git clone https://github.com/M3rgen/HealtOS.git "$env:USERPROFILE\healtos"
-Set-Location "$env:USERPROFILE\healtos"
+git clone https://github.com/M3rgen/HealthOS.git "$env:USERPROFILE\healthos"
+Set-Location "$env:USERPROFILE\healthos"
 ```
 
 To pin a release, add `--branch v0.2.2` to the clone (the installer's equivalent is
@@ -483,11 +487,11 @@ expire; Garmin e-mails a week before; replacing the file content is enough. Deta
 **Apple Watch / Apple Health.**
 
 - Upload (always available): on the iPhone, Health › profile picture › *Export All Health
-  Data*; move `export.zip` to this computer; in HealtOS open the System page, "Apple Sağlık içe
+  Data*; move `export.zip` to this computer; in HealthOS open the System page, "Apple Sağlık içe
   aktar" › choose the file › *Yükle*. Uploading a newer export later adds only new records.
 - Health Auto Export receiver (only if chosen with `--apple-receiver yes`): the installer
   turns it on and creates the token file (`APPLE_RECEIVER_TOKEN_HOST_FILE` in `.env`; default
-  `~/.config/healthos/apple-receiver-token`, Windows `%APPDATA%\HealtOS\apple-receiver-token`)
+  `~/.config/healthos/apple-receiver-token`, Windows `%USERPROFILE%\.config\healthos\apple-receiver-token`)
   and prints the header once. The user reads the token from that file themselves; do not read
   or repeat it. The receiver needs an HTTPS address of the user's own (tunnel or reverse proxy)
   that forwards only `POST /webhooks/apple-health`; the user sets
@@ -497,15 +501,15 @@ expire; Garmin e-mails a week before; replacing the file content is enough. Deta
   [Apple Health](REFERENCE.md#apple-health-github-version).
 
 **Backups (if enabled).** The installer creates an age backup key outside the repository and
-outside `.env`: Linux `/etc/healthos/backup.key` (root) or `~/.config/healtos/backup.key`,
-macOS `~/Library/Application Support/HealtOS/backup.key`, Windows `%APPDATA%\HealtOS\backup.key`.
+outside `.env`: Linux `/etc/healthos/backup.key` (root) or `~/.config/healthos/backup.key`,
+macOS `~/Library/Application Support/HealthOS/backup.key`, Windows `%APPDATA%\HealthOS\backup.key`.
 Tell the user, clearly: **copy this key off this computer now (for example into a password
 manager); without it every backup is unreadable.** Keep `GOOGLE_TOKEN_ENCRYPTION_KEY` with it.
 If `age` was missing, the installer printed how to install it and no key was made; install
 `age` (step 3, with permission) and re-run the same installer command. Offer to run one backup
 now with the command the installer printed (Linux: `systemctl --user start
 healthos-backup.service`, or `sudo systemctl start healthos-backup.service` for system units;
-macOS: `launchctl kickstart gui/$(id -u)/org.healtos.backup`; Windows: `powershell -ExecutionPolicy Bypass -File .\scripts\backup.ps1`) and check
+macOS: `launchctl kickstart gui/$(id -u)/org.healthos.backup`; Windows: `powershell -ExecutionPolicy Bypass -File .\scripts\backup.ps1`) and check
 `.\backups` / `backups/` for a new `health-<stamp>.dump.age`. Backups are kept forever unless the
 user sets `BACKUP_RETENTION_DAYS`.
 

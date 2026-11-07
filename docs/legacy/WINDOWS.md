@@ -7,7 +7,7 @@
 > Umay bridge as a scheduled task. The notes below are the earlier manual steps; they still work
 > and remain the reference for the bridge's Codex CLI and for cloudflared on Windows.
 
-HealtOS first ran on a Windows desktop with Docker Desktop. The recommended deployment is a Linux
+HealthOS first ran on a Windows desktop with Docker Desktop. The recommended deployment is a Linux
 server ([DEPLOYMENT.md](../DEPLOYMENT.md)). These notes are kept for anyone running the stack on
 Windows by hand, and for the staged move documented in
 [WINDOWS_TO_LINUX_MIGRATION.md](WINDOWS_TO_LINUX_MIGRATION.md).
@@ -43,7 +43,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\enable-docker-desktop-autosta
 
 The script adds only the current user's Docker Desktop entry under the `Run` registry key. It does
 not edit Docker settings, recreate containers or touch volumes. Until that user signs in, Docker
-Desktop and HealtOS are not running; Cloudflare then reports 502 for the webhook and Google retries
+Desktop and HealthOS are not running; Cloudflare then reports 502 for the webhook and Google retries
 notifications for up to seven days.
 
 ## Umay bridge on Windows

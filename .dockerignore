@@ -5,7 +5,7 @@ app/static
 .uv-tool
 .venv-runtime-test
 dist
-.test-tmp-healtos*
+.test-tmp-healthos*
 .test-tmp-codex*
 .env
 .venv

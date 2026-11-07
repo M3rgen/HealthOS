@@ -15,6 +15,7 @@
 import { request } from './api.js';
 import { iconMarkup } from './icons.js';
 import { setupDialog, replaceWithFocus } from './accessibility.js';
+import { migrateLegacyKeys, migrateLegacyUploads } from './legacy-names.js';
 
 const MANIFEST_URL = '/assets/presets/manifest.json';
 const KINDS = ['logo', 'umay', 'background'];
@@ -54,7 +55,8 @@ const REQUIRED = { logo: ['mark', 'markMono'], umay: ['src512', 'src256'], backg
 /* ------------------------------------------------------------------------ */
 /* Storage adapter: localStorage for ids, IndexedDB for blobs, memory last.  */
 /* ------------------------------------------------------------------------ */
-export function createLocalAppearanceStore({ key = 'healtos.appearance', dbName = 'healtos-appearance' } = {}) {
+export function createLocalAppearanceStore({ key = 'healthos.appearance', dbName = 'healthos-appearance' } = {}) {
+  migrateLegacyKeys();
   const memory = new Map();
   let database;
   const open = () => database ??= new Promise((resolve) => {
@@ -64,6 +66,10 @@ export function createLocalAppearanceStore({ key = 'healtos.appearance', dbName 
       request.onsuccess = () => resolve(request.result);
       request.onerror = request.onblocked = () => resolve(null);
     } catch { resolve(null); }
+  }).then(async (db) => {
+    // Uploads kept under the old database name are copied in once; the old one stays.
+    if (db) await migrateLegacyUploads(db);
+    return db;
   });
   const run = async (mode, action, fallback) => {
     const db = await open();
@@ -105,7 +111,8 @@ export function createLocalAppearanceStore({ key = 'healtos.appearance', dbName 
 // then sent on the next load that reaches it (last write wins).
 const cleanSelection = value => Object.fromEntries(KINDS.flatMap(kind => (
   typeof value?.[kind] === 'string' && PRESET_ID.test(value[kind]) ? [[kind, value[kind]]] : [])));
-export function createSyncedAppearanceStore({ local = createLocalAppearanceStore(), url = REMOTE_URL, pendingKey = 'healtos.appearance.pending' } = {}) {
+export function createSyncedAppearanceStore({ local = createLocalAppearanceStore(), url = REMOTE_URL, pendingKey = 'healthos.appearance.pending' } = {}) {
+  migrateLegacyKeys();
   const pending = (value) => {
     try {
       if (value === undefined) return localStorage.getItem(pendingKey) === '1';

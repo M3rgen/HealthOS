@@ -377,7 +377,7 @@ async def export(
         "\ufeff" + buffer.getvalue(),
         media_type="text/csv; charset=utf-8",
         headers={
-            "Content-Disposition": f'attachment; filename="healtos-{data["end_date"]}.csv"',
+            "Content-Disposition": f'attachment; filename="healthos-{data["end_date"]}.csv"',
             "Cache-Control": "no-store",
         },
     )

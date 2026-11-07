@@ -3,7 +3,7 @@ Make a file (or a directory) readable only by the current Windows account: inher
 every other access entry removed, full control for you. The Windows counterpart of
 `chmod 600` / `chmod 700`. It changes permissions only; the content is never touched.
 
-  powershell -ExecutionPolicy Bypass -File deploy\windows\protect-file.ps1 "$env:APPDATA\HealtOS\backup.key"
+  powershell -ExecutionPolicy Bypass -File deploy\windows\protect-file.ps1 "$env:APPDATA\HealthOS\backup.key"
 #>
 param([string]$Path = '')
 $ErrorActionPreference = 'Stop'
@@ -18,8 +18,8 @@ if (-not (Test-Path -LiteralPath $Path)) {
     exit 1
 }
 $isDirectory = Test-Path -LiteralPath $Path -PathType Container
-Set-HealtOSPrivateAcl -Path $Path -Directory:$isDirectory
-$problem = Get-HealtOSAclProblem $Path
+Set-HealthOSPrivateAcl -Path $Path -Directory:$isDirectory
+$problem = Get-HealthOSAclProblem $Path
 if ($problem) {
     [Console]::Error.WriteLine("protect-file: $Path is still $problem")
     exit 1

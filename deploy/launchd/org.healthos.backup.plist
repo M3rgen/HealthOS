@@ -1,32 +1,32 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!--
-  Daily encrypted HealtOS backup on macOS: the launchd twin of
+  Daily encrypted HealthOS backup on macOS: the launchd twin of
   deploy/systemd/healthos-backup.timer + healthos-backup.service. It runs scripts/backup.sh
   (same script, same semantics: kept forever unless BACKUP_RETENTION_DAYS opts in, free-space
   guard, age/gpg encryption, last-backup-status.json) every day at 03:30 local time; a Mac that
   was asleep then runs it on wake.
 
-  install.sh renders this template into ~/Library/LaunchAgents/org.healtos.backup.plist with
+  install.sh renders this template into ~/Library/LaunchAgents/org.healthos.backup.plist with
   absolute paths (launchd expands neither ~ nor variables) and loads it:
-    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/org.healtos.backup.plist
-  Placeholders: @HEALTOS_DIR@ (the checkout holding docker-compose.yml), @PATH@ (must reach
+    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/org.healthos.backup.plist
+  Placeholders: @HEALTHOS_DIR@ (the checkout holding docker-compose.yml), @PATH@ (must reach
   docker, age and Python 3.11+), @BACKUP_KEY_FILE@ (age identity, mode 600, outside the
-  checkout, e.g. ~/Library/Application Support/HealtOS/backup.key), @LOG_DIR@.
-  Run now:  launchctl kickstart gui/$(id -u)/org.healtos.backup
-  Status:   launchctl print gui/$(id -u)/org.healtos.backup ; tail @LOG_DIR@/backup.log
+  checkout, e.g. ~/Library/Application Support/HealthOS/backup.key), @LOG_DIR@.
+  Run now:  launchctl kickstart gui/$(id -u)/org.healthos.backup
+  Status:   launchctl print gui/$(id -u)/org.healthos.backup ; tail @LOG_DIR@/backup.log
 -->
 <plist version="1.0">
 <dict>
   <key>Label</key>
-  <string>org.healtos.backup</string>
+  <string>org.healthos.backup</string>
   <key>ProgramArguments</key>
   <array>
     <string>/bin/bash</string>
-    <string>@HEALTOS_DIR@/scripts/backup.sh</string>
+    <string>@HEALTHOS_DIR@/scripts/backup.sh</string>
   </array>
   <key>WorkingDirectory</key>
-  <string>@HEALTOS_DIR@</string>
+  <string>@HEALTHOS_DIR@</string>
   <key>EnvironmentVariables</key>
   <dict>
     <key>PATH</key>

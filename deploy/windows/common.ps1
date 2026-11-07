@@ -1,4 +1,4 @@
-# Shared helpers for the HealtOS Windows scripts: install.ps1, scripts/backup.ps1,
+# Shared helpers for the HealthOS Windows scripts: install.ps1, scripts/backup.ps1,
 # scripts/restore.ps1 and deploy/windows/*.ps1. Dot-source it; it only defines functions and
 # changes nothing by itself.
 #
@@ -9,34 +9,57 @@
 # re-encode bytes as text. Processes are connected with System.Diagnostics.Process and a raw
 # Stream.CopyToAsync between their standard streams instead.
 
-function Test-HealtOSWindows {
+function Test-HealthOSWindows {
     return [System.Environment]::OSVersion.Platform -eq [System.PlatformID]::Win32NT
 }
 
-function Get-HealtOSConfigDir {
+function Get-HealthOSConfigDir {
     # Per-user directory outside the checkout and outside .env for the backup key and
     # backup.env (the Windows counterpart of /etc/healthos).
-    if (Test-HealtOSWindows) {
+    if (Test-HealthOSWindows) {
+        return (Join-Path $env:APPDATA 'HealthOS')
+    }
+    return (Join-Path (Join-Path $HOME '.config') 'healthos')
+}
+
+function Get-HealthOSLegacyConfigDir {
+    # The same directory under the misspelled name used up to 0.2.2 (HealtOS). install.ps1
+    # copies its files to Get-HealthOSConfigDir; nothing ever moves or deletes them.
+    if (Test-HealthOSWindows) {
         return (Join-Path $env:APPDATA 'HealtOS')
     }
     return (Join-Path (Join-Path $HOME '.config') 'healtos')
 }
 
-function Get-HealtOSBridgePython {
+function Get-HealthOSConfigFile {
+    # Path of a file in the config directory: the new one, else the old (pre-rename) one while
+    # only that exists, else the new one.
+    param([string]$Name)
+    $path = Join-Path (Get-HealthOSConfigDir) $Name
+    if (Test-Path -LiteralPath $path) { return $path }
+    $legacy = Join-Path (Get-HealthOSLegacyConfigDir) $Name
+    if (Test-Path -LiteralPath $legacy -PathType Leaf) {
+        [Console]::Error.WriteLine("note: $path not found; using the old path $legacy (re-run install.ps1 to copy it)")
+        return $legacy
+    }
+    return $path
+}
+
+function Get-HealthOSBridgePython {
     # Python for the Umay bridge's .venv (uv sync --python): the newest Python a host offers can
     # be newer than every wheel in uv.lock (psycopg-binary, websockets: cp312-cp314), so uv picks
     # or downloads one in this range. Same value as BRIDGE_PYTHON in install.sh.
     return '>=3.12,<3.15'
 }
 
-function Get-HealtOSLogDir {
-    if (Test-HealtOSWindows) {
-        return (Join-Path (Join-Path $env:LOCALAPPDATA 'HealtOS') 'logs')
+function Get-HealthOSLogDir {
+    if (Test-HealthOSWindows) {
+        return (Join-Path (Join-Path $env:LOCALAPPDATA 'HealthOS') 'logs')
     }
-    return (Join-Path (Join-Path (Join-Path $HOME '.local') 'state') 'healtos')
+    return (Join-Path (Join-Path (Join-Path $HOME '.local') 'state') 'healthos')
 }
 
-function Resolve-HealtOSPath {
+function Resolve-HealthOSPath {
     # Absolute path; a relative one is taken relative to $Base (not the process directory).
     param([string]$Path, [string]$Base)
     if ([System.IO.Path]::IsPathRooted($Path)) {
@@ -45,7 +68,7 @@ function Resolve-HealtOSPath {
     return [System.IO.Path]::GetFullPath((Join-Path $Base $Path))
 }
 
-function Find-HealtOSCommand {
+function Find-HealthOSCommand {
     # Full path of an executable on PATH, or $null.
     param([string]$Name)
     $command = Get-Command -Name $Name -CommandType Application -ErrorAction SilentlyContinue |
@@ -54,7 +77,7 @@ function Find-HealtOSCommand {
     return $command.Path
 }
 
-function Get-HealtOSDotEnvValue {
+function Get-HealthOSDotEnvValue {
     # One plain KEY=value from a dotenv file without evaluating it (it holds secrets): the last
     # assignment wins, one pair of surrounding quotes is removed. Same rule as backup.sh; an
     # `export KEY=value` line counts as KEY (Compose reads it the same way).
@@ -71,8 +94,8 @@ function Get-HealtOSDotEnvValue {
     return $value
 }
 
-function Import-HealtOSBackupEnv {
-    # %APPDATA%\HealtOS\backup.env plays the role of systemd's EnvironmentFile: each KEY=value
+function Import-HealthOSBackupEnv {
+    # %APPDATA%\HealthOS\backup.env plays the role of systemd's EnvironmentFile: each KEY=value
     # is applied only when the variable is not already set in the environment.
     param([string]$File)
     if (-not (Test-Path -LiteralPath $File -PathType Leaf)) { return }
@@ -86,7 +109,7 @@ function Import-HealtOSBackupEnv {
     }
 }
 
-function ConvertTo-HealtOSArgument {
+function ConvertTo-HealthOSArgument {
     # Quote one argument for a Windows command line (CommandLineToArgvW rules; .NET applies the
     # same rules when it splits ProcessStartInfo.Arguments on other systems). Arguments with
     # cmd.exe operators (< > & | ^ ( )) are quoted too: when the program is a .cmd or .bat shim,
@@ -116,7 +139,7 @@ function ConvertTo-HealtOSArgument {
     return $builder.ToString()
 }
 
-function Start-HealtOSProcess {
+function Start-HealthOSProcess {
     # Starts a process with optional redirected stdin/stdout; stderr is inherited so messages
     # of docker, age and gpg reach the caller's stderr (and the scheduled task's log).
     param(
@@ -128,7 +151,7 @@ function Start-HealtOSProcess {
     )
     $info = New-Object System.Diagnostics.ProcessStartInfo
     $info.FileName = $FilePath
-    $info.Arguments = (@($ArgumentList | ForEach-Object { ConvertTo-HealtOSArgument $_ }) -join ' ')
+    $info.Arguments = (@($ArgumentList | ForEach-Object { ConvertTo-HealthOSArgument $_ }) -join ' ')
     $info.UseShellExecute = $false
     $info.CreateNoWindow = $true
     $info.RedirectStandardInput = [bool]$RedirectInput
@@ -138,7 +161,7 @@ function Start-HealtOSProcess {
     return [System.Diagnostics.Process]::Start($info)
 }
 
-function Wait-HealtOSTask {
+function Wait-HealthOSTask {
     # Waits in short slices so Ctrl+C still reaches PowerShell. Returns $true on success.
     param($Task)
     try {
@@ -149,7 +172,7 @@ function Wait-HealtOSTask {
     }
 }
 
-function Stop-HealtOSProcess {
+function Stop-HealthOSProcess {
     param($Process)
     if ($null -eq $Process) { return }
     try {
@@ -160,12 +183,12 @@ function Stop-HealtOSProcess {
     }
 }
 
-function Invoke-HealtOSCapture {
+function Invoke-HealthOSCapture {
     # Runs a command and returns its exit code and UTF-8 stdout as text (stderr inherited).
     param([string]$FilePath, [string[]]$ArgumentList = @(), [string]$WorkingDirectory = '')
     $info = New-Object System.Diagnostics.ProcessStartInfo
     $info.FileName = $FilePath
-    $info.Arguments = (@($ArgumentList | ForEach-Object { ConvertTo-HealtOSArgument $_ }) -join ' ')
+    $info.Arguments = (@($ArgumentList | ForEach-Object { ConvertTo-HealthOSArgument $_ }) -join ' ')
     $info.UseShellExecute = $false
     $info.CreateNoWindow = $true
     $info.RedirectStandardOutput = $true
@@ -177,22 +200,22 @@ function Invoke-HealtOSCapture {
     return [pscustomobject]@{ ExitCode = $process.ExitCode; Output = $output }
 }
 
-function Get-HealtOSCurrentSid {
+function Get-HealthOSCurrentSid {
     return [System.Security.Principal.WindowsIdentity]::GetCurrent().User
 }
 
-function Set-HealtOSPrivateAcl {
+function Set-HealthOSPrivateAcl {
     # Current user only: inheritance off, every other entry removed, full control for the
     # current user. On other systems: mode 600 (700 for a directory).
     param([string]$Path, [switch]$Directory)
-    if (-not (Test-HealtOSWindows)) {
+    if (-not (Test-HealthOSWindows)) {
         $mode = '600'
         if ($Directory) { $mode = '700' }
         & chmod $mode $Path
         if ($LASTEXITCODE -ne 0) { throw "chmod $mode $Path failed" }
         return
     }
-    $sid = Get-HealtOSCurrentSid
+    $sid = Get-HealthOSCurrentSid
     $acl = Get-Acl -LiteralPath $Path
     $acl.SetAccessRuleProtection($true, $false)
     $rules = $acl.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier])
@@ -212,8 +235,8 @@ function Set-HealtOSPrivateAcl {
     Set-Acl -LiteralPath $Path -AclObject $acl
 }
 
-function Get-HealtOSAclReader {
-    # The decision behind Get-HealtOSAclProblem, over plain values so it is testable on any
+function Get-HealthOSAclReader {
+    # The decision behind Get-HealthOSAclProblem, over plain values so it is testable on any
     # host: the SID of the first entry that lets anyone but the current user, SYSTEM
     # (S-1-5-18) or Administrators (S-1-5-32-544) read the file, or '' when none does.
     # OWNER RIGHTS (S-1-3-4) applies to the file's owner, so it is fine only while the owner is
@@ -233,12 +256,12 @@ function Get-HealtOSAclReader {
     return ''
 }
 
-function Get-HealtOSAclProblem {
+function Get-HealthOSAclProblem {
     # '' when only the current user (plus SYSTEM and Administrators, which can read any file
     # anyway, and OWNER RIGHTS while one of them owns the file) may read the file; otherwise a
     # short description of who else can.
     param([string]$Path)
-    if (-not (Test-HealtOSWindows)) {
+    if (-not (Test-HealthOSWindows)) {
         $item = Get-Item -LiteralPath $Path -Force
         $mode = $item.UnixMode
         if ($null -eq $mode) { return '' }
@@ -262,14 +285,14 @@ function Get-HealtOSAclProblem {
                 InheritOnly = (($rule.PropagationFlags -band $inheritOnly) -ne 0)
             }
         })
-    $sid = Get-HealtOSAclReader -CurrentSid (Get-HealtOSCurrentSid).Value -OwnerSid $ownerSid -Entries $entries
+    $sid = Get-HealthOSAclReader -CurrentSid (Get-HealthOSCurrentSid).Value -OwnerSid $ownerSid -Entries $entries
     if (-not $sid) { return '' }
-    $name = Get-HealtOSSidName $sid
-    if ($sid -eq 'S-1-3-4') { $name = "$name, owner $(Get-HealtOSSidName $ownerSid)" }
+    $name = Get-HealthOSSidName $sid
+    if ($sid -eq 'S-1-3-4') { $name = "$name, owner $(Get-HealthOSSidName $ownerSid)" }
     return "readable by $name"
 }
 
-function Get-HealtOSSidName {
+function Get-HealthOSSidName {
     # DOMAIN\name for a SID when Windows can translate it, otherwise the SID itself.
     param([string]$Sid)
     if (-not $Sid) { return 'unknown' }
@@ -281,17 +304,17 @@ function Get-HealtOSSidName {
     }
 }
 
-function Get-HealtOSFreeBytes {
+function Get-HealthOSFreeBytes {
     # Free bytes available to the current user on the volume holding $Path, or $null.
     param([string]$Path)
     try {
-        if (Test-HealtOSWindows) {
+        if (Test-HealthOSWindows) {
             $root = [System.IO.Path]::GetPathRoot($Path)
             if ($root -match '^[A-Za-z]:\\$') {
                 return [int64](New-Object System.IO.DriveInfo($root)).AvailableFreeSpace
             }
-            if (-not ('HealtOS.Disk' -as [type])) {
-                Add-Type -Namespace HealtOS -Name Disk -MemberDefinition @'
+            if (-not ('HealthOS.Disk' -as [type])) {
+                Add-Type -Namespace HealthOS -Name Disk -MemberDefinition @'
 [System.Runtime.InteropServices.DllImport("kernel32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode, SetLastError = true)]
 public static extern bool GetDiskFreeSpaceEx(string directory, out ulong available, out ulong total, out ulong free);
 '@
@@ -299,7 +322,7 @@ public static extern bool GetDiskFreeSpaceEx(string directory, out ulong availab
             $available = [uint64]0
             $total = [uint64]0
             $free = [uint64]0
-            if ([HealtOS.Disk]::GetDiskFreeSpaceEx($Path, [ref]$available, [ref]$total, [ref]$free)) {
+            if ([HealthOS.Disk]::GetDiskFreeSpaceEx($Path, [ref]$available, [ref]$total, [ref]$free)) {
                 return [int64]$available
             }
             return $null
@@ -310,13 +333,13 @@ public static extern bool GetDiskFreeSpaceEx(string directory, out ulong availab
     }
 }
 
-function Format-HealtOSGiB {
+function Format-HealthOSGiB {
     param($Bytes)
     $gib = [decimal]$Bytes / [decimal]1073741824
     return $gib.ToString('0.00', [System.Globalization.CultureInfo]::InvariantCulture) + ' GiB'
 }
 
-function ConvertTo-HealtOSJsonString {
+function ConvertTo-HealthOSJsonString {
     # JSON string literal; control characters are dropped like backup.sh does.
     param([string]$Value)
     $clean = [regex]::Replace($Value, '[\x00-\x1f]', '')
@@ -324,7 +347,7 @@ function ConvertTo-HealtOSJsonString {
     return '"' + $clean + '"'
 }
 
-function Get-HealtOSUtcStamp {
+function Get-HealthOSUtcStamp {
     param([string]$Format)
     return [System.DateTime]::UtcNow.ToString($Format, [System.Globalization.CultureInfo]::InvariantCulture)
 }

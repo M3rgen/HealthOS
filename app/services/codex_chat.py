@@ -171,7 +171,7 @@ class CodexRPC:
         await self.call(
             "initialize",
             {
-                "clientInfo": {"name": "healtos_chat", "title": "healthOS", "version": "0.1.0"},
+                "clientInfo": {"name": "healthos_chat", "title": "HealthOS", "version": "0.1.0"},
                 "capabilities": {"experimentalApi": True},
             },
         )
@@ -190,7 +190,7 @@ class CodexRPC:
                 "baseInstructions": INSTRUCTIONS,
                 "developerInstructions": persona,
                 "dynamicTools": [HEALTH_TOOL],
-                "serviceName": "healtos_chat",
+                "serviceName": "healthos_chat",
                 "config": {
                     "model_reasoning_effort": EFFORT,
                     "web_search": "disabled",

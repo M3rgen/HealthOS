@@ -1,6 +1,6 @@
 # Pinned image update procedure
 
-HealtOS frontend build image, resolved 2026-09-30:
+HealthOS frontend build image, resolved 2026-09-30:
 `node:24.21.0-bookworm-slim@sha256:0e0ff40c39bc087845bfb27465a0df4ea419520094bc35842ff83dd8cbe6f9b6`.
 Node is used only during compilation; the production runtime remains Python.
 

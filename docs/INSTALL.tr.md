@@ -1,4 +1,4 @@
-# HealtOS kurulumu
+# HealthOS kurulumu
 
 *English: [INSTALL.md](INSTALL.md).*
 
@@ -8,7 +8,7 @@ güncellemeyi ve sorun gidermeyi anlatır. Kurulum aracı yalnızca [README](../
 ve [dağıtım rehberindeki](DEPLOYMENT.md) elle kurulum adımlarını otomatikleştirir; aynı adımları
 her zaman elle de yapabilirsiniz.
 
-**Varsayılan hedef bir Linux sunucudur.** HealtOS sürekli açık duran bir makinede çalışmak için
+**Varsayılan hedef bir Linux sunucudur.** HealthOS sürekli açık duran bir makinede çalışmak için
 tasarlandı: Linux sunucu ya da sanal makine, Raspberry Pi veya NAS. Masaüstü ya da dizüstü
 bilgisayar da olur, ama arşiv yalnızca makine uyanıkken güncel kalır.
 
@@ -32,24 +32,24 @@ kendisi asla `sudo` çağırmaz: root iken sistem birimleri, normal kullanıcıy
 kurar; `sudo` gerektiren komutlar yazdırılır, onları siz çalıştırırsınız. Türkçe sorular için sonuna `-s -- --lang tr` ekleyin:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/M3rgen/HealtOS/main/install.sh | bash
-curl -fsSL https://raw.githubusercontent.com/M3rgen/HealtOS/main/install.sh | bash -s -- --lang tr
+curl -fsSL https://raw.githubusercontent.com/M3rgen/HealthOS/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/M3rgen/HealthOS/main/install.sh | bash -s -- --lang tr
 ```
 
 **Windows 10/11** (PowerShell, kendi kullanıcınızla):
 
 ```powershell
-irm https://raw.githubusercontent.com/M3rgen/HealtOS/main/install.ps1 | iex
+irm https://raw.githubusercontent.com/M3rgen/HealthOS/main/install.ps1 | iex
 ```
 
 **Sabit bir sürüm** (güncel `main` yerine, burada v0.2.2):
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/M3rgen/HealtOS/v0.2.2/install.sh | bash -s -- --ref v0.2.2
+curl -fsSL https://raw.githubusercontent.com/M3rgen/HealthOS/v0.2.2/install.sh | bash -s -- --ref v0.2.2
 ```
 
 ```powershell
-& ([scriptblock]::Create((irm https://raw.githubusercontent.com/M3rgen/HealtOS/v0.2.2/install.ps1))) -Ref v0.2.2
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/M3rgen/HealthOS/v0.2.2/install.ps1))) -Ref v0.2.2
 ```
 
 **Betiği çalıştırmadan önce okumak mı istersiniz?** Önce depoyu klonlayın, `install.sh` ya da
@@ -57,15 +57,15 @@ curl -fsSL https://raw.githubusercontent.com/M3rgen/HealtOS/v0.2.2/install.sh | 
 yeniden klonlamaz:
 
 ```sh
-git clone https://github.com/M3rgen/HealtOS.git
-cd HealtOS
+git clone https://github.com/M3rgen/HealthOS.git
+cd HealthOS
 less install.sh
 ./install.sh --lang tr            # ya da önce: ./install.sh --lang tr --dry-run
 ```
 
 ```powershell
-git clone https://github.com/M3rgen/HealtOS.git
-cd HealtOS
+git clone https://github.com/M3rgen/HealthOS.git
+cd HealthOS
 notepad .\install.ps1
 powershell -ExecutionPolicy Bypass -File .\install.ps1 -Lang tr     # ya da -DryRun ekleyin
 ```
@@ -76,14 +76,14 @@ Kabuk erişimi olan bir kodlama ajanı (Claude Code, OpenAI Codex CLI ya da benz
 [AI_INSTALL.md](AI_INSTALL.md) adımlarını izleyerek sizin yerinize yapabilir. Ona şu istemi verin:
 
 ```text
-Bu bilgisayara HealtOS'u kur: https://raw.githubusercontent.com/M3rgen/HealtOS/main/docs/AI_INSTALL.md adımlarını izle; yönetici izni ya da hesap bilgisi gereken her adımdan önce bana sor ve hiçbir veriyi silme.
+Bu bilgisayara HealthOS'u kur: https://raw.githubusercontent.com/M3rgen/HealthOS/main/docs/AI_INSTALL.md adımlarını izle; yönetici izni ya da hesap bilgisi gereken her adımdan önce bana sor ve hiçbir veriyi silme.
 ```
 
 Terminalde doğrudan çalıştırmak için:
 
 ```sh
-claude "Bu bilgisayara HealtOS'u kur: https://raw.githubusercontent.com/M3rgen/HealtOS/main/docs/AI_INSTALL.md adımlarını izle; yönetici izni ya da hesap bilgisi gereken her adımdan önce bana sor ve hiçbir veriyi silme."
-codex "Bu bilgisayara HealtOS'u kur: https://raw.githubusercontent.com/M3rgen/HealtOS/main/docs/AI_INSTALL.md adımlarını izle; yönetici izni ya da hesap bilgisi gereken her adımdan önce bana sor ve hiçbir veriyi silme."
+claude "Bu bilgisayara HealthOS'u kur: https://raw.githubusercontent.com/M3rgen/HealthOS/main/docs/AI_INSTALL.md adımlarını izle; yönetici izni ya da hesap bilgisi gereken her adımdan önce bana sor ve hiçbir veriyi silme."
+codex "Bu bilgisayara HealthOS'u kur: https://raw.githubusercontent.com/M3rgen/HealthOS/main/docs/AI_INSTALL.md adımlarını izle; yönetici izni ya da hesap bilgisi gereken her adımdan önce bana sor ve hiçbir veriyi silme."
 ```
 
 İsterseniz istemi Claude Code'a, Codex'e ya da komut çalıştırabilen başka bir ajana yapıştırın.
@@ -97,7 +97,7 @@ Sırasıyla:
 1. Makineyi denetler: Git, Compose v2 ile Docker ve çalışan bir Docker motoru. Eksik bir şey varsa
    işletim sisteminize göre nasıl kurulacağını söyler ve durur (çıkış kodu 2); kendiliğinden
    sistem paketi kurmaz.
-2. Bir HealtOS klonunun içinde çalışmıyorsa `https://github.com/M3rgen/HealtOS.git` deposunu
+2. Bir HealthOS klonunun içinde çalışmıyorsa `https://github.com/M3rgen/HealthOS.git` deposunu
    `--ref` (varsayılan `main`) ile kurulum dizinine klonlar.
 3. Aşağıdaki soruları sorar (ya da yanıtları seçeneklerden alır).
 4. `.env` dosyasını yazar: yalnızca eksik değerler için yeni gizli anahtar üretir; var olan bir
@@ -147,7 +147,7 @@ Türkçedir.
    (dosya henüz yoksa anahtarı yapıştırabilirsiniz, oraya kaydedilir); Apple için Health Auto
    Export alıcısının açılıp açılmayacağını (varsayılan hayır) ve HTTPS adresini.
 5. **Kurulum dizini.** Yalnızca klonlaması gerekiyorsa: Linux'ta root olarak `/opt/healthos`,
-   aksi halde `~/healtos` (Windows'ta `%USERPROFILE%\healtos`). Dizin boş olmalı ya da hiç
+   aksi halde `~/healthos` (Windows'ta `%USERPROFILE%\healthos`). Dizin boş olmalı ya da hiç
    olmamalı; kurulum aracı var olan dosyaların üzerine asla klonlamaz.
 6. **Günlük şifreli yedek.** Tam kipte varsayılan evet, deneme kipinde hayır. Yedek anahtarı yoksa
    oluşturmayı önerir; bkz. [Yedekler](#yedekler).
@@ -196,14 +196,14 @@ değerlerini listeler. Verileriniz aynı veritabanı biriminde kalır.
 | `--platform linux\|raspberrypi\|nas\|macos\|windows\|vps` | `-Platform …` | Hedef platform (yukarıdaki tablo). |
 | `--mode trial\|full` | `-Mode trial\|full` | İlk çalıştırmada varsayılan `trial`; yeniden çalıştırmada var olan `.env` dosyasının kipi (bkz. [Deneme ve tam kip](#deneme-ve-tam-kip)). Açıkça verilen değer her zaman önceliklidir. |
 | `--sources google,garmin,apple` ya da `none` | `-Sources …` | Virgülle ayrılmış veri kaynakları. |
-| `--dir YOL` | `-Dir YOL` | Kurulum dizini. Varsayılan: bir klonun içinde çalışıyorsa o klon; değilse Linux'ta `/opt/healthos` (root) ya da `~/healtos`, macOS'ta `~/healtos`, Windows'ta `%USERPROFILE%\healtos`. |
+| `--dir YOL` | `-Dir YOL` | Kurulum dizini. Varsayılan: bir klonun içinde çalışıyorsa o klon; değilse Linux'ta `/opt/healthos` (root) ya da `~/healthos`, macOS'ta `~/healthos`, Windows'ta `%USERPROFILE%\healthos`. |
 | `--ref REF` | `-Ref REF` | Klonlanacak Git dalı ya da etiketi (varsayılan `main`). |
 | `--garmin-key-file YOL` | `-GarminKeyFile YOL` | Makinedeki Garmin Personal API anahtar dosyası. Açıkça verilen yol yoksa hata (çıkış kodu 2). Seçenek verilmezse eksik varsayılan anahtar dosyası Garmin'i bir notla kapalı bırakır, çıkış kodu 0. |
 | `--google-client-id ID` | `-GoogleClientId ID` | Google OAuth istemci kimliği. |
 | `--google-client-secret S` | `-GoogleClientSecret S` | Google OAuth istemci gizli anahtarı. |
 | `--apple-receiver yes\|no` | `-AppleReceiver yes\|no` | Health Auto Export alıcısını açar (varsayılan no). |
 | `--backups yes\|no` | `-Backups yes\|no` | Günlük şifreli yedeği zamanlar (tam kipte varsayılan yes, deneme kipinde no). |
-| `--autostart yes\|no` | `-Autostart yes\|no` | Yeniden başlatmadan sonra HealtOS'u geri getirir (varsayılan yes). |
+| `--autostart yes\|no` | `-Autostart yes\|no` | Yeniden başlatmadan sonra HealthOS'u geri getirir (varsayılan yes). |
 | `--umay yes\|no` | `-Umay yes\|no` | Umay köprüsünü hizmet olarak kurar (varsayılan no). |
 | `--yes`, `--non-interactive` | `-NonInteractive` | Hiç sormaz; seçenekleri ve varsayılanları kullanır. |
 | `--dry-run` | `-DryRun` | Her eylemi yapmadan yazar: klonlama, Docker ve hizmet yok. Yazacağı `.env` dosyası `--env-out` yoluna gider (varsayılan `<dizin>/.env.dry-run`); gerçek bir dosyanın üzerine asla yazmaz. |
@@ -237,7 +237,7 @@ aracı sorsun ya da sonradan `.env` dosyasına yazın.
 
 ## Kurulum aracının değiştirdikleri ve asla yapmadıkları
 
-HealtOS her kaydı ve her yedeği saklar; kurulum aracı da aynı kurala uyar.
+HealthOS her kaydı ve her yedeği saklar; kurulum aracı da aynı kurala uyar.
 
 - **Her değişiklikten önce `.env` kopyalanır.** Dosya varsa önce `.env.bak-<UTC zaman damgası>`
   olarak kopyalanır (eski `.bak` dosyaları kalır). Sonra kurulum aracı eksik ya da boş anahtarları
@@ -290,7 +290,7 @@ bir sanal makine ya da Docker için iç içe sanallaştırması (nesting) açık
 sudo apt install git age python3      # Fedora: sudo dnf install git age python3
 sudo systemctl enable --now docker
 docker compose version
-curl -fsSL https://raw.githubusercontent.com/M3rgen/HealtOS/main/install.sh | bash -s -- --lang tr
+curl -fsSL https://raw.githubusercontent.com/M3rgen/HealthOS/main/install.sh | bash -s -- --lang tr
 ```
 
 **root ya da kendi kullanıcınız.**
@@ -299,7 +299,7 @@ curl -fsSL https://raw.githubusercontent.com/M3rgen/HealtOS/main/install.sh | ba
   kurulum `/opt/healthos` dizinine, birimler `/etc/systemd/system/` altına, yedek anahtarı
   `/etc/healthos/backup.key` yoluna gider. Bu, [dağıtım rehberiyle](DEPLOYMENT.md) aynıdır.
 - **Kendi kullanıcınızla** (kullanıcı `docker` çalıştırabilmeli, yani `docker` grubunda
-  olmalı): kurulum `~/healtos`, yedek anahtarı `~/.config/healtos/backup.key`. Etkileşimli
+  olmalı): kurulum `~/healthos`, yedek anahtarı `~/.config/healthos/backup.key`. Etkileşimli
   çalıştırmada kurulum aracı, sistem birimleri için `sudo` ile yeniden çalıştırabilmeniz için
   burada durmayı da önerir. Birimler systemd
   **kullanıcı** birimleri olarak kurulur (`~/.config/systemd/user/`, `systemctl --user` ile
@@ -307,7 +307,7 @@ curl -fsSL https://raw.githubusercontent.com/M3rgen/HealtOS/main/install.sh | ba
   (`loginctl enable-linger`).
 
 **systemd birimleri** ([`deploy/systemd/`](../deploy/systemd/) içinden, kurulum yolu
-doldurularak; kullanıcı birimlerinde `/etc/healthos` yerine `~/.config/healtos`):
+doldurularak; kullanıcı birimlerinde `/etc/healthos` yerine `~/.config/healthos`):
 
 | Birim | Ne yapar |
 | --- | --- |
@@ -350,7 +350,7 @@ aynı `ssh` komutu hazır gelir.
 ### Raspberry Pi ve diğer ARM64 kartlar
 
 - **64 bit işletim sistemi şart:** Raspberry Pi OS (64-bit) ya da ARM64 için Ubuntu Server.
-  HealtOS'un kullandığı her imaj amd64 ve arm64 için yapılmıştır; 32 bit ARM (armv7)
+  HealthOS'un kullandığı her imaj amd64 ve arm64 için yapılmıştır; 32 bit ARM (armv7)
   desteklenmez, çünkü Node.js ve `uv` armv7 sürümü yayımlamıyor. Kurulum aracı 32 bit sistemi
   reddeder (çıkış kodu 2); `uname -m` ile denetleyin, `aarch64` yazmalı. Pi 3 ve sonrası 64 bit
   işletim sistemi çalıştırabilir.
@@ -384,7 +384,7 @@ derlemek için yeterli RAM (2 GB boş). Projeyi USB diske değil, normal bir ver
   klasöre geçin (örneğin Synology'de `/volume1/docker`, QNAP'ta `/share/Container`, Unraid'de
   `/mnt/user/appdata`, TrueNAS'ta `/mnt/<havuz>` altında bir veri kümesi) ve yeni bir klonun
   içinden `./install.sh --platform nas --no-start` çalıştırın, ya da tek satırlık komutu
-  `--dir <o klasör>/healtos` ile çalıştırın.
+  `--dir <o klasör>/healthos` ile çalıştırın.
 - *NAS'ta Git yoksa:* başka bir bilgisayarda depoyu klonlayın ve
   `./install.sh --platform nas --dry-run --env-out ./nas.env` çalıştırın. Klonu NAS paylaşımına
   kopyalayın, `nas.env` dosyasını orada `.env` adıyla kaydedin. İçindeki gizli anahtarlar
@@ -416,13 +416,13 @@ ister. Çoğu NAS Python ile gelir ama `age` ile gelmez; `age` için
 üzerindeki bir dizine koyun. Anahtarı bir kez root olarak oluşturun ve NAS dışına kopyalayın:
 
 ```sh
-sudo sh -c 'umask 077; mkdir -p /root/.config/healtos && age-keygen -o /root/.config/healtos/backup.key'
+sudo sh -c 'umask 077; mkdir -p /root/.config/healthos && age-keygen -o /root/.config/healthos/backup.key'
 ```
 
 Sonra şu komutu NAS'ın kendi zamanlayıcısıyla her gün 03:30'da root olarak çalıştırın:
 
 ```sh
-cd <klon> && BACKUP_KEY_FILE=/root/.config/healtos/backup.key /bin/bash scripts/backup.sh
+cd <klon> && BACKUP_KEY_FILE=/root/.config/healthos/backup.key /bin/bash scripts/backup.sh
 ```
 
 Synology: *Denetim Masası* › *Görev Zamanlayıcı* › *Kullanıcı tanımlı komut dosyası*, kullanıcı
@@ -443,22 +443,22 @@ Git (`xcode-select --install` ya da Homebrew); yedekler için `brew install age`
 (`brew install python`; Xcode komut satırı araçlarındaki `python3` çok eski).
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/M3rgen/HealtOS/main/install.sh | bash -s -- --lang tr
+curl -fsSL https://raw.githubusercontent.com/M3rgen/HealthOS/main/install.sh | bash -s -- --lang tr
 ```
 
-Kurulum aracı macOS'u algılar ve önceden seçer. Kurulum dizini: `~/healtos`. Yedek anahtarı:
-`~/Library/Application Support/HealtOS/backup.key`.
+Kurulum aracı macOS'u algılar ve önceden seçer. Kurulum dizini: `~/healthos`. Yedek anahtarı:
+`~/Library/Application Support/HealthOS/backup.key`.
 
-- **Yedekler ve köprü** kullanıcınızın launchd ajanları olarak çalışır: `org.healtos.backup`
-  (her gün 03:30) ve `org.healtos.bridge` (isteğe bağlı); `deploy/launchd/` içindeki şablonlardan
-  `~/Library/LaunchAgents/` altına kurulur. Listelemek için `launchctl list | grep -i healtos`;
-  hemen bir yedek almak için `launchctl kickstart gui/$(id -u)/org.healtos.backup`. Günlükler:
-  `~/Library/Logs/HealtOS/`.
+- **Yedekler ve köprü** kullanıcınızın launchd ajanları olarak çalışır: `org.healthos.backup`
+  (her gün 03:30) ve `org.healthos.bridge` (isteğe bağlı); `deploy/launchd/` içindeki şablonlardan
+  `~/Library/LaunchAgents/` altına kurulur. Listelemek için `launchctl list | grep -i healthos`;
+  hemen bir yedek almak için `launchctl kickstart gui/$(id -u)/org.healthos.backup`. Günlükler:
+  `~/Library/Logs/HealthOS/`.
 - **Otomatik açılış:** Docker Desktop: *Settings* › *General* › *Start Docker Desktop when you
   sign in*. OrbStack varsayılan olarak oturum açılınca başlar. Colima: `brew services start colima`.
   Kapsayıcılar sonra kendiliğinden geri gelir.
 - **Uyku:** uyuyan bir Mac ne eşitleme yapar ne yedek alır. launchd, kaçırılan 03:30 yedeğini
-  uyandıktan sonra çalıştırır, ama kapalı bir Mac için çalıştırmaz. HealtOS'u gece gündüz
+  uyandıktan sonra çalıştırır, ama kapalı bir Mac için çalıştırmaz. HealthOS'u gece gündüz
   çalıştıracak bir Mac için *Sistem Ayarları* › *Enerji* altında otomatik uykuyu kapatın.
 
 ### Windows 10 ve 11
@@ -470,26 +470,26 @@ yedekler için `winget install FiloSottile.age`. Windows PowerShell 5.1 ve Power
 de çalışır.
 
 ```powershell
-irm https://raw.githubusercontent.com/M3rgen/HealtOS/main/install.ps1 | iex
+irm https://raw.githubusercontent.com/M3rgen/HealthOS/main/install.ps1 | iex
 ```
 
 Kurulum aracı Windows'u algılar ve önceden seçer. Bütün platformları listeler ama bu bilgisayara
 yalnızca Windows kurulumunu yapar; başka bir seçim için o makinede çalıştırılacak komutu yazar.
-Kurulum dizini: `%USERPROFILE%\healtos`. Yedek anahtarı: `%APPDATA%\HealtOS\backup.key`,
+Kurulum dizini: `%USERPROFILE%\healthos`. Yedek anahtarı: `%APPDATA%\HealthOS\backup.key`,
 yalnızca sizin hesabınız okuyabilir. Git ya da Docker Desktop yoksa ya da Docker motoru
 çalışmıyorsa `winget` komutunu ya da çözümü yazar ve çıkış kodu 2 ile durur.
 
-- **Yedekler** kullanıcınızın `\HealtOS\HealtOS Backup` Görev Zamanlayıcı görevi olarak her gün
+- **Yedekler** kullanıcınızın `\HealthOS\HealthOS Backup` Görev Zamanlayıcı görevi olarak her gün
   03:30'da `scripts\backup.ps1` ile çalışır (`scripts/backup.sh` ile aynı davranış). Görevleri
-  `Get-ScheduledTask -TaskPath '\HealtOS\'` ile listeleyin; hemen bir yedek için
-  `Start-ScheduledTask -TaskPath '\HealtOS\' -TaskName 'HealtOS Backup'`. Günlükler:
-  `%LOCALAPPDATA%\HealtOS\logs\`.
+  `Get-ScheduledTask -TaskPath '\HealthOS\'` ile listeleyin; hemen bir yedek için
+  `Start-ScheduledTask -TaskPath '\HealthOS\' -TaskName 'HealthOS Backup'`. Günlükler:
+  `%LOCALAPPDATA%\HealthOS\logs\`.
 - **Otomatik açılış:** Docker Desktop ancak oturum açtıktan sonra başlar. Kurulum aracı
   [`scripts/enable-docker-desktop-autostart.ps1`](../scripts/enable-docker-desktop-autostart.ps1)
   betiğini çalıştırır; bu, Docker Desktop'ı kullanıcınızın başlangıç girdilerine ekler.
-  Kapsayıcılar sonra `restart: unless-stopped` ile geri gelir. Biri oturum açana kadar HealtOS
+  Kapsayıcılar sonra `restart: unless-stopped` ile geri gelir. Biri oturum açana kadar HealthOS
   çalışmaz.
-- **Umay köprüsü** (isteğe bağlı) oturum açılınca `\HealtOS\HealtOS Umay bridge` zamanlanmış
+- **Umay köprüsü** (isteğe bağlı) oturum açılınca `\HealthOS\HealthOS Umay bridge` zamanlanmış
   görevi olarak çalışır; Codex CLI
   kurulumu için [Windows notlarına](legacy/WINDOWS.md#umay-bridge-on-windows) bakın.
 - **Yerel kopyayı çalıştırmak:** PowerShell yürütme ilkesi yüzünden `.\install.ps1` komutunu
@@ -620,18 +620,18 @@ olarak yazılır.
   | Platform | Anahtar dosyası | Zamanlayıcı | Hemen bir yedek al |
   | --- | --- | --- | --- |
   | Linux (root), Raspberry Pi, VPS | `/etc/healthos/backup.key` (root, mod 600) | systemd zamanlayıcısı | `sudo systemctl start healthos-backup.service` |
-  | Linux (kendi kullanıcınız) | `~/.config/healtos/backup.key` (mod 600) | systemd kullanıcı zamanlayıcısı | `systemctl --user start healthos-backup.service` |
-  | NAS | `/root/.config/healtos/backup.key` (`age-keygen -o` ile oluşturun) | NAS görev zamanlayıcısı | `BACKUP_KEY_FILE=/root/.config/healtos/backup.key bash scripts/backup.sh` |
-  | macOS | `~/Library/Application Support/HealtOS/backup.key` | launchd ajanı | `launchctl kickstart gui/$(id -u)/org.healtos.backup` |
-  | Windows | `%APPDATA%\HealtOS\backup.key` (yalnızca sizin hesabınız) | Görev Zamanlayıcı | `powershell -ExecutionPolicy Bypass -File .\scripts\backup.ps1` |
+  | Linux (kendi kullanıcınız) | `~/.config/healthos/backup.key` (mod 600) | systemd kullanıcı zamanlayıcısı | `systemctl --user start healthos-backup.service` |
+  | NAS | `/root/.config/healthos/backup.key` (`age-keygen -o` ile oluşturun) | NAS görev zamanlayıcısı | `BACKUP_KEY_FILE=/root/.config/healthos/backup.key bash scripts/backup.sh` |
+  | macOS | `~/Library/Application Support/HealthOS/backup.key` | launchd ajanı | `launchctl kickstart gui/$(id -u)/org.healthos.backup` |
+  | Windows | `%APPDATA%\HealthOS\backup.key` (yalnızca sizin hesabınız) | Görev Zamanlayıcı | `powershell -ExecutionPolicy Bypass -File .\scripts\backup.ps1` |
 
 - **Anahtarın bir kopyasını makinenin dışında saklayın**, örneğin bir parola yöneticisinde,
   `GOOGLE_TOKEN_ENCRYPTION_KEY` ile birlikte. Anahtar olmadan hiçbir yedek okunamaz. Yalnızca
   makinede duran bir anahtar, makineyle birlikte kaybolur.
-- Daha güçlü seçenek: kimliği başka bir makinede oluşturun (`age-keygen -o healtos-backup.age`) ve
+- Daha güçlü seçenek: kimliği başka bir makinede oluşturun (`age-keygen -o healthos-backup.age`) ve
   makineye yalnızca açık anahtarını `BACKUP_AGE_RECIPIENT` olarak koyun (Linux'ta
   `/etc/healthos/backup.env` içinde). O zaman çalınan bir makine kendi yedeklerini okuyamaz.
-- **Yedeklerin kendisini de makinenin dışına kopyalayın**, zaten kullandığınız yöntemle; HealtOS
+- **Yedeklerin kendisini de makinenin dışına kopyalayın**, zaten kullandığınız yöntemle; HealthOS
   makine dışı kopya yapmaz.
 - **Bir yedeği kanıtlayın:** canlı veritabanına hiç dokunmayan geri yükleme tatbikatıyla:
   `make restore FILE=backups/health-<damga>.dump.age` (Windows:
@@ -643,7 +643,7 @@ olarak yazılır.
 Güncelleme her platformda aynıdır: yedek alın, çekin, kurulum aracını yeniden çalıştırın.
 
 ```sh
-cd ~/healtos                 # ya da /opt/healthos, ya da %USERPROFILE%\healtos
+cd ~/healthos                 # ya da /opt/healthos, ya da %USERPROFILE%\healthos
 make backup                  # ya da: bash scripts/backup.sh  (Windows: .\scripts\backup.ps1)
 git pull --ff-only
 ./install.sh --lang tr       # Windows: .\install.ps1 -Lang tr
@@ -662,6 +662,27 @@ ayrıntıları: [işletim rehberi](RUNBOOK.md#update-the-application).
 Bir sürümde kalmak için kurulum aracını çalıştırmadan önce onun etiketine geçin
 (`git fetch --tags && git checkout v0.2.2`).
 
+### 0.2.2 ya da daha eski bir kurulumu güncellemek (eski ad "HealtOS")
+
+Proje 0.2.2'ye kadar "HealtOS" adıyla yayımlandı; bilgisayarınızdaki bazı adlar hâlâ bu yazımı
+kullanır. Yeni kurulum aracı her şeyi çalışır halde tutar; hiçbir veri, anahtar ya da yedek taşınmaz veya silinmez:
+
+- `~/healtos` (`%USERPROFILE%\healtos`) içindeki kopya, `~/healthos` olmadığı sürece varsayılan
+  kalır; kurulum aracı bunu söyler.
+- `~/.config/healtos`, `~/Library/Application Support/HealtOS` (macOS) ya da `%APPDATA%\HealtOS`
+  (Windows) içindeki `backup.key`, `backup.env` gibi dosyalar yeni `healthos` / `HealthOS`
+  klasöründe yoksa oraya **kopyalanır** (yine yalnız siz okuyabilirsiniz). Asılları yerinde kalır;
+  yedek anahtarının bilgisayar dışındaki kopyasını olduğu gibi saklayın. Kopya oluşana kadar
+  `backup.sh` ve `backup.ps1` eski anahtar yolunu kullanır.
+- macOS: `org.healtos.backup` ve `org.healtos.bridge` ajanları durdurulur, yerlerine
+  `org.healthos.*` gelir; eski plist dosyaları `~/Library/LaunchAgents/` içinde
+  `*.plist.bak-<UTC damgası>` olarak kalır.
+- Windows: `\HealthOS\HealthOS Backup` ve `\HealthOS\HealthOS Umay bridge` kaydedildikten sonra
+  `\HealtOS\HealtOS Backup` ve `\HealtOS\HealtOS Umay bridge` görevlerinin kaydı silinir.
+- `install.sh` için `HEALTOS_REPO_URL` hâlâ çalışır (bir uyarıyla); `HEALTHOS_REPO_URL` kullanın.
+- Yeni günlükler `~/Library/Logs/HealthOS` ve `%LOCALAPPDATA%\HealthOS\logs` altına yazılır; eski
+  günlük klasörleri olduğu gibi kalır.
+
 ## Veri kaybetmeden durdurma ve kaldırma
 
 Arşiviniz `postgres_data` Docker biriminde, yedekleriniz `BACKUP_HOST_DIR` altında durur. Aşağıdaki
@@ -676,17 +697,17 @@ docker compose down          # kapsayıcıları ve ağı kaldırır; birim kalı
 birimini ve onunla birlikte bir yedekte olmayan her kaydı siler. Kurulum aracı ikisini de asla
 yapmaz.
 
-HealtOS'u bir makineden, verileri koruyarak kaldırmak için:
+HealthOS'u bir makineden, verileri koruyarak kaldırmak için:
 
 1. Son bir yedek alın; onu, yedek anahtarını ve `.env` dosyasını makinenin dışına kopyalayın.
 2. `docker compose down` (`-v` olmadan).
 3. Zamanlanmış işleri kapatın:
    - Linux: `sudo systemctl disable --now healthos-backup.timer healthos-bridge.service`
      (kullanıcı birimleri: `systemctl --user disable --now …`).
-   - macOS: `launchctl bootout gui/$(id -u)/org.healtos.backup` (ve `org.healtos.bridge`);
+   - macOS: `launchctl bootout gui/$(id -u)/org.healthos.backup` (ve `org.healthos.bridge`);
      `~/Library/LaunchAgents/` altındaki `.plist` dosyaları kalabilir.
-   - Windows: `Disable-ScheduledTask -TaskPath '\HealtOS\' -TaskName 'HealtOS Backup'` (ve
-     `'HealtOS Umay bridge'`), ya da Görev Zamanlayıcı'da *Devre Dışı Bırak*.
+   - Windows: `Disable-ScheduledTask -TaskPath '\HealthOS\' -TaskName 'HealthOS Backup'` (ve
+     `'HealthOS Umay bridge'`), ya da Görev Zamanlayıcı'da *Devre Dışı Bırak*.
 4. Klonu, `.env` dosyasını, `.env.bak-*` kopyalarını ve `backups` klasörünü yerinde bırakın ya da
    bir arşive taşıyın. `postgres_data` birimi siz başka bir karar verene kadar Docker'da kalır.
 
@@ -733,8 +754,8 @@ kullanır.
 - `Cannot connect to the Docker daemon`: Docker Desktop'ı, OrbStack'i ya da `colima start` ile
   Colima'yı başlatın.
 - Colima derleme sırasında belleği tüketiyor: `colima start --memory 4`.
-- Bir launchd ajanı çalışmıyor: `launchctl print gui/$(id -u)/org.healtos.backup` durumunu ve son
-  çıkış kodunu gösterir; günlük yolu `~/Library/LaunchAgents/org.healtos.backup.plist` içinde
+- Bir launchd ajanı çalışmıyor: `launchctl print gui/$(id -u)/org.healthos.backup` durumunu ve son
+  çıkış kodunu gösterir; günlük yolu `~/Library/LaunchAgents/org.healthos.backup.plist` içinde
   yazar.
 
 **Windows**

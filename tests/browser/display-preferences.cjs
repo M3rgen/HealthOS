@@ -54,7 +54,7 @@ run(async () => {
   const server = { online: true, stored: null, puts: [], zones: [] };
   try {
     // Desktop: an existing local choice reaches an empty server, then a new choice replaces it.
-    const desk = await device(browser, server, { width: 1280, height: 720 }, { 'healtos.timezone.v2': 'UTC' });
+    const desk = await device(browser, server, { width: 1280, height: 720 }, { 'healthos.timezone.v2': 'UTC' });
     await until(() => server.puts.length === 1, 'the local copy must reach an empty server');
     assert.deepEqual(server.puts[0], { timezone: 'UTC', motion: false });
     await desk.page.locator('#timezone').selectOption('Europe/Istanbul');
@@ -66,10 +66,10 @@ run(async () => {
     await desk.context.close();
 
     // Phone: its own older choice gives way to the server copy, and the dashboard follows it.
-    const phone = await device(browser, server, { width: 390, height: 844 }, { 'healtos.timezone.v2': 'UTC' });
+    const phone = await device(browser, server, { width: 390, height: 844 }, { 'healthos.timezone.v2': 'UTC' });
     await phone.page.waitForFunction(() => document.querySelector('#timezone').value === 'Europe/Istanbul');
     await until(() => server.zones.at(-1) === 'Europe/Istanbul', 'the dashboard must reload in the shared zone');
-    assert.equal(await phone.page.evaluate(() => localStorage.getItem('healtos.timezone.v2')), 'Europe/Istanbul');
+    assert.equal(await phone.page.evaluate(() => localStorage.getItem('healthos.timezone.v2')), 'Europe/Istanbul');
     assert.equal(server.puts.length, 2, 'reading the shared copy must not write it back');
     assert.equal(await phone.page.locator('#system').isHidden(), false, 'the System page must stay open');
     assert.deepEqual(await overflow(phone.page), { x: false, y: false });

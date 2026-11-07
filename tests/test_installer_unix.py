@@ -271,15 +271,15 @@ def test_dry_run_writes_only_the_preview(box, platform, mode, sources, extra, co
     if platform == "nas":
         assert "Synology" in result.stdout and "systemctl" not in result.stdout
     if platform == "macos":
-        assert "org.healtos" not in result.stdout  # backups default off in trial
+        assert "org.healthos" not in result.stdout  # backups default off in trial
 
 
 def test_dry_run_shows_host_jobs_per_platform(box):
     mac = box.run(*DRY, "--platform", "macos", "--mode", "full", "--sources", "none")
     assert mac.returncode == 0, mac.stderr
-    assert "Library/LaunchAgents/org.healtos.backup.plist" in mac.stdout
+    assert "Library/LaunchAgents/org.healthos.backup.plist" in mac.stdout
     assert "launchctl bootstrap" in mac.stdout
-    assert "Application Support/HealtOS/backup.key" in mac.stdout
+    assert "Application Support/HealthOS/backup.key" in mac.stdout
     linux = box.run(*DRY, "--platform", "linux", "--backups", "yes", "--umay", "yes")
     assert linux.returncode == 0, linux.stderr
     if IS_MAC or Path("/run/systemd/system").is_dir():  # a preview for another host assumes systemd
@@ -551,7 +551,7 @@ def test_outside_a_checkout_dry_run_plans_a_clone(box, tmp_path):
         timeout=60,
     )
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "git clone https://github.com/M3rgen/HealtOS.git" in result.stdout
+    assert "git clone https://github.com/M3rgen/HealthOS.git" in result.stdout
     assert not target.exists() and not [c for c in box.calls() if c.startswith("git clone")]
     occupied = tmp_path / "occupied"
     occupied.mkdir()
@@ -561,17 +561,17 @@ def test_outside_a_checkout_dry_run_plans_a_clone(box, tmp_path):
 
 
 def test_launchd_templates_are_valid_plists():
-    for name in ("org.healtos.backup.plist", "org.healtos.bridge.plist"):
+    for name in ("org.healthos.backup.plist", "org.healthos.bridge.plist"):
         data = plistlib.loads((ROOT / "deploy" / "launchd" / name).read_bytes())
         assert data["Label"] == name.removesuffix(".plist")
-        assert data["WorkingDirectory"] == "@HEALTOS_DIR@"
+        assert data["WorkingDirectory"] == "@HEALTHOS_DIR@"
         assert data["EnvironmentVariables"]["PATH"] == "@PATH@"
         assert data["Umask"] == 0o077
-    backup = plistlib.loads((ROOT / "deploy/launchd/org.healtos.backup.plist").read_bytes())
-    assert backup["ProgramArguments"] == ["/bin/bash", "@HEALTOS_DIR@/scripts/backup.sh"]
+    backup = plistlib.loads((ROOT / "deploy/launchd/org.healthos.backup.plist").read_bytes())
+    assert backup["ProgramArguments"] == ["/bin/bash", "@HEALTHOS_DIR@/scripts/backup.sh"]
     assert backup["StartCalendarInterval"] == {"Hour": 3, "Minute": 30}
     assert backup["EnvironmentVariables"]["BACKUP_KEY_FILE"] == "@BACKUP_KEY_FILE@"
-    bridge = plistlib.loads((ROOT / "deploy/launchd/org.healtos.bridge.plist").read_bytes())
+    bridge = plistlib.loads((ROOT / "deploy/launchd/org.healthos.bridge.plist").read_bytes())
     assert bridge["ProgramArguments"][-1] == "--foreground" and bridge["KeepAlive"] is True
 
 
@@ -599,16 +599,16 @@ def test_real_run_installs_launch_agents_with_absolute_paths(box):
         "--autostart", "no", "--umay", "no",
     )  # fmt: skip
     assert result.returncode == 0, result.stdout + result.stderr
-    plist = box.home / "Library/LaunchAgents/org.healtos.backup.plist"
+    plist = box.home / "Library/LaunchAgents/org.healthos.backup.plist"
     data = plistlib.loads(plist.read_bytes())
     repo = str(box.repo.resolve())
     assert data["WorkingDirectory"] == repo
     assert data["ProgramArguments"] == ["/bin/bash", f"{repo}/scripts/backup.sh"]
-    key = box.home / "Library/Application Support/HealtOS/backup.key"
+    key = box.home / "Library/Application Support/HealthOS/backup.key"
     assert data["EnvironmentVariables"]["BACKUP_KEY_FILE"] == str(key)
     assert key.read_text().startswith("AGE-SECRET-KEY-")
     assert stat.S_IMODE(key.stat().st_mode) == 0o600
-    for placeholder in ("@HEALTOS_DIR@", "@PATH@", "@BACKUP_KEY_FILE@", "@LOG_DIR@"):
+    for placeholder in ("@HEALTHOS_DIR@", "@PATH@", "@BACKUP_KEY_FILE@", "@LOG_DIR@"):
         assert placeholder not in plist.read_text()
     assert f"launchctl bootstrap gui/{os.getuid()} {plist}" in box.calls()
     assert "COPY THE BACKUP KEY OFF THIS MACHINE" in result.stdout
@@ -637,7 +637,7 @@ def test_real_run_installs_rootless_user_units(box):
     repo = str(box.repo.resolve())
     assert f"WorkingDirectory={repo}\n" in service
     assert f"ExecStart=/bin/bash {repo}/scripts/backup.sh\n" in service
-    assert f'Environment="BACKUP_KEY_FILE={box.home}/.config/healtos/backup.key"' in service
+    assert f'Environment="BACKUP_KEY_FILE={box.home}/.config/healthos/backup.key"' in service
     for line in ("User=root", "Requires=docker.service", "PrivateTmp=yes", "/opt/healthos"):
         assert line not in service
     assert (units / "healthos-backup.timer").read_text() == (
@@ -959,7 +959,7 @@ def test_existing_key_directory_keeps_its_mode(box, tmp_path):
     existing = tmp_path / "etc-healthos"
     existing.mkdir()
     existing.chmod(0o755)
-    made = tmp_path / "new" / "healtos"
+    made = tmp_path / "new" / "healthos"
     snippet = (
         'HOST_OS="$(uname -s)"; DRY_RUN=0; INTERACTIVE=0; '
         f'make_backup_key "{existing}/backup.key" && make_backup_key "{made}/backup.key"'
@@ -1019,3 +1019,235 @@ def test_a_replaced_export_line_keeps_its_prefix(box):
     ]
     for name in ("COMPOSE_FILE", "GARMIN_ENABLED"):
         assert len([line for line in lines if f"{name}=" in line]) == 1, name
+
+
+# ---- the rename HealtOS -> HealthOS: old names on installed machines keep working ---------
+# (The old spelling below is the point of these tests.)
+
+
+def test_old_repo_url_variable_is_a_fallback_with_a_note(box, tmp_path):
+    script = tmp_path / "standalone" / "install.sh"
+    script.parent.mkdir()
+    shutil.copy2(box.repo / "install.sh", script)
+
+    def plan(**env: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [
+                BASH,
+                str(script),
+                *DRY,
+                "--platform",
+                HOST_PLATFORM,
+                "--dir",
+                str(tmp_path / "fresh"),
+            ],
+            cwd=tmp_path,
+            env={**box.env, **env},
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+
+    old = plan(HEALTOS_REPO_URL="https://example.invalid/old.git")
+    assert old.returncode == 0, old.stdout + old.stderr
+    assert "git clone https://example.invalid/old.git" in old.stdout
+    notes = [line for line in old.stderr.splitlines() if "HEALTOS_REPO_URL is deprecated" in line]
+    assert len(notes) == 1 and "HEALTHOS_REPO_URL" in notes[0]
+    both = plan(
+        HEALTOS_REPO_URL="https://example.invalid/old.git",
+        HEALTHOS_REPO_URL="https://example.invalid/new.git",
+    )
+    assert "git clone https://example.invalid/new.git" in both.stdout
+    assert "deprecated" not in both.stderr
+    default = plan()
+    assert "git clone https://github.com/M3rgen/HealthOS.git" in default.stdout
+    assert "deprecated" not in default.stderr
+
+
+def make_checkout(path: Path) -> None:
+    (path / "scripts").mkdir(parents=True)
+    for name in ("docker-compose.yml", ".env.example", "scripts/backup.sh"):
+        (path / name).write_text("synthetic\n")
+
+
+def test_an_existing_checkout_at_the_old_default_is_reused(box, tmp_path):
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    snippet = (
+        f'cd "{elsewhere}"; HOST_OS=Darwin; IS_ROOT=0; INTERACTIVE=0; SCRIPT_DIR=""; '
+        'resolve_dir; echo "DIR=$DIR NEED_CLONE=$NEED_CLONE"'
+    )
+    fresh = box.source(snippet)
+    assert f"DIR={box.home}/healthos NEED_CLONE=1" in fresh.stdout, fresh.stdout + fresh.stderr
+    old = box.home / "healtos"
+    make_checkout(old)
+    before = {p: p.read_bytes() for p in old.rglob("*") if p.is_file()}
+    reused = box.source(snippet)
+    assert f"DIR={old} NEED_CLONE=0" in reused.stdout, reused.stdout + reused.stderr
+    assert "Using the existing checkout" in reused.stdout and "nothing is moved" in reused.stdout
+    assert {p: p.read_bytes() for p in old.rglob("*") if p.is_file()} == before
+    assert not (box.home / "healthos").exists()
+    make_checkout(box.home / "healthos")  # once the new default holds a checkout, it wins
+    new = box.source(snippet)
+    assert f"DIR={box.home}/healthos NEED_CLONE=0" in new.stdout
+    assert "Using the existing checkout" not in new.stdout
+
+
+def test_old_config_files_are_copied_never_moved(box):
+    old = box.home / ".config" / "healtos"
+    old.mkdir(parents=True)
+    old.chmod(0o700)
+    files = {
+        "backup.key": b"AGE-SECRET-KEY-1SYNTHETICOLD\n",
+        "backup.env": b"BACKUP_RETENTION_DAYS=\n",
+        "bridge.env": b"CODEX_BRIDGE_TOKEN=synthetic\n",
+    }
+    for name, data in files.items():
+        (old / name).write_bytes(data)
+        (old / name).chmod(0o600)
+    new = box.home / ".config" / "healthos"
+    snippet = 'DRY_RUN={dry}; copy_legacy_config "$HOME/.config/healtos" "$HOME/.config/healthos"'
+    preview = box.source(snippet.format(dry=1))
+    assert preview.returncode == 0, preview.stderr
+    assert f"[dry-run] cp -p {old}/backup.key {new}/backup.key" in preview.stdout
+    assert not new.exists()
+    # A file already at the new path is never replaced.
+    new.mkdir()
+    new.chmod(0o700)
+    (new / "bridge.env").write_bytes(b"CODEX_BRIDGE_TOKEN=newer\n")
+    result = box.source(snippet.format(dry=0))
+    assert result.returncode == 0, result.stdout + result.stderr
+    for name, data in files.items():
+        assert (old / name).read_bytes() == data, name  # the original stays, unchanged
+        assert stat.S_IMODE((old / name).stat().st_mode) == 0o600
+    for name in ("backup.key", "backup.env"):
+        assert (new / name).read_bytes() == files[name]
+        assert stat.S_IMODE((new / name).stat().st_mode) == 0o600
+    assert (new / "bridge.env").read_bytes() == b"CODEX_BRIDGE_TOKEN=newer\n"
+    again = box.source(snippet.format(dry=0))
+    assert again.returncode == 0 and "cp -p" not in again.stdout  # idempotent
+
+
+def test_old_config_directory_is_created_private(box):
+    old = box.home / ".config" / "healtos"
+    old.mkdir(parents=True)
+    (old / "backup.key").write_text("AGE-SECRET-KEY-1SYNTHETIC\n")
+    (old / "backup.key").chmod(0o600)
+    result = box.source(
+        'DRY_RUN=0; copy_legacy_config "$HOME/.config/healtos" "$HOME/.config/healthos"'
+    )
+    assert result.returncode == 0, result.stderr
+    assert stat.S_IMODE((box.home / ".config" / "healthos").stat().st_mode) == 0o700
+
+
+def test_launchd_old_labels_are_replaced_in_a_dry_run(box):
+    agents = box.home / "Library" / "LaunchAgents"
+    agents.mkdir(parents=True)
+    old = agents / "org.healtos.backup.plist"
+    old.write_text("<plist>synthetic old agent</plist>\n")
+    support = box.home / "Library" / "Application Support" / "HealtOS"
+    support.mkdir(parents=True)
+    (support / "backup.key").write_text("AGE-SECRET-KEY-1SYNTHETIC\n")
+    (support / "backup.key").chmod(0o600)
+    result = box.run(*DRY, "--platform", "macos", "--mode", "full", "--sources", "none")
+    assert result.returncode == 0, result.stdout + result.stderr
+    uid = os.getuid()
+    assert f"[dry-run] launchctl bootout gui/{uid}/org.healtos.backup (if loaded)" in result.stdout
+    assert f"[dry-run] mv {old} {old}.bak-" in result.stdout
+    new_support = box.home / "Library" / "Application Support" / "HealthOS"
+    assert f"[dry-run] cp -p {support}/backup.key {new_support}/backup.key" in result.stdout
+    assert "org.healthos.backup.plist" in result.stdout
+    assert "Backup key would be copied from the old HealtOS directory" in result.stdout
+    assert "age-keygen -o" not in result.stdout  # the existing key is reused, not replaced
+    # Nothing changed: the old agent and key are where they were, launchctl was not called.
+    assert old.read_text() == "<plist>synthetic old agent</plist>\n"
+    assert sorted(p.name for p in agents.iterdir()) == ["org.healtos.backup.plist"]
+    assert not new_support.exists()
+    assert not [c for c in box.calls() if c.startswith("launchctl")]
+
+
+@pytest.mark.skipif(not IS_MAC, reason="launchd agents are installed on macOS only")
+def test_real_run_replaces_a_loaded_old_agent_and_copies_its_key(box):
+    agents = box.home / "Library" / "LaunchAgents"
+    agents.mkdir(parents=True)
+    old = agents / "org.healtos.backup.plist"
+    old.write_text("<plist>synthetic old agent</plist>\n")
+    support = box.home / "Library" / "Application Support" / "HealtOS"
+    support.mkdir(parents=True)
+    old_key = support / "backup.key"
+    old_key.write_text("AGE-SECRET-KEY-1SYNTHETICOLDKEY\n")
+    old_key.chmod(0o600)
+    # launchctl reports the old agent as loaded (and nothing else).
+    box.stub(
+        "launchctl",
+        STUB.replace("{name}", "launchctl").replace(
+            '"launchctl print"*) exit 1 ;;',
+            '"launchctl print gui/"*"/org.healtos.backup") exit 0 ;;\n'
+            '  "launchctl print"*) exit 1 ;;',
+        ),
+    )
+    result = box.run(
+        "--non-interactive", "--no-start", "--platform", "macos", "--backups", "yes",
+        "--autostart", "no", "--umay", "no",
+    )  # fmt: skip
+    assert result.returncode == 0, result.stdout + result.stderr
+    uid = os.getuid()
+    calls = box.calls()
+    assert f"launchctl bootout gui/{uid}/org.healtos.backup" in calls
+    (kept,) = agents.glob("org.healtos.backup.plist.bak-*")
+    assert kept.read_text() == "<plist>synthetic old agent</plist>\n" and not old.exists()
+    new_plist = agents / "org.healthos.backup.plist"
+    new_key = box.home / "Library" / "Application Support" / "HealthOS" / "backup.key"
+    data = plistlib.loads(new_plist.read_bytes())
+    assert data["Label"] == "org.healthos.backup"
+    assert data["EnvironmentVariables"]["BACKUP_KEY_FILE"] == str(new_key)
+    # The existing key was copied (not regenerated, not moved) before the agent was installed.
+    assert new_key.read_text() == old_key.read_text() == "AGE-SECRET-KEY-1SYNTHETICOLDKEY\n"
+    assert stat.S_IMODE(new_key.stat().st_mode) == 0o600
+    assert not [c for c in calls if c.startswith("age-keygen -o")]
+    assert f"launchctl bootstrap gui/{uid} {new_plist}" in calls
+    assert calls.index(f"launchctl bootout gui/{uid}/org.healtos.backup") < calls.index(
+        f"launchctl bootstrap gui/{uid} {new_plist}"
+    )
+
+
+def test_backup_script_falls_back_to_the_old_key_path(tmp_path):
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    for name, body in (("docker", "echo PGDMP-synthetic"), ("age", "cat")):
+        (bin_dir / name).write_text(f"#!/bin/sh\n{body}\n")
+        (bin_dir / name).chmod(0o755)
+    old = tmp_path / ".config" / "healtos" / "backup.key"
+    old.parent.mkdir(parents=True)
+    old.write_text("AGE-SECRET-KEY-1SYNTHETIC\n")
+    old.chmod(0o600)
+    env = {
+        "PATH": f"{bin_dir}:/usr/bin:/bin:/usr/sbin:/sbin",
+        "HOME": str(tmp_path),
+        "BACKUP_HOST_DIR": str(tmp_path / "backups"),
+        "BACKUP_STATUS_HOST_DIR": str(tmp_path / "metadata"),
+        "BACKUP_KEY_FILE": str(tmp_path / ".config" / "healthos" / "backup.key"),
+        "BACKUP_MIN_FREE_MB": "0",
+    }
+    result = subprocess.run(
+        [BASH, str(ROOT / "scripts" / "backup.sh")],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert result.returncode == 0, result.stderr
+    assert f"using the old path {old}" in result.stderr
+    assert old.read_text() == "AGE-SECRET-KEY-1SYNTHETIC\n"
+    assert not (tmp_path / ".config" / "healthos").exists()
+    # Without either key it still fails cleanly, naming the new path.
+    old.rename(tmp_path / "elsewhere.key")
+    missing = subprocess.run(
+        [BASH, str(ROOT / "scripts" / "backup.sh")],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert missing.returncode == 1 and "healthos/backup.key" in missing.stderr

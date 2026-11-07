@@ -1,7 +1,7 @@
 .env
 frontend/node_modules
 app/static/
-.test-tmp-healtos*
+.test-tmp-healthos*
 .test-tmp-codex*
 .venv/
 .uv-tool/

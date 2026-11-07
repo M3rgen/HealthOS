@@ -34,7 +34,7 @@ PWSH = shutil.which("pwsh")
 IS_WINDOWS = sys.platform == "win32"
 needs_pwsh = pytest.mark.skipif(PWSH is None, reason="pwsh (PowerShell 7) is not installed")
 # Built from parts: the marker word must appear in installer scripts only.
-MARKER = "HEALTOS_INSTALLER" + "_VERSION"
+MARKER = "HEALTHOS_INSTALLER" + "_VERSION"
 
 # install.sh option -> install.ps1 parameter (docs/INSTALL.md, the shared contract).
 CONTRACT = {
@@ -173,7 +173,7 @@ def test_platforms_sources_and_hints_are_listed():
     ):
         assert hint in source
     assert "Set-EnvManaged 'COMPOSE_PATH_SEPARATOR' ';'" in source
-    assert "https://github.com/M3rgen/HealtOS.git" in source
+    assert "https://github.com/M3rgen/HealthOS.git" in source
 
 
 def test_nothing_is_deleted_or_wiped():
@@ -215,8 +215,8 @@ def test_installer_env_rules():
     for secret in ("POSTGRES_PASSWORD", "APP_UI_TOKEN", "GOOGLE_TOKEN_ENCRYPTION_KEY"):
         assert f"Set-EnvSecret '{secret}'" in source
     # Backup key outside the checkout and .env, current user only.
-    assert "Join-Path $env:APPDATA 'HealtOS'" in source
-    assert "'backup.key'" in source and "Set-HealtOSPrivateAcl" in source
+    assert "Join-Path $env:APPDATA 'HealthOS'" in source
+    assert "'backup.key'" in source and "Set-HealthOSPrivateAcl" in source
     assert "COPY THE BACKUP KEY OFF THIS MACHINE NOW" in source
 
 
@@ -297,7 +297,7 @@ def home(tmp_path: Path) -> dict[str, str]:
 
 @pytest.fixture
 def checkout(tmp_path: Path) -> Path:
-    """A minimal HealtOS checkout copy (the installer's checkout test and its scripts)."""
+    """A minimal HealthOS checkout copy (the installer's checkout test and its scripts)."""
     target = tmp_path / "checkout"
     (target / "scripts").mkdir(parents=True)
     (target / "deploy").mkdir()
@@ -492,8 +492,8 @@ def test_full_dry_run_with_every_source(checkout: Path, home: dict[str, str], tm
     )
     # Missing production values are listed; nothing would start.
     assert "GOOGLE_CLIENT_SECRET is empty" in result.stdout
-    assert "Register-ScheduledTask" in result.stdout and "HealtOS Backup" in result.stdout
-    assert "HealtOS Umay bridge" in result.stdout
+    assert "Register-ScheduledTask" in result.stdout and "HealthOS Backup" in result.stdout
+    assert "HealthOS Umay bridge" in result.stdout
     assert "COPY THE BACKUP KEY OFF THIS MACHINE NOW" in result.stdout
     assert not (Path(values["APPLE_RECEIVER_TOKEN_HOST_FILE"])).exists()
 
@@ -583,13 +583,13 @@ def test_env_out_never_overwrites_a_foreign_file(checkout: Path, home: dict[str,
 def test_bootstrap_dry_run_clones_nothing(tmp_path: Path, home: dict[str, str]):
     empty = tmp_path / "elsewhere"
     empty.mkdir()
-    target = tmp_path / "healtos"
+    target = tmp_path / "healthos"
     script = (
         f"& ([scriptblock]::Create((Get-Content -Raw '{INSTALLER}'))) -DryRun -NonInteractive "
         f"-Ref v0.2.2 -Dir '{target}'; 'alive ' + $LASTEXITCODE"
     )
     result = pwsh("-Command", script, env=home, cwd=empty)
-    assert "git clone --branch v0.2.2 https://github.com/M3rgen/HealtOS.git" in result.stdout
+    assert "git clone --branch v0.2.2 https://github.com/M3rgen/HealthOS.git" in result.stdout
     # The scriptblock form must not close the caller's session.
     assert "alive 0" in result.stdout, result.stdout + result.stderr
     assert not target.exists()
@@ -603,8 +603,8 @@ def test_register_tasks_dry_run(tmp_path: Path):
         "-RepoDir", str(tmp_path),
     )  # fmt: skip
     assert result.returncode == 0, result.stderr
-    assert "\\HealtOS\\HealtOS Backup" in result.stdout
-    assert "\\HealtOS\\HealtOS Umay bridge" in result.stdout
+    assert "\\HealthOS\\HealthOS Backup" in result.stdout
+    assert "\\HealthOS\\HealthOS Umay bridge" in result.stdout
     assert "-ExecutionPolicy Bypass" in result.stdout
 
 
@@ -633,7 +633,7 @@ def test_bridge_task_never_rewrites_env_statically():
     task = code_only(WINDOWS_DIR / "start-umay-bridge.ps1")
     assert "umay_bridge_task.py" in task and "start_codex_bridge.py" not in task
     assert (
-        "Get-HealtOSDotEnvValue -File (Join-Path $root '.env') -Name 'CODEX_BRIDGE_TOKEN'" in task
+        "Get-HealthOSDotEnvValue -File (Join-Path $root '.env') -Name 'CODEX_BRIDGE_TOKEN'" in task
     )
     assert "EnvironmentVariables['CODEX_BRIDGE_TOKEN'] = $token" in task
     assert "launcher.update_env = keep_env" in text(WINDOWS_DIR / "umay_bridge_task.py")
@@ -667,10 +667,10 @@ def test_bridge_python_range_is_shared_and_matches_the_lock():
     assert 'run uv sync --frozen --no-dev --python "$BRIDGE_PYTHON"' in text(ROOT / "install.sh")
     source = code_only(INSTALLER)
     # In the environment: PowerShell does not quote '<' or '>' for a uv.cmd shim.
-    assert "$env:UV_PYTHON = Get-HealtOSBridgePython" in source
+    assert "$env:UV_PYTHON = Get-HealthOSBridgePython" in source
     assert "& $uv sync --frozen --no-dev | Out-Host" in source
     bridge_task = text(WINDOWS_DIR / "start-umay-bridge.ps1")
-    assert "'--no-dev', '--python', (Get-HealtOSBridgePython)," in bridge_task
+    assert "'--no-dev', '--python', (Get-HealthOSBridgePython)," in bridge_task
     ci = yaml.safe_load(text(ROOT / ".github" / "workflows" / "ci.yml"))
     steps = ci["jobs"]["installer"]["steps"]
     assert any(f"--python '{spec}'" in step.get("run", "") for step in steps)
@@ -709,9 +709,9 @@ def bridge_task_log(home: dict[str, str]) -> str:
 def test_windows_arguments_are_quoted_for_cmd_shims(value: str, expected: str):
     script = (
         f". '{WINDOWS_DIR / 'common.ps1'}'; "
-        "Write-Output ('ARG=' + (ConvertTo-HealtOSArgument $env:HEALTOS_TEST_ARG))"
+        "Write-Output ('ARG=' + (ConvertTo-HealthOSArgument $env:HEALTHOS_TEST_ARG))"
     )
-    result = pwsh("-Command", script, env={**os.environ, "HEALTOS_TEST_ARG": value})
+    result = pwsh("-Command", script, env={**os.environ, "HEALTHOS_TEST_ARG": value})
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip().splitlines()[-1] == f"ARG={expected}"
 
@@ -834,7 +834,7 @@ def run_installer_functions(tmp_path: Path, body: str):
         f"'{INSTALLER}', [ref]$null, [ref]$null)\n"
         "foreach ($node in $ast.EndBlock.Statements) {\n"
         "    if ($node -is [System.Management.Automation.Language.FunctionDefinitionAst] -or\n"
-        "        $node.Extent.Text -like '$HealtOSManagedCompose =*') { Invoke-Expression $node.Extent.Text }\n"
+        "        $node.Extent.Text -like '$HealthOSManagedCompose =*') { Invoke-Expression $node.Extent.Text }\n"
         "}\n"
         "$script:InstallLang = 'en'\n"
         "$script:Notes = New-Object System.Collections.Generic.List[string]\n" + body,
@@ -982,8 +982,8 @@ def test_backup_settings_read_export_lines(tmp_path: Path):
     backup_env.write_text("export BACKUP_AGE_RECIPIENT=age1synthetic\n", encoding="utf-8")
     script = (
         f". '{WINDOWS_DIR / 'common.ps1'}'; "
-        f"Write-Output ('DAYS=' + (Get-HealtOSDotEnvValue -File '{dotenv}' -Name 'BACKUP_RETENTION_DAYS')); "
-        f"Import-HealtOSBackupEnv '{backup_env}'; Write-Output ('RECIPIENT=' + $env:BACKUP_AGE_RECIPIENT)"
+        f"Write-Output ('DAYS=' + (Get-HealthOSDotEnvValue -File '{dotenv}' -Name 'BACKUP_RETENTION_DAYS')); "
+        f"Import-HealthOSBackupEnv '{backup_env}'; Write-Output ('RECIPIENT=' + $env:BACKUP_AGE_RECIPIENT)"
     )
     env = dict(os.environ)
     env.pop("BACKUP_AGE_RECIPIENT", None)
@@ -1006,7 +1006,7 @@ def acl_entry(sid: str, allow: bool = True, read: bool = True, inherit_only: boo
 @pytest.mark.parametrize(
     "owner, entries, expected",
     [
-        # What Set-HealtOSPrivateAcl (protect-file.ps1, Write-PrivateBytes) writes.
+        # What Set-HealthOSPrivateAcl (protect-file.ps1, Write-PrivateBytes) writes.
         (ME, [acl_entry(ME)], ""),
         # Python's mkdir(mode=0o700) on Windows (pytest's temp dirs): SYSTEM, Administrators,
         # OWNER RIGHTS, inherited by every file created inside.
@@ -1028,7 +1028,7 @@ def acl_entry(sid: str, allow: bool = True, read: bool = True, inherit_only: boo
 def test_key_acl_check_trusts_only_me_system_admins_and_trusted_owner(owner, entries, expected):
     script = (
         f". '{WINDOWS_DIR / 'common.ps1'}'; "
-        f"$sid = Get-HealtOSAclReader -CurrentSid '{ME}' -OwnerSid '{owner}' "
+        f"$sid = Get-HealthOSAclReader -CurrentSid '{ME}' -OwnerSid '{owner}' "
         f"-Entries @({', '.join(entries)}); "
         "Write-Output ('READER=' + $sid)"
     )
@@ -1046,7 +1046,7 @@ def test_protect_file_result_passes_the_key_check(tmp_path: Path):
         "-ExecutionPolicy", "Bypass", "-File", str(WINDOWS_DIR / "protect-file.ps1"), str(key)
     )
     assert protect.returncode == 0, protect.stderr
-    script = f". '{WINDOWS_DIR / 'common.ps1'}'; Write-Output ('PROBLEM=' + (Get-HealtOSAclProblem '{key}'))"
+    script = f". '{WINDOWS_DIR / 'common.ps1'}'; Write-Output ('PROBLEM=' + (Get-HealthOSAclProblem '{key}'))"
     result = pwsh("-Command", script)
     assert result.stdout.strip().splitlines()[-1] == "PROBLEM=", result.stderr
 
@@ -1433,3 +1433,165 @@ def test_backup_with_real_age_decrypts_to_the_dump(sandbox, tmp_path: Path):
         capture_output=True,
     ).stdout
     assert plain == DUMP
+
+
+# ---------------------------------------------------------------------------------------------
+# The rename HealtOS -> HealthOS: old names on installed machines keep working (the old
+# spelling below is the point of these tests)
+
+
+def config_dirs(home: dict[str, str]) -> tuple[Path, Path]:
+    """(old, new) per-user config directories, as common.ps1 computes them on this OS."""
+    if IS_WINDOWS:
+        base = Path(home["APPDATA"])
+        return base / "HealtOS", base / "HealthOS"
+    base = Path(home["HOME"]) / ".config"
+    return base / "healtos", base / "healthos"
+
+
+def run_functions_at_home(tmp_path: Path, home: dict[str, str], body: str):
+    """Like run_installer_functions, but with HOME/APPDATA in tmp_path (never the real ones)."""
+    script = tmp_path / "unit-home.ps1"
+    script.write_text(
+        "$ErrorActionPreference = 'Stop'\n"
+        f". '{WINDOWS_DIR / 'common.ps1'}'\n"
+        "$ast = [System.Management.Automation.Language.Parser]::ParseFile("
+        f"'{INSTALLER}', [ref]$null, [ref]$null)\n"
+        "foreach ($node in $ast.EndBlock.Statements) {\n"
+        "    if ($node -is [System.Management.Automation.Language.FunctionDefinitionAst]) { Invoke-Expression $node.Extent.Text }\n"
+        "}\n"
+        "$script:InstallLang = 'en'\n"
+        "$script:Notes = New-Object System.Collections.Generic.List[string]\n" + body,
+        encoding="utf-8",
+    )
+    return pwsh("-File", str(script), env=home)
+
+
+def test_legacy_names_are_confined_to_compatibility_code():
+    common = text(WINDOWS_DIR / "common.ps1")
+    spans = function_bodies(common)
+    legacy = common[slice(*spans["Get-HealthOSLegacyConfigDir"])]
+    assert "'HealtOS'" in legacy and "'healtos'" in legacy
+    outside = common.replace(legacy, "")
+    assert "HealtOS'" not in outside and "healtos'" not in outside
+    tasks = text(WINDOWS_DIR / "register-tasks.ps1")
+    assert "$TaskPath = '\\HealthOS\\'" in tasks and "$LegacyTaskPath = '\\HealtOS\\'" in tasks
+    # The old task is unregistered only after its replacement was registered.
+    for new in ("$BackupTask", "$BridgeTask"):
+        register = tasks.index(f"Register-HealthOSTask -Name {new}")
+        assert tasks.index(f"Unregister-LegacyTask {new}", register) > register
+
+
+@needs_pwsh
+@pytest.mark.skipif(IS_WINDOWS, reason="POSIX mode bits stand in for the Windows ACL here")
+def test_old_config_files_are_copied_never_moved(tmp_path: Path, home: dict[str, str]):
+    old, new = config_dirs(home)
+    old.mkdir(parents=True)
+    files = {
+        "backup.key": b"AGE-SECRET-KEY-1SYNTHETICOLD\n",
+        "backup.env": b"BACKUP_RETENTION_DAYS=\n",
+    }
+    for name, data in files.items():
+        (old / name).write_bytes(data)
+        (old / name).chmod(0o600)
+    preview = run_functions_at_home(tmp_path, home, "$DryRun = $true\nCopy-LegacyConfig\n")
+    assert preview.returncode == 0, preview.stdout + preview.stderr
+    assert f"[dry-run] copy {old / 'backup.key'} to {new / 'backup.key'}" in preview.stdout
+    assert not new.exists()
+    new.mkdir()
+    (new / "backup.env").write_bytes(b"BACKUP_AGE_RECIPIENT=age1newer\n")
+    result = run_functions_at_home(tmp_path, home, "Copy-LegacyConfig\n")
+    assert result.returncode == 0, result.stdout + result.stderr
+    for name, data in files.items():
+        assert (old / name).read_bytes() == data, name  # the original stays, unchanged
+    assert (new / "backup.key").read_bytes() == files["backup.key"]
+    assert mode_of(new / "backup.key") == 0o600
+    assert (new / "backup.env").read_bytes() == b"BACKUP_AGE_RECIPIENT=age1newer\n"
+    again = run_functions_at_home(tmp_path, home, "Copy-LegacyConfig\n")
+    assert again.returncode == 0 and "Copied" not in again.stdout
+
+
+@needs_pwsh
+@pytest.mark.skipif(IS_WINDOWS, reason="POSIX mode bits stand in for the Windows ACL here")
+def test_old_config_directory_is_created_private(tmp_path: Path, home: dict[str, str]):
+    old, new = config_dirs(home)
+    old.mkdir(parents=True)
+    (old / "backup.key").write_text("AGE-SECRET-KEY-1SYNTHETIC\n")
+    (old / "backup.key").chmod(0o600)
+    result = run_functions_at_home(tmp_path, home, "Copy-LegacyConfig\n")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert mode_of(new) == 0o700 and mode_of(new / "backup.key") == 0o600
+
+
+@needs_pwsh
+def test_installer_dry_run_plans_the_copy(checkout: Path, home: dict[str, str]):
+    old, new = config_dirs(home)
+    old.mkdir(parents=True)
+    (old / "backup.key").write_text("AGE-SECRET-KEY-1SYNTHETIC\n")
+    result, _ = dry_run(checkout, home, "-Sources", "none", "-Backups", "yes")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert f"[dry-run] copy {old / 'backup.key'} to {new / 'backup.key'}" in result.stdout
+    assert "The backup key would be copied from the old HealtOS directory" in result.stdout
+    assert "age-keygen -o" not in result.stdout  # the existing key is reused, not replaced
+    assert not new.exists() and (old / "backup.key").is_file()
+
+
+def make_checkout(path: Path) -> None:
+    (path / "scripts").mkdir(parents=True)
+    for name in ("docker-compose.yml", ".env.example", "scripts/backup.sh"):
+        (path / name).write_text("synthetic\n")
+
+
+@needs_pwsh
+def test_an_existing_checkout_at_the_old_default_is_reused(tmp_path: Path, home: dict[str, str]):
+    base = Path(home["USERPROFILE"] if IS_WINDOWS else home["HOME"])
+    body = "Write-Output ('DIR=' + (Get-DefaultDir))\n"
+    fresh = run_functions_at_home(tmp_path, home, body)
+    assert f"DIR={base / 'healthos'}" in fresh.stdout, fresh.stdout + fresh.stderr
+    make_checkout(base / "healtos")
+    reused = run_functions_at_home(tmp_path, home, body)
+    assert f"DIR={base / 'healtos'}" in reused.stdout, reused.stdout + reused.stderr
+    assert "nothing is moved" in reused.stdout
+    assert not (base / "healthos").exists()
+    make_checkout(base / "healthos")
+    new = run_functions_at_home(tmp_path, home, body)
+    assert f"DIR={base / 'healthos'}" in new.stdout and "nothing is moved" not in new.stdout
+
+
+@needs_pwsh
+def test_backup_ps1_uses_the_old_key_while_the_new_one_is_missing(sandbox):
+    old, new = config_dirs(sandbox)
+    old.mkdir(parents=True)
+    key = old / "backup.key"
+    key.write_bytes(Path(sandbox["BACKUP_KEY_FILE"]).read_bytes())
+    if not IS_WINDOWS:
+        key.chmod(0o600)
+    env = {k: v for k, v in sandbox.items() if k != "BACKUP_KEY_FILE"}
+    result = run_backup(env)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert f"using the old path {key}" in result.stderr
+    assert key.is_file() and not new.exists()
+
+
+@needs_pwsh
+def test_register_tasks_replaces_old_task_names_in_a_dry_run(tmp_path: Path):
+    tasks = WINDOWS_DIR / "register-tasks.ps1"
+    plain = pwsh("-File", str(tasks), "-Backup", "-Umay", "-DryRun", "-RepoDir", str(tmp_path))
+    assert plain.returncode == 0, plain.stderr
+    assert "Unregister-ScheduledTask" not in plain.stdout  # no old task, nothing to do
+    # A stand-in Task Scheduler that knows both tasks under the old name.
+    script = (
+        "function Get-ScheduledTask { param($TaskPath, $TaskName) "
+        "if ($TaskPath -eq '\\HealtOS\\') { [pscustomobject]@{ TaskName = $TaskName } } }; "
+        f"& '{tasks}' -Backup -Umay -DryRun -RepoDir '{tmp_path}'; exit $LASTEXITCODE"
+    )
+    result = pwsh("-Command", script)
+    assert result.returncode == 0, result.stdout + result.stderr
+    out = result.stdout
+    for old, new in (
+        ("HealtOS Backup", "HealthOS Backup"),
+        ("HealtOS Umay bridge", "HealthOS Umay bridge"),
+    ):
+        line = f"[dry-run] Unregister-ScheduledTask \\HealtOS\\{old} (old name; replaced by \\HealthOS\\{new})"
+        assert line in out
+        assert out.index(f"Register-ScheduledTask \\HealthOS\\{new}") < out.index(line)

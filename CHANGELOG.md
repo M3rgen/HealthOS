@@ -1,10 +1,29 @@
 # Changelog
 
-All notable changes to HealtOS are recorded here. The format follows
+All notable changes to HealthOS are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Releases before 0.2.1 were not recorded
 in this file.
 
 ## Unreleased
+
+### Changed
+
+- The product name, misspelled "HealtOS" up to 0.2.2, is spelled **HealthOS** everywhere: in the
+  application, the dashboard, the installers, their scripts and the documentation. The repository
+  is `M3rgen/HealthOS` (old GitHub links redirect). Browser preferences and uploaded appearance
+  images stored under the old `healtos` names are carried over automatically on first load; the
+  old copies are left in place.
+- Installed machines keep working when the installer is run again; no data, key or backup is
+  moved or deleted
+  ([details](docs/INSTALL.md#updating-an-install-from-022-or-earlier-the-old-name-healtos)):
+  an existing `~/healtos` checkout stays the default while there is no `~/healthos`; files in
+  `~/.config/healtos`, `~/Library/Application Support/HealtOS` and `%APPDATA%\HealtOS` are copied
+  (mode 600 / owner-only ACL) to the `healthos` / `HealthOS` directories and the originals kept;
+  `backup.sh` and `backup.ps1` fall back to the old key path while the new one is missing; the
+  launchd agents `org.healtos.*` are replaced by `org.healthos.*` (old plists kept as
+  `.bak-<UTC stamp>`); the Windows tasks `\HealtOS\HealtOS …` are replaced by
+  `\HealthOS\HealthOS …`; `HEALTOS_REPO_URL` still works, with a note, next to the new
+  `HEALTHOS_REPO_URL`. The installer version marker is now `HEALTHOS_INSTALLER_VERSION`.
 
 ## [0.2.2] - 2026-11-07
 
@@ -45,7 +64,8 @@ Added: a guided, bilingual (English / Türkçe) installer for every platform
   service (systemd unit, launchd agent or scheduled task). The installer offers to create an age
   identity outside the checkout and `.env` (`/etc/healthos/backup.key` or
   `~/.config/healtos/backup.key` on Linux, `~/Library/Application Support/HealtOS/backup.key`
-  on macOS, `%APPDATA%\HealtOS\backup.key` on Windows) and warns to keep a copy off the host.
+  on macOS, `%APPDATA%\HealtOS\backup.key` on Windows; these were the names before the rename
+  to HealthOS, see Unreleased) and warns to keep a copy off the host.
 - The systemd units are rendered with the checkout directory chosen by the installer instead of
   a fixed `/opt/healthos`; their behaviour is unchanged. Without root the installer installs them
   as user units (`systemctl --user`, lingering on); new launchd templates are in

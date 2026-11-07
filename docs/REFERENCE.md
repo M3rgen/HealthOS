@@ -1,8 +1,8 @@
-# HealtOS — Technical Reference
+# HealthOS — Technical Reference
 
 A fully self-hosted, subscription-free, read-only archive of health and fitness data exposed by the **Google Health API v4**. It preserves every source payload before normalization and maintains analytics-friendly PostgreSQL tables for heart rate, HRV, oxygen saturation, sleep, steps, exercise, and long-tail scalar metrics.
 
-> This project uses `https://health.googleapis.com/v4`, the current Google Health API. It does not use or add functionality against the deprecated Fitbit Web API. Support for the legacy Fitbit Web API ended on September 30, 2026, and it shuts down completely on October 30, 2026; because HealtOS uses only Google Health API v4, Google OAuth, and `googlehealth.*` scopes, that shutdown does not affect it.
+> This project uses `https://health.googleapis.com/v4`, the current Google Health API. It does not use or add functionality against the deprecated Fitbit Web API. Support for the legacy Fitbit Web API ended on September 30, 2026, and it shuts down completely on October 30, 2026; because HealthOS uses only Google Health API v4, Google OAuth, and `googlehealth.*` scopes, that shutdown does not affect it.
 
 ## Design principles
 

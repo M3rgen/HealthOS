@@ -1,12 +1,12 @@
 <#
 Start Docker Desktop when the current user signs in, so the containers' `restart:
-unless-stopped` policy brings HealtOS back after a reboot (Windows; install.ps1 -Autostart yes
+unless-stopped` policy brings HealthOS back after a reboot (Windows; install.ps1 -Autostart yes
 runs this).
 
 Adds only the current user's "Docker Desktop" value under
 HKCU\Software\Microsoft\Windows\CurrentVersion\Run. It does not edit Docker settings, recreate
 containers or touch volumes. An existing entry that already starts Docker Desktop is left as it
-is. Until a user signs in, Docker Desktop and HealtOS are not running.
+is. Until a user signs in, Docker Desktop and HealthOS are not running.
 
   powershell -ExecutionPolicy Bypass -File .\scripts\enable-docker-desktop-autostart.ps1 [-DryRun]
 #>

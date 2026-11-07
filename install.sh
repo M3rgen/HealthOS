@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# HealtOS installer for Linux servers (default), Raspberry Pi, NAS, cloud VPS and macOS.
+# HealthOS installer for Linux servers (default), Raspberry Pi, NAS, cloud VPS and macOS.
 # Windows: use install.ps1. English / Türkçe. Run `bash install.sh --help` for every option.
 #
-#   curl -fsSL https://raw.githubusercontent.com/M3rgen/HealtOS/main/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/M3rgen/HealthOS/main/install.sh | bash
 #   bash install.sh                       # inside a checkout: guided setup
 #   bash install.sh --dry-run             # show every step, write only <dir>/.env.dry-run
 #
@@ -16,13 +16,27 @@
 #
 # Runs on bash 3.2 (macOS) and newer with POSIX tools, curl or wget, git (to clone), and
 # openssl or /dev/urandom for secrets. No Python is needed for the installer itself.
-HEALTOS_INSTALLER_VERSION="0.2.2"
+HEALTHOS_INSTALLER_VERSION="0.2.2"
 
 set -u
 set -o pipefail
 
-REPO_URL="${HEALTOS_REPO_URL:-https://github.com/M3rgen/HealtOS.git}"
-RAW_URL="https://raw.githubusercontent.com/M3rgen/HealtOS"
+# Compatibility with the misspelled name "HealtOS" used up to 0.2.2: names that live on
+# installed machines keep working. HEALTOS_* variables (below), an existing ~/healtos checkout
+# (default_dir), files in ~/.config/healtos and ~/Library/Application Support/HealtOS (copied,
+# never moved: copy_legacy_config) and the org.healtos.* launchd agents (replaced:
+# retire_legacy_agent).
+legacy_env() {
+  # legacy_env SUFFIX: HEALTHOS_SUFFIX, else the pre-rename HEALTOS_SUFFIX with a note.
+  local new="HEALTHOS_$1" old="HEALTOS_$1"
+  if [ -z "${!new:-}" ] && [ -n "${!old:-}" ]; then
+    printf -v "$new" '%s' "${!old}"
+    printf 'install.sh: %s is deprecated, use %s / %s eskidi, %s kullanın\n' "$old" "$new" "$old" "$new" >&2
+  fi
+}
+legacy_env REPO_URL
+REPO_URL="${HEALTHOS_REPO_URL:-https://github.com/M3rgen/HealthOS.git}"
+RAW_URL="https://raw.githubusercontent.com/M3rgen/HealthOS"
 APP_UID=10001
 # Python for the Umay bridge's .venv: the newest Python a host offers (Homebrew already ships
 # 3.15) can be newer than every wheel in uv.lock (psycopg-binary, websockets: cp312-cp314), so
@@ -74,6 +88,7 @@ GARMIN_PASTED=0
 GARMIN_KEY_EXPLICIT=0
 BACKUP_KEY_PATH=""
 BACKUP_PUBKEY=""
+PLANNED_COPIES=""
 C_B=""
 C_Y=""
 C_R=""
@@ -133,8 +148,8 @@ run() {
 
 usage() {
   cat <<'EOF'
-HealtOS installer (Linux default, Raspberry Pi, NAS, macOS, cloud VPS). Windows: install.ps1.
-HealtOS kurulum betiği (varsayılan Linux; Raspberry Pi, NAS, macOS, bulut VPS). Windows: install.ps1.
+HealthOS installer (Linux default, Raspberry Pi, NAS, macOS, cloud VPS). Windows: install.ps1.
+HealthOS kurulum betiği (varsayılan Linux; Raspberry Pi, NAS, macOS, bulut VPS). Windows: install.ps1.
 
 Usage / Kullanım:  bash install.sh [options / seçenekler]
 
@@ -144,7 +159,8 @@ Usage / Kullanım:  bash install.sh [options / seçenekler]
                                full: production; needs Google + webhook / üretim; Google gerekli
   --sources LIST               google,garmin,apple or none / veri kaynakları (virgüllü)
   --dir PATH                   checkout directory / kurulum dizini (default: current checkout,
-                               else /opt/healthos as root or ~/healtos)
+                               else /opt/healthos as root or ~/healthos;
+                               an existing ~/healtos checkout is reused)
   --ref REF                    git ref to clone / klonlanacak sürüm (default main)
   --garmin-key-file PATH       Garmin Connect Personal API key file / Garmin anahtar dosyası
   --google-client-id ID        Google OAuth client id
@@ -466,8 +482,11 @@ resolve_env_out() {
 default_dir() {
   if [ "$HOST_OS" = Linux ] && [ "$IS_ROOT" = 1 ]; then
     printf '/opt/healthos'
-  else
+  elif ! is_checkout "$HOME/healthos" && is_checkout "$HOME/healtos"; then
+    # A checkout at the pre-rename default stays where it is (resolve_dir says so).
     printf '%s/healtos' "$HOME"
+  else
+    printf '%s/healthos' "$HOME"
   fi
 }
 
@@ -482,8 +501,12 @@ resolve_dir() {
       DIR="$top"
     else
       DIR="$(default_dir)"
+      if [ "$DIR" = "$HOME/healtos" ]; then
+        say "Using the existing checkout $DIR (the default before the rename to HealthOS); nothing is moved." \
+          "Var olan $DIR kopyası kullanılıyor (HealthOS adından önceki varsayılan); hiçbir şey taşınmaz."
+      fi
       if [ "$INTERACTIVE" = 1 ] && ! is_checkout "$DIR"; then
-        ask DIR "$DIR" "Install directory (HealtOS will be cloned here)" "Kurulum dizini (HealtOS buraya klonlanır)"
+        ask DIR "$DIR" "Install directory (HealthOS will be cloned here)" "Kurulum dizini (HealthOS buraya klonlanır)"
       fi
     fi
   fi
@@ -493,8 +516,8 @@ resolve_dir() {
   elif [ ! -e "$DIR" ] || { [ -d "$DIR" ] && [ -z "$(ls -A "$DIR" 2>/dev/null)" ]; }; then
     NEED_CLONE=1
   else
-    die 2 "$DIR exists but is not a HealtOS checkout and not empty. Choose another --dir; nothing was changed." \
-      "$DIR var ama bir HealtOS kopyası değil ve boş değil. Başka bir --dir seçin; hiçbir şey değiştirilmedi."
+    die 2 "$DIR exists but is not a HealthOS checkout and not empty. Choose another --dir; nothing was changed." \
+      "$DIR var ama bir HealthOS kopyası değil ve boş değil. Başka bir --dir seçin; hiçbir şey değiştirilmedi."
   fi
 }
 
@@ -819,9 +842,9 @@ render_env() {
   [ "$kind" != preview ] || first="$PREVIEW_MARKER"
   tmp="$(mktemp "$dest.tmp.XXXXXXXX")" || die 1 "Cannot write next to $dest." "$dest yanına yazılamıyor."
   chmod 600 "$tmp"
-  if ! HEALTOS_FILL="$FILL" HEALTOS_FILL_HEADER="$header" HEALTOS_FIRST="$first" awk '
+  if ! HEALTHOS_FILL="$FILL" HEALTHOS_FILL_HEADER="$header" HEALTHOS_FIRST="$first" awk '
     BEGIN {
-      n = split(ENVIRON["HEALTOS_FILL"], rows, "\n")
+      n = split(ENVIRON["HEALTHOS_FILL"], rows, "\n")
       for (i = 1; i <= n; i++) {
         if (rows[i] == "") continue
         tab = index(rows[i], "\t")
@@ -842,14 +865,14 @@ render_env() {
       if (key in val) { last[key] = NR; prefix[key] = lead }
     }
     END {
-      if (ENVIRON["HEALTOS_FIRST"] != "") print ENVIRON["HEALTOS_FIRST"]
+      if (ENVIRON["HEALTHOS_FIRST"] != "") print ENVIRON["HEALTHOS_FIRST"]
       for (key in last) line[last[key]] = prefix[key] key "=" val[key]
       for (i = 1; i <= NR; i++) print line[i]
       added = 0
       for (j = 1; j <= m; j++) {
         key = order[j]
         if (key in last) continue
-        if (!added) { print ""; print ENVIRON["HEALTOS_FILL_HEADER"]; added = 1 }
+        if (!added) { print ""; print ENVIRON["HEALTHOS_FILL_HEADER"]; added = 1 }
         print key "=" val[key]
       }
     }' "$src" >"$tmp"; then
@@ -1079,8 +1102,8 @@ preflight() {
   if have git; then
     ok "git: $(git --version 2>/dev/null | head -n 1)" "git: $(git --version 2>/dev/null | head -n 1)"
   elif [ "$NEED_CLONE" = 1 ]; then
-    preflight_fatal "git is required to download HealtOS. Install: $(pkg_hint git)" \
-      "HealtOS'u indirmek için git gerekir. Kurulum: $(pkg_hint git)"
+    preflight_fatal "git is required to download HealthOS. Install: $(pkg_hint git)" \
+      "HealthOS'u indirmek için git gerekir. Kurulum: $(pkg_hint git)"
     [ "$PLATFORM" != macos ] || say "    macOS: xcode-select --install" "    macOS: xcode-select --install"
   else
     warn "git not found: fine for now, needed later for updates ($(pkg_hint git))." \
@@ -1109,8 +1132,8 @@ preflight() {
         "Docker Compose v2: $(docker compose version --short 2>/dev/null </dev/null || echo ok)"
     else
       if have docker-compose; then
-        say "    Only the old docker-compose v1 was found; HealtOS needs the 'docker compose' v2 plugin." \
-          "    Yalnız eski docker-compose v1 bulundu; HealtOS 'docker compose' v2 eklentisini ister."
+        say "    Only the old docker-compose v1 was found; HealthOS needs the 'docker compose' v2 plugin." \
+          "    Yalnız eski docker-compose v1 bulundu; HealthOS 'docker compose' v2 eklentisini ister."
       fi
       if [ "$need_docker" = 1 ]; then
         preflight_fatal "Docker Compose v2 ('docker compose') is missing." "Docker Compose v2 ('docker compose') eksik."
@@ -1192,7 +1215,7 @@ choose_platform() {
     def=linux
     case "$DETECTED" in macos | raspberrypi | nas | windows) def="$DETECTED" ;; esac
     if [ "$INTERACTIVE" = 1 ]; then
-      menu idx "$(platform_index "$def")" "Where will HealtOS run?" "HealtOS nerede çalışacak?" \
+      menu idx "$(platform_index "$def")" "Where will HealthOS run?" "HealthOS nerede çalışacak?" \
         "Linux server / VM (Debian, Ubuntu, Fedora...; Proxmox VM/LXC) - recommended" \
         "Linux sunucu / sanal makine (Debian, Ubuntu, Fedora...; Proxmox VM/LXC) - önerilen" \
         "Raspberry Pi / ARM64 board - 64-bit OS required; 4 GB+ RAM recommended; first build is slow" \
@@ -1397,7 +1420,7 @@ choose_host_jobs() {
   fi
   if [ -z "$AUTOSTART" ]; then
     if [ "$INTERACTIVE" = 1 ]; then
-      ask_yes_no AUTOSTART yes "Start HealtOS automatically after a reboot?" "Yeniden başlatmadan sonra HealtOS kendiliğinden açılsın mı?"
+      ask_yes_no AUTOSTART yes "Start HealthOS automatically after a reboot?" "Yeniden başlatmadan sonra HealthOS kendiliğinden açılsın mı?"
     else
       AUTOSTART=yes
     fi
@@ -1448,14 +1471,14 @@ clone_repo() {
     [ "$REF" = main ] || run git -C "$DIR" checkout "$REF"
     return 0
   fi
-  have git || die 2 "git is required to download HealtOS. Install: $(pkg_hint git)" \
-    "HealtOS'u indirmek için git gerekir. Kurulum: $(pkg_hint git)"
+  have git || die 2 "git is required to download HealthOS. Install: $(pkg_hint git)" \
+    "HealthOS'u indirmek için git gerekir. Kurulum: $(pkg_hint git)"
   mkdir -p "$(dirname "$DIR")" || die 1 "Cannot create $(dirname "$DIR")." "$(dirname "$DIR") oluşturulamadı."
   run git clone "$REPO_URL" "$DIR" </dev/null || die 1 "git clone failed (network?)." "git clone başarısız (ağ?)."
   if [ "$REF" != main ]; then
     run git -C "$DIR" checkout --quiet "$REF" </dev/null || die 1 "Ref '$REF' not found." "'$REF' sürümü bulunamadı."
   fi
-  is_checkout "$DIR" || die 1 "$DIR does not look like a HealtOS checkout after cloning." "$DIR klonlamadan sonra bir HealtOS kopyasına benzemiyor."
+  is_checkout "$DIR" || die 1 "$DIR does not look like a HealthOS checkout after cloning." "$DIR klonlamadan sonra bir HealthOS kopyasına benzemiyor."
 }
 
 # ---- secret files for the app container ----------------------------------------------
@@ -1616,7 +1639,7 @@ start_stack() {
   while [ "$i" -lt "$limit" ]; do
     if is_live "$url"; then
       printf '\n'
-      ok "HealtOS is up." "HealtOS çalışıyor."
+      ok "HealthOS is up." "HealthOS çalışıyor."
       STARTED=1
       return 0
     fi
@@ -1625,8 +1648,8 @@ start_stack() {
     i=$((i + 5))
   done
   printf '\n'
-  die 1 "HealtOS did not answer /health/live within ${limit}s. Check: docker compose ps; docker compose logs --tail=80 app" \
-    "HealtOS ${limit} sn içinde /health/live'a yanıt vermedi. Kontrol: docker compose ps; docker compose logs --tail=80 app"
+  die 1 "HealthOS did not answer /health/live within ${limit}s. Check: docker compose ps; docker compose logs --tail=80 app" \
+    "HealthOS ${limit} sn içinde /health/live'a yanıt vermedi. Kontrol: docker compose ps; docker compose logs --tail=80 app"
 }
 
 # ---- host jobs: systemd --------------------------------------------------------------
@@ -1641,7 +1664,7 @@ has_systemd() {
 
 render_unit() {
   # render_unit SRC system|user: /opt/healthos -> checkout; user units drop root-only lines.
-  local src="$1" kind="$2" cfg="$HOME/.config/healtos" path_line="/usr/local/bin:/usr/bin:/bin" codex_dir=""
+  local src="$1" kind="$2" cfg="$HOME/.config/healthos" path_line="/usr/local/bin:/usr/bin:/bin" codex_dir=""
   if have codex; then codex_dir="$(dirname "$(command -v codex)")"; fi
   # The system bridge runs with ProtectHome=true: a CLI under /home or /root is unreachable.
   if [ "$kind" = system ]; then case "$codex_dir" in /home/* | /root/*) codex_dir="" ;; esac; fi
@@ -1693,7 +1716,7 @@ RENDER_TMP=""
 rendered() {
   # rendered SRC KIND -> path of a private temporary rendering (reused buffer file).
   if [ -z "$RENDER_TMP" ]; then
-    RENDER_TMP="$(mktemp "${TMPDIR:-/tmp}/healtos-unit.XXXXXXXX")" || die 1 "mktemp failed" "mktemp başarısız"
+    RENDER_TMP="$(mktemp "${TMPDIR:-/tmp}/healthos-unit.XXXXXXXX")" || die 1 "mktemp failed" "mktemp başarısız"
   fi
   render_unit "$1" "$2" >"$RENDER_TMP"
   printf '%s' "$RENDER_TMP"
@@ -1734,6 +1757,11 @@ make_backup_key() {
   # make_backup_key PATH: create an age identity outside the repo and .env, never overwrite.
   local key="$1" create=yes
   BACKUP_KEY_PATH="$key"
+  case "$PLANNED_COPIES" in *"|$key|"*)
+    ok "Backup key would be copied from the old HealtOS directory and kept: $key" \
+      "Yedek anahtarı eski HealtOS klasöründen kopyalanır ve korunur: $key"
+    return 0 ;;
+  esac
   if [ -f "$key" ]; then
     ok "Backup key exists; kept: $key" "Yedek anahtarı var; korundu: $key"
     if have age-keygen && [ -r "$key" ] && grep -q '^AGE-SECRET-KEY-' "$key" 2>/dev/null; then
@@ -1779,7 +1807,7 @@ linux_backups() {
   python_hint
   if [ "$UNIT_MODE" = user ]; then
     unitdir="$HOME/.config/systemd/user"
-    key="$HOME/.config/healtos/backup.key"
+    key="$HOME/.config/healthos/backup.key"
   else
     unitdir="/etc/systemd/system"
     key="/etc/healthos/backup.key"
@@ -1917,7 +1945,7 @@ linux_umay() {
 linux_no_systemd() {
   local key
   step "Host jobs (no systemd found)" "Bilgisayar görevleri (systemd bulunamadı)"
-  if [ "$IS_ROOT" = 1 ]; then key=/etc/healthos/backup.key; else key="$HOME/.config/healtos/backup.key"; fi
+  if [ "$IS_ROOT" = 1 ]; then key=/etc/healthos/backup.key; else key="$HOME/.config/healthos/backup.key"; fi
   if [ "$BACKUPS" = yes ]; then
     if [ "$DRY_RUN" = 1 ] || ensure_age; then make_backup_key "$key" || true; fi
     say "  Add the daily backup to cron (crontab -e):" "  Günlük yedeği cron'a ekleyin (crontab -e):"
@@ -1977,7 +2005,7 @@ mac_path() {
 
 render_plist() {
   # render_plist TEMPLATE KEYFILE LOGDIR
-  sed -e "s|@HEALTOS_DIR@|$(sed_escape "$(xml_escape "$DIR")")|g" \
+  sed -e "s|@HEALTHOS_DIR@|$(sed_escape "$(xml_escape "$DIR")")|g" \
     -e "s|@PATH@|$(sed_escape "$(xml_escape "$(mac_path)")")|g" \
     -e "s|@BACKUP_KEY_FILE@|$(sed_escape "$(xml_escape "$2")")|g" \
     -e "s|@LOG_DIR@|$(sed_escape "$(xml_escape "$3")")|g" "$1"
@@ -1994,8 +2022,26 @@ load_agent() {
       "$label için launchctl bootstrap başarısız; deneyin: launchctl bootstrap $domain $plist"
 }
 
+retire_legacy_agent() {
+  # retire_legacy_agent NAME: the pre-rename agent org.healtos.NAME is stopped and its plist
+  # renamed to org.healtos.NAME.plist.bak-<UTC stamp> (kept), so org.healthos.NAME replaces it.
+  local label="org.healtos.$1" plist="$HOME/Library/LaunchAgents/org.healtos.$1.plist" domain
+  domain="gui/$(id -u)"
+  if [ "$DRY_RUN" = 0 ] && launchctl print "$domain/$label" >/dev/null 2>&1; then
+    run launchctl bootout "$domain/$label" || warn "launchctl bootout failed for $label." "$label için launchctl bootout başarısız."
+  elif [ "$DRY_RUN" = 1 ] && [ -f "$plist" ]; then
+    printf '  [dry-run] launchctl bootout %s/%s (if loaded)\n' "$domain" "$label"
+  fi
+  if [ -f "$plist" ]; then
+    run mv "$plist" "$plist.bak-$(date -u +%Y%m%dT%H%M%SZ)" \
+      || warn "Could not rename $plist; remove the old agent by hand." "$plist yeniden adlandırılamadı; eski ajanı elle kaldırın."
+    [ "$DRY_RUN" = 1 ] || say "  Replaced the old agent $label (its plist is kept as a .bak copy)." \
+      "  Eski $label ajanı değiştirildi (plist dosyası .bak kopyası olarak saklanır)."
+  fi
+}
+
 mac_jobs() {
-  local agents="$HOME/Library/LaunchAgents" support="$HOME/Library/Application Support/HealtOS" logs="$HOME/Library/Logs/HealtOS" tmp
+  local agents="$HOME/Library/LaunchAgents" support="$HOME/Library/Application Support/HealthOS" logs="$HOME/Library/Logs/HealthOS" tmp
   if [ "$BACKUPS" = yes ]; then
     step "Daily encrypted backup (launchd)" "Günlük şifreli yedek (launchd)"
     python_hint
@@ -2005,13 +2051,14 @@ mac_jobs() {
     else
       make_backup_key "$support/backup.key" || true
       run mkdir -p "$logs"
-      tmp="$(mktemp "${TMPDIR:-/tmp}/healtos-plist.XXXXXXXX")"
-      render_plist "$DIR/deploy/launchd/org.healtos.backup.plist" "$support/backup.key" "$logs" >"$tmp"
-      install_file "$tmp" "$agents/org.healtos.backup.plist" 644 || die 1 "Could not install the backup agent." "Yedek ajanı kurulamadı."
+      tmp="$(mktemp "${TMPDIR:-/tmp}/healthos-plist.XXXXXXXX")"
+      render_plist "$DIR/deploy/launchd/org.healthos.backup.plist" "$support/backup.key" "$logs" >"$tmp"
+      retire_legacy_agent backup
+      install_file "$tmp" "$agents/org.healthos.backup.plist" 644 || die 1 "Could not install the backup agent." "Yedek ajanı kurulamadı."
       rm -f "$tmp"
-      load_agent org.healtos.backup "$agents/org.healtos.backup.plist"
-      say "  Run once now: launchctl kickstart gui/$(id -u)/org.healtos.backup; log: $logs/backup.log" \
-        "  Şimdi bir kez: launchctl kickstart gui/$(id -u)/org.healtos.backup; günlük: $logs/backup.log"
+      load_agent org.healthos.backup "$agents/org.healthos.backup.plist"
+      say "  Run once now: launchctl kickstart gui/$(id -u)/org.healthos.backup; log: $logs/backup.log" \
+        "  Şimdi bir kez: launchctl kickstart gui/$(id -u)/org.healthos.backup; günlük: $logs/backup.log"
     fi
   fi
   if [ "$AUTOSTART" = yes ]; then
@@ -2048,15 +2095,16 @@ mac_jobs() {
     UNIT_MODE=user
     if uv_sync; then
       run mkdir -p "$logs"
-      tmp="$(mktemp "${TMPDIR:-/tmp}/healtos-plist.XXXXXXXX")"
-      render_plist "$DIR/deploy/launchd/org.healtos.bridge.plist" "" "$logs" >"$tmp"
-      install_file "$tmp" "$agents/org.healtos.bridge.plist" 644 || die 1 "Could not install the bridge agent." "Köprü ajanı kurulamadı."
+      tmp="$(mktemp "${TMPDIR:-/tmp}/healthos-plist.XXXXXXXX")"
+      render_plist "$DIR/deploy/launchd/org.healthos.bridge.plist" "" "$logs" >"$tmp"
+      retire_legacy_agent bridge
+      install_file "$tmp" "$agents/org.healthos.bridge.plist" 644 || die 1 "Could not install the bridge agent." "Köprü ajanı kurulamadı."
       rm -f "$tmp"
       if [ -f "$HOME/.codex/auth.json" ] || [ "$DRY_RUN" = 1 ]; then
-        [ "$NO_START" = 1 ] || load_agent org.healtos.bridge "$agents/org.healtos.bridge.plist"
+        [ "$NO_START" = 1 ] || load_agent org.healthos.bridge "$agents/org.healthos.bridge.plist"
       else
-        note "Sign in with 'codex login', then: launchctl bootstrap gui/$(id -u) $agents/org.healtos.bridge.plist" \
-          "'codex login' ile giriş yapın, sonra: launchctl bootstrap gui/$(id -u) $agents/org.healtos.bridge.plist"
+        note "Sign in with 'codex login', then: launchctl bootstrap gui/$(id -u) $agents/org.healthos.bridge.plist" \
+          "'codex login' ile giriş yapın, sonra: launchctl bootstrap gui/$(id -u) $agents/org.healthos.bridge.plist"
       fi
     fi
   fi
@@ -2081,16 +2129,54 @@ nas_guidance() {
       "  - Günlük yedek: zamanlanmış görev ekleyin (Synology Görev Zamanlayıcı, QNAP crontab, Unraid User Scripts,"
     say "    TrueNAS Cron Jobs) that runs as root at 03:30, with age installed (static binary if no package):" \
       "    TrueNAS Cron Jobs); root olarak 03:30'da çalışsın, age kurulu olsun (paket yoksa statik dosya):"
-    printf '      cd %s && BACKUP_KEY_FILE=/root/.config/healtos/backup.key /bin/bash scripts/backup.sh\n' "$DIR"
-    say "    Create the key once: age-keygen -o /root/.config/healtos/backup.key (copy it off the NAS!)." \
-      "    Anahtarı bir kez oluşturun: age-keygen -o /root/.config/healtos/backup.key (NAS dışına kopyalayın!)."
+    printf '      cd %s && BACKUP_KEY_FILE=/root/.config/healthos/backup.key /bin/bash scripts/backup.sh\n' "$DIR"
+    say "    Create the key once: age-keygen -o /root/.config/healthos/backup.key (copy it off the NAS!)." \
+      "    Anahtarı bir kez oluşturun: age-keygen -o /root/.config/healthos/backup.key (NAS dışına kopyalayın!)."
+    say "    A task set up earlier with /root/.config/healtos/backup.key keeps working; that file is never removed." \
+      "    Daha önce /root/.config/healtos/backup.key ile kurulan görev çalışmaya devam eder; o dosya asla silinmez."
   fi
   [ "$UMAY" != yes ] || say "  - Umay on a NAS: run the bridge by hand (docs/DEPLOYMENT.md, step 9)." \
     "  - NAS'ta Umay: köprüyü elle çalıştırın (docs/DEPLOYMENT.md, 9. adım)."
   say "  Full guide: docs/INSTALL.md (NAS section)." "  Tam rehber: docs/INSTALL.md (NAS bölümü)."
 }
 
+copy_legacy_config() {
+  # copy_legacy_config OLD NEW: every file of the pre-rename directory OLD (backup.key,
+  # backup.env, bridge.env, tokens) that NEW lacks is copied with cp -p (mode 600 stays 600).
+  # OLD and its files are never moved, changed or deleted; an existing file in NEW wins.
+  local old="$1" new="$2" file name
+  [ -d "$old" ] || return 0
+  for file in "$old"/* "$old"/.[!.]*; do
+    [ -f "$file" ] || continue
+    name="${file##*/}"
+    if [ -e "$new/$name" ] || [ -L "$new/$name" ]; then
+      continue
+    fi
+    if [ ! -d "$new" ]; then
+      if [ "$DRY_RUN" = 1 ]; then
+        printf '  [dry-run] (umask 077; mkdir -p %s)\n' "$new"
+      else
+        (umask 077 && mkdir -p "$new") || { warn "Could not create $new." "$new oluşturulamadı."; return 0; }
+      fi
+    fi
+    if [ "$DRY_RUN" = 1 ]; then
+      run cp -p "$file" "$new/$name"
+      PLANNED_COPIES="$PLANNED_COPIES|$new/$name|"
+    elif run cp -p "$file" "$new/$name"; then
+      say "  Copied $file to $new/$name (old name HealtOS; the original is kept)." \
+        "  $file, $new/$name konumuna kopyalandı (eski ad HealtOS; asıl dosya korunur)."
+    else
+      warn "Could not copy $file to $new/$name; the old file still works." \
+        "$file, $new/$name konumuna kopyalanamadı; eski dosya çalışmaya devam eder."
+    fi
+  done
+}
+
 host_jobs() {
+  copy_legacy_config "$HOME/.config/healtos" "$HOME/.config/healthos"
+  if [ "$PLATFORM" = macos ]; then
+    copy_legacy_config "$HOME/Library/Application Support/HealtOS" "$HOME/Library/Application Support/HealthOS"
+  fi
   case "$PLATFORM" in
     nas) nas_guidance ;;
     macos) mac_jobs ;;
@@ -2110,7 +2196,7 @@ summary() {
     say "  Dry run finished: nothing was installed or started. Preview: $ENV_RESULT" \
       "  Deneme bitti: hiçbir şey kurulmadı ya da başlatılmadı. Önizleme: $ENV_RESULT"
   elif [ "$STARTED" = 1 ]; then
-    ok "HealtOS is running." "HealtOS çalışıyor."
+    ok "HealthOS is running." "HealthOS çalışıyor."
   elif [ "$START_SKIPPED" = missing ]; then
     warn "Configured, NOT started: the values below are still missing." "Yapılandırıldı, BAŞLATILMADI: aşağıdaki değerler hâlâ eksik."
   else
@@ -2211,7 +2297,7 @@ main() {
   fi
   detect_host
   choose_language
-  printf '\n%sHealtOS installer %s%s\n' "$C_B" "$HEALTOS_INSTALLER_VERSION" "$C_0"
+  printf '\n%sHealthOS installer %s%s\n' "$C_B" "$HEALTHOS_INSTALLER_VERSION" "$C_0"
   say "Detected: $(host_label) ($HOST_ARCH)$([ "$IS_ROOT" = 1 ] && echo ', root')" \
     "Algılanan: $(host_label) ($HOST_ARCH)$([ "$IS_ROOT" = 1 ] && echo ', root')"
   if [ "$NONINTERACTIVE" = 0 ] && [ "$INTERACTIVE" = 0 ]; then

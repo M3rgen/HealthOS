@@ -1,8 +1,8 @@
-# HealtOS Umay bridge (optional). Manual install: docs/RUNBOOK.md, "Restart the Umay bridge".
+# HealthOS Umay bridge (optional). Manual install: docs/RUNBOOK.md, "Restart the Umay bridge".
 # Template: install.sh installs this unit with every /opt/healthos replaced by the
 # checkout directory; without root it installs a user-unit variant (systemctl --user,
 # lingering on) with the root-only lines removed and /etc/healthos replaced by
-# ~/.config/healtos. Installing by hand from another directory: change those paths too.
+# ~/.config/healthos. Installing by hand from another directory: change those paths too.
 [Unit]
 Description=HealthOS Umay bridge
 After=network-online.target docker.service

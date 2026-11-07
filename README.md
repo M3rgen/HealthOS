@@ -1,11 +1,11 @@
 <div align="center">
 
-<img src="docs/media/healtos-banner.svg" alt="HealtOS — Your health, in your hands." width="100%" />
+<img src="docs/media/healthos-banner.svg" alt="HealthOS — Your health, in your hands." width="100%" />
 
 <p><strong>A self-hosted, read-only archive for your Google Health, Garmin and Apple Health data, with a calm dashboard on top.</strong></p>
 
-[![CI](https://github.com/M3rgen/HealtOS/actions/workflows/ci.yml/badge.svg)](https://github.com/M3rgen/HealtOS/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/badge/release-v0.2.2-f0c478)](https://github.com/M3rgen/HealtOS/releases/tag/v0.2.2)
+[![CI](https://github.com/M3rgen/HealthOS/actions/workflows/ci.yml/badge.svg)](https://github.com/M3rgen/HealthOS/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/badge/release-v0.2.2-f0c478)](https://github.com/M3rgen/HealthOS/releases/tag/v0.2.2)
 [![MIT License](https://img.shields.io/badge/license-MIT-d0ae70)](LICENSE)
 ![Python](https://img.shields.io/badge/Python-3.12%2B-3776ab)
 ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-17-4169e1)
@@ -19,16 +19,16 @@
 
 > **Türkçe kurulum:** Kurulum sihirbazı Türkçe de konuşur. Adım adım Türkçe rehber: [docs/INSTALL.tr.md](docs/INSTALL.tr.md).
 
-HealtOS copies the health and fitness records you can read through **Google Health API v4** into a PostgreSQL database you operate. It can also pull your own **Garmin Connect** data through Garmin's Personal API and import **Apple Health** exports; every source is optional. It keeps the original payloads before anything is normalized, shows daily movement, sleep, heart rate, HRV and oxygen saturation in a single-screen dashboard, and lets you export your history whenever you want. An optional companion, **Umay**, can help you read the archive through a separate Codex conversation.
+HealthOS copies the health and fitness records you can read through **Google Health API v4** into a PostgreSQL database you operate. It can also pull your own **Garmin Connect** data through Garmin's Personal API and import **Apple Health** exports; every source is optional. It keeps the original payloads before anything is normalized, shows daily movement, sleep, heart rate, HRV and oxygen saturation in a single-screen dashboard, and lets you export your history whenever you want. An optional companion, **Umay**, can help you read the archive through a separate Codex conversation.
 
-The archive and dashboard need no AI subscription. HealtOS is a personal, single-user application, not a hosted or multi-user service.
+The archive and dashboard need no AI subscription. HealthOS is a personal, single-user application, not a hosted or multi-user service.
 
 > [!NOTE]
 > **Language.** Most documentation is in English; the dashboard, Umay's voice and a few newer operational notes are in Turkish.
 >
-> **Fitbit Web API shutdown.** Support for the legacy Fitbit Web API ended on September 30, 2026, and the API shut down completely on October 30, 2026. For Fitbit data HealtOS uses only Google Health API v4 (`health.googleapis.com/v4`), Google OAuth and `googlehealth.*` scopes, so it is not affected.
+> **Fitbit Web API shutdown.** Support for the legacy Fitbit Web API ended on September 30, 2026, and the API shut down completely on October 30, 2026. For Fitbit data HealthOS uses only Google Health API v4 (`health.googleapis.com/v4`), Google OAuth and `googlehealth.*` scopes, so it is not affected.
 >
-> *Eski Fitbit Web API'nin desteği 30 Eylül 2026'da sona erdi ve API 30 Ekim 2026'da tamamen kapandı. HealtOS yalnızca Google Health API v4'ü (`health.googleapis.com/v4`), Google OAuth'u ve `googlehealth.*` scope'larını kullandığı için bu kapanıştan etkilenmez.*
+> *Eski Fitbit Web API'nin desteği 30 Eylül 2026'da sona erdi ve API 30 Ekim 2026'da tamamen kapandı. HealthOS yalnızca Google Health API v4'ü (`health.googleapis.com/v4`), Google OAuth'u ve `googlehealth.*` scope'larını kullandığı için bu kapanıştan etkilenmez.*
 
 > [!IMPORTANT]
 > **API availability.** As of October 3, 2026, Google says new Google Health API projects are not being onboarded. Real synchronization requires an eligible Google Cloud project and a linked Google Health account. Without credentials you can still run the empty dashboard, manual entries and the automated tests. Check the [official setup guide](https://developers.google.com/health/setup) before planning an integration.
@@ -51,7 +51,7 @@ Missing measurements stay missing; they never become zero. Google health-data en
 
 ## A closer look
 
-![HealtOS desktop dashboard with profile, data connection, daily cards and the last seven days, all synthetic](docs/media/dashboard-desktop.png)
+![HealthOS desktop dashboard with profile, data connection, daily cards and the last seven days, all synthetic](docs/media/dashboard-desktop.png)
 
 <table>
 <tr>
@@ -69,7 +69,7 @@ Missing measurements stay missing; they never become zero. Google health-data en
 <details>
 <summary>See the mobile layout</summary>
 
-<p align="center"><img src="docs/media/dashboard-mobile.png" alt="HealtOS mobile dashboard with synthetic records" width="360" />&nbsp;<img src="docs/media/umay-chat-mobile.png" alt="Umay chat on a phone with a synthetic weekly summary" width="360" /></p>
+<p align="center"><img src="docs/media/dashboard-mobile.png" alt="HealthOS mobile dashboard with synthetic records" width="360" />&nbsp;<img src="docs/media/umay-chat-mobile.png" alt="Umay chat on a phone with a synthetic weekly summary" width="360" /></p>
 
 </details>
 
@@ -77,7 +77,7 @@ Missing measurements stay missing; they never become zero. Google health-data en
 
 ```mermaid
 flowchart LR
-    G[Google Health API v4] -->|Read-only OAuth| A[HealtOS / FastAPI]
+    G[Google Health API v4] -->|Read-only OAuth| A[HealthOS / FastAPI]
     G -->|Optional signed webhooks| A
     R[Garmin Connect Personal API] -->|Optional read-only pull| A
     H[Apple Health export.zip] -->|Optional upload| A
@@ -96,30 +96,30 @@ The guided installer sets everything up: it checks Docker, writes `.env` with fr
 **Linux, Raspberry Pi, VPS, macOS:**
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/M3rgen/HealtOS/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/M3rgen/HealthOS/main/install.sh | bash
 ```
 
 **Windows 10/11** (PowerShell):
 
 ```powershell
-irm https://raw.githubusercontent.com/M3rgen/HealtOS/main/install.ps1 | iex
+irm https://raw.githubusercontent.com/M3rgen/HealthOS/main/install.ps1 | iex
 ```
 
 **Pinned to release v0.2.2:**
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/M3rgen/HealtOS/v0.2.2/install.sh | bash -s -- --ref v0.2.2
+curl -fsSL https://raw.githubusercontent.com/M3rgen/HealthOS/v0.2.2/install.sh | bash -s -- --ref v0.2.2
 ```
 
 ```powershell
-& ([scriptblock]::Create((irm https://raw.githubusercontent.com/M3rgen/HealtOS/v0.2.2/install.ps1))) -Ref v0.2.2
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/M3rgen/HealthOS/v0.2.2/install.ps1))) -Ref v0.2.2
 ```
 
 **Prefer to read before running?** Clone, read the script, then run it from the checkout (`--dry-run` prints every action without doing it):
 
 ```sh
-git clone https://github.com/M3rgen/HealtOS.git
-cd HealtOS
+git clone https://github.com/M3rgen/HealthOS.git
+cd HealthOS
 ./install.sh --dry-run
 ./install.sh                 # Windows: powershell -ExecutionPolicy Bypass -File .\install.ps1
 ```
@@ -131,18 +131,18 @@ When it finishes, open **[localhost:8000](http://localhost:8000)** and enter the
 A coding agent with shell access can do the installation for you by following [AI_INSTALL.md](docs/AI_INSTALL.md). Give it this prompt:
 
 ```text
-Install HealtOS on this computer by following https://raw.githubusercontent.com/M3rgen/HealtOS/main/docs/AI_INSTALL.md — ask me before any step that needs admin rights or my accounts, and never delete data.
+Install HealthOS on this computer by following https://raw.githubusercontent.com/M3rgen/HealthOS/main/docs/AI_INSTALL.md — ask me before any step that needs admin rights or my accounts, and never delete data.
 ```
 
 ```text
-Bu bilgisayara HealtOS'u kur: https://raw.githubusercontent.com/M3rgen/HealtOS/main/docs/AI_INSTALL.md adımlarını izle; yönetici izni ya da hesap bilgisi gereken her adımdan önce bana sor ve hiçbir veriyi silme.
+Bu bilgisayara HealthOS'u kur: https://raw.githubusercontent.com/M3rgen/HealthOS/main/docs/AI_INSTALL.md adımlarını izle; yönetici izni ya da hesap bilgisi gereken her adımdan önce bana sor ve hiçbir veriyi silme.
 ```
 
 Ready to run in a terminal, with [Claude Code](https://docs.claude.com/en/docs/claude-code/overview) or the OpenAI Codex CLI:
 
 ```sh
-claude "Install HealtOS on this computer by following https://raw.githubusercontent.com/M3rgen/HealtOS/main/docs/AI_INSTALL.md — ask me before any step that needs admin rights or my accounts, and never delete data."
-codex "Install HealtOS on this computer by following https://raw.githubusercontent.com/M3rgen/HealtOS/main/docs/AI_INSTALL.md — ask me before any step that needs admin rights or my accounts, and never delete data."
+claude "Install HealthOS on this computer by following https://raw.githubusercontent.com/M3rgen/HealthOS/main/docs/AI_INSTALL.md — ask me before any step that needs admin rights or my accounts, and never delete data."
+codex "Install HealthOS on this computer by following https://raw.githubusercontent.com/M3rgen/HealthOS/main/docs/AI_INSTALL.md — ask me before any step that needs admin rights or my accounts, and never delete data."
 ```
 
 Or paste the prompt into Claude Code, Codex or any other agent that can run commands. The agent asks you the same questions as the installer, shows a dry run first, then runs the installer non-interactively with your answers.
@@ -176,8 +176,8 @@ The installer only automates these steps; you can do them by hand. Details for e
 #### 1. Clone and configure
 
 ```sh
-git clone https://github.com/M3rgen/HealtOS.git
-cd HealtOS
+git clone https://github.com/M3rgen/HealthOS.git
+cd HealthOS
 cp -n .env.example .env     # -n: never overwrite an existing .env
 python3 -c "import secrets; print(secrets.token_hex(32))"        # POSTGRES_PASSWORD
 python3 -c "import secrets; print(secrets.token_urlsafe(32))"    # APP_UI_TOKEN
@@ -185,7 +185,7 @@ python3 -c "import secrets; print(secrets.token_urlsafe(32))"    # APP_UI_TOKEN
 
 Put the two values in `.env`. This manual path is for installs without the installer; the installer writes the same file for you. `APP_UI_TOKEN` is the access key for the dashboard and API (32 to 512 printable characters without spaces); scripts send it as `Authorization: Bearer <token>`. A hexadecimal `POSTGRES_PASSWORD` avoids URL-escaping issues. `.env` is ignored by Git.
 
-#### 2. Start HealtOS
+#### 2. Start HealthOS
 
 The Compose file runs the app in production mode, which refuses to start until Google and webhook credentials are configured. For a first local look without Google, select the development override by adding this line to `.env` (the installer does this for you in trial mode):
 
@@ -246,7 +246,7 @@ Apple Health data can come in directly, without Google, through two gates. Both 
 nothing is fetched from Apple, and the data stays in your database like everything else.
 
 - **Upload the Health app's export.** On the iPhone: Health › your profile picture › *Export All
-  Health Data*, and move `export.zip` to the computer that runs HealtOS. On the System page,
+  Health Data*, and move `export.zip` to the computer that runs HealthOS. On the System page,
   "Apple Sağlık içe aktar" › choose the file › *Yükle*. The file is read as a stream (large
   exports of several gigabytes work), the page shows progress and a summary, and uploading a newer
   export later adds only the new records. Native installs can also run
@@ -280,7 +280,7 @@ The bridge listens only on loopback or the Docker bridge address, never on all i
 
 ## Privacy and scope
 
-HealtOS is built for one person keeping their own records on their own hardware.
+HealthOS is built for one person keeping their own records on their own hardware.
 
 - **Personal and single-user.** There is one access token, no accounts and no hosted database. There is no application telemetry.
 - **Read-only towards every source.** Only read scopes are requested from Google and only read endpoints are called at Garmin; nothing is written back. Nothing is fetched from Apple: Apple data arrives only as a file or request you send.
@@ -290,7 +290,7 @@ HealtOS is built for one person keeping their own records on their own hardware.
 
 ### Backups
 
-Backups are encrypted and automated: [`scripts/backup.sh`](scripts/backup.sh) runs daily at 03:30 from a systemd timer ([`deploy/systemd/`](deploy/systemd/healthos-backup.timer)) on Linux, a launchd agent on macOS, or a Task Scheduler task running its PowerShell twin, `scripts/backup.ps1`, on Windows; the installer sets the schedule up (`--backups yes`, the default in full mode). It streams `pg_dump` from the Compose `backup` profile through `age` (preferred) or `gpg --symmetric`, writes `BACKUP_HOST_DIR/health-<stamp>.dump.age`, and **keeps every backup forever**: nothing is deleted unless you opt in with `BACKUP_RETENTION_DAYS`. A run refuses to start when the disk is short of space (it never deletes old backups to make room) and records its result in `BACKUP_HOST_DIR/last-backup-status.json`; a separate, read-only status directory lets the app report the last attempt and last success at `GET /health/backup`. The key lives outside `.env` (`BACKUP_AGE_RECIPIENT`, or an age identity the installer can create: `/etc/healthos/backup.key` or `~/.config/healtos/backup.key` on Linux, `~/Library/Application Support/HealtOS/backup.key` on macOS, `%APPDATA%\HealtOS\backup.key` on Windows; see [backups per platform](docs/INSTALL.md#backups)). **Keep a copy of the backup key (or age identity) off the host, for example in a password manager: if it is lost, every backup is unreadable.**
+Backups are encrypted and automated: [`scripts/backup.sh`](scripts/backup.sh) runs daily at 03:30 from a systemd timer ([`deploy/systemd/`](deploy/systemd/healthos-backup.timer)) on Linux, a launchd agent on macOS, or a Task Scheduler task running its PowerShell twin, `scripts/backup.ps1`, on Windows; the installer sets the schedule up (`--backups yes`, the default in full mode). It streams `pg_dump` from the Compose `backup` profile through `age` (preferred) or `gpg --symmetric`, writes `BACKUP_HOST_DIR/health-<stamp>.dump.age`, and **keeps every backup forever**: nothing is deleted unless you opt in with `BACKUP_RETENTION_DAYS`. A run refuses to start when the disk is short of space (it never deletes old backups to make room) and records its result in `BACKUP_HOST_DIR/last-backup-status.json`; a separate, read-only status directory lets the app report the last attempt and last success at `GET /health/backup`. The key lives outside `.env` (`BACKUP_AGE_RECIPIENT`, or an age identity the installer can create: `/etc/healthos/backup.key` or `~/.config/healthos/backup.key` on Linux, `~/Library/Application Support/HealthOS/backup.key` on macOS, `%APPDATA%\HealthOS\backup.key` on Windows; see [backups per platform](docs/INSTALL.md#backups)). **Keep a copy of the backup key (or age identity) off the host, for example in a password manager: if it is lost, every backup is unreadable.**
 
 ```sh
 make backup                                         # one encrypted backup now
@@ -306,7 +306,7 @@ docker compose exec app health-mirror verify
 | --- | --- |
 | [Installation](docs/INSTALL.md) | The installer and its options, every platform, data sources, backups per OS, updating, uninstalling without losing data, troubleshooting. |
 | [Kurulum](docs/INSTALL.tr.md) | The same installation guide in Turkish. |
-| [Installing with an AI agent](docs/AI_INSTALL.md) | Step-by-step instructions a coding agent follows to install HealtOS for you. |
+| [Installing with an AI agent](docs/AI_INSTALL.md) | Step-by-step instructions a coding agent follows to install HealthOS for you. |
 | [Technical reference](docs/REFERENCE.md) | Data types, scopes, configuration, APIs, record identity, archiving, backups and troubleshooting. |
 | [Deployment](docs/DEPLOYMENT.md) | A production Debian VM by hand: Compose, SSH-tunnel access, webhook tunnel, backups, Umay bridge. |
 | [Runbook](docs/RUNBOOK.md) | Updates, migrations, key rotation, restore drills and diagnosing a quiet webhook. |
@@ -326,8 +326,8 @@ Contributions are welcome. Keep changes focused, use synthetic examples only and
 
 ## Project status and license
 
-**Current release: [v0.2.2](https://github.com/M3rgen/HealtOS/releases/tag/v0.2.2).** HealtOS is an evolving personal self-hosted project. The public snapshot includes the application, migrations, the installers, deterministic dependency locks, automated tests and CI. Google access and available records vary by project and account. The interface is Turkish, defaults to UTC, and has English documentation.
+**Current release: [v0.2.2](https://github.com/M3rgen/HealthOS/releases/tag/v0.2.2).** HealthOS is an evolving personal self-hosted project. The public snapshot includes the application, migrations, the installers, deterministic dependency locks, automated tests and CI. Google access and available records vary by project and account. The interface is Turkish, defaults to UTC, and has English documentation.
 
 Project code is available under the [MIT License](LICENSE). The generic anatomical model retains its [MakeHuman provenance and CC0 license](frontend/public/models/PROVENANCE.md).
 
-HealtOS is an independent project and is not affiliated with Google, Fitbit, Garmin, Apple or OpenAI.
+HealthOS is an independent project and is not affiliated with Google, Fitbit, Garmin, Apple or OpenAI.

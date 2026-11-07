@@ -47,23 +47,43 @@ test('cleanPreferences keeps only known, well-formed values', () => {
 });
 
 test('reads the keys the dashboard used before, so existing choices survive', t => {
-  environment(t, { local: { 'healtos.timezone.v2': 'UTC', 'healtos.motion': 'false' } });
+  environment(t, { local: { 'healthos.timezone.v2': 'UTC', 'healthos.motion': 'false' } });
   assert.deepEqual(createDisplayPreferences({ validZone }).read(), { timezone: 'UTC', motion: false });
+});
+
+test('keys kept under the old product name are read, copied to the new keys and kept', t => {
+  const { items } = environment(t, { local: { 'healtos.timezone.v2': 'UTC', 'healtos.motion': 'false', 'healtos.display.pending': '1' } });
+  assert.deepEqual(createDisplayPreferences({ validZone }).read(), { timezone: 'UTC', motion: false });
+  assert.equal(items.get('healthos.timezone.v2'), 'UTC');
+  assert.equal(items.get('healthos.motion'), 'false');
+  assert.equal(items.get('healthos.display.pending'), '1');
+  for (const key of ['healtos.timezone.v2', 'healtos.motion', 'healtos.display.pending']) assert.ok(items.has(key));
+});
+
+test('a preference cleared after the carry-over does not return from the old key', async t => {
+  const { items } = environment(t, {
+    remote: { schema_version: 1, preferences: { timezone: 'Europe/Istanbul' }, updated_at: '2026-11-01T08:00:00Z' },
+    local: { 'healtos.motion': 'false' },
+  });
+  assert.deepEqual(await createDisplayPreferences({ validZone }).sync(), { timezone: 'Europe/Istanbul' });
+  assert.equal(items.has('healthos.motion'), false);
+  assert.deepEqual(createDisplayPreferences({ validZone }).read(), { timezone: 'Europe/Istanbul' });
+  assert.equal(items.get('healtos.motion'), 'false');
 });
 
 test('a server copy wins and replaces this browser copy', async t => {
   const { items } = environment(t, {
     remote: { schema_version: 1, preferences: { timezone: 'Europe/Istanbul' }, updated_at: '2026-11-01T08:00:00Z' },
-    local: { 'healtos.timezone.v2': 'UTC', 'healtos.motion': 'false' },
+    local: { 'healthos.timezone.v2': 'UTC', 'healthos.motion': 'false' },
   });
   const display = createDisplayPreferences({ validZone });
   assert.deepEqual(await display.sync(), { timezone: 'Europe/Istanbul' });
-  assert.equal(items.get('healtos.timezone.v2'), 'Europe/Istanbul');
-  assert.equal(items.has('healtos.motion'), false);
+  assert.equal(items.get('healthos.timezone.v2'), 'Europe/Istanbul');
+  assert.equal(items.has('healthos.motion'), false);
 });
 
 test('a server with nothing stored receives this browser copy', async t => {
-  const { state } = environment(t, { local: { 'healtos.motion': 'false' } });
+  const { state } = environment(t, { local: { 'healthos.motion': 'false' } });
   assert.equal(await createDisplayPreferences({ validZone }).sync(), null);
   assert.deepEqual(state.puts, [{ schema_version: 1, preferences: { motion: false } }]);
 });
@@ -77,20 +97,20 @@ test('offline: the change applies here, stays pending, and is sent once the serv
   const display = createDisplayPreferences({ validZone, onStatus: status => statuses.push(status) });
   await display.write({ timezone: 'Europe/Istanbul', motion: false });
   assert.deepEqual(display.read(), { timezone: 'Europe/Istanbul', motion: false });
-  assert.equal(items.get('healtos.display.pending'), '1');
+  assert.equal(items.get('healthos.display.pending'), '1');
   assert.equal(await display.sync(), null);
   assert.deepEqual(statuses, ['saving', 'offline']);
 
   state.online = true; // Next load: the unsent change beats the older server copy.
   assert.equal(await createDisplayPreferences({ validZone }).sync(), null);
   assert.deepEqual(state.puts, [{ schema_version: 1, preferences: { timezone: 'Europe/Istanbul', motion: false } }]);
-  assert.equal(items.has('healtos.display.pending'), false);
+  assert.equal(items.has('healthos.display.pending'), false);
 });
 
 test('a server copy in a newer schema version is not applied', async t => {
   environment(t, {
     remote: { schema_version: 2, preferences: { timezone: { name: 'UTC' } }, updated_at: '2026-11-01T08:00:00Z' },
-    local: { 'healtos.timezone.v2': 'UTC' },
+    local: { 'healthos.timezone.v2': 'UTC' },
   });
   const display = createDisplayPreferences({ validZone });
   assert.equal(await display.sync(), null);

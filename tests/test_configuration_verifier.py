@@ -60,9 +60,9 @@ def test_documentation_link_check_reports_missing_files_and_anchors(tmp_path: Pa
 
 
 def test_heading_anchors_follow_github_slugs():
-    markdown = "# HealtOS — Reference\n## Setup\n## Setup\n### [Link](x) and `code`\n"
+    markdown = "# HealthOS — Reference\n## Setup\n## Setup\n### [Link](x) and `code`\n"
     anchors = heading_anchors(markdown)
-    assert anchors == {"healtos--reference", "setup", "setup-1", "link-and-code"}
+    assert anchors == {"healthos--reference", "setup", "setup-1", "link-and-code"}
 
 
 @pytest.fixture

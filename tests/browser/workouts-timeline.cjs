@@ -39,7 +39,7 @@ run(async () => {
       let heldMonth, held, failed = false, saved;
       page.on('pageerror', error => errors.push(error.message));
       await page.clock.setFixedTime(new Date('2026-01-15T12:00:00Z'));
-      await page.addInitScript(() => localStorage.setItem('healtos.timezone.v2', 'Europe/Istanbul'));
+      await page.addInitScript(() => localStorage.setItem('healthos.timezone.v2', 'Europe/Istanbul'));
       await page.route('**/health', route => route.fulfill({json: fx.health}));
       await page.route('**/api/dashboard?**', route => route.fulfill({json: fx.dashboard(new URL(route.request().url()).searchParams)}));
       await page.route('**/sync/status', route => route.fulfill({json: fx.syncStatus}));

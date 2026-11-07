@@ -8,26 +8,26 @@
   the bridge's private bridge.token or CODEX_BRIDGE_TOKEN in the checkout's .env; nothing
   secret is stored in this file. Privacy: questions and the records Umay requests go to OpenAI.
 
-  install.sh renders this template into ~/Library/LaunchAgents/org.healtos.bridge.plist with
+  install.sh renders this template into ~/Library/LaunchAgents/org.healthos.bridge.plist with
   absolute paths and loads it:
-    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/org.healtos.bridge.plist
-  Placeholders: @HEALTOS_DIR@ (checkout with a .venv made by uv sync (frozen, no dev)), @PATH@ (must
+    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/org.healthos.bridge.plist
+  Placeholders: @HEALTHOS_DIR@ (checkout with a .venv made by uv sync (frozen, no dev)), @PATH@ (must
   reach the codex CLI), @LOG_DIR@.
-  Restart:  launchctl kickstart -k gui/$(id -u)/org.healtos.bridge
-  Stop:     launchctl bootout gui/$(id -u)/org.healtos.bridge
+  Restart:  launchctl kickstart -k gui/$(id -u)/org.healthos.bridge
+  Stop:     launchctl bootout gui/$(id -u)/org.healthos.bridge
 -->
 <plist version="1.0">
 <dict>
   <key>Label</key>
-  <string>org.healtos.bridge</string>
+  <string>org.healthos.bridge</string>
   <key>ProgramArguments</key>
   <array>
-    <string>@HEALTOS_DIR@/.venv/bin/python</string>
-    <string>@HEALTOS_DIR@/scripts/start_codex_bridge.py</string>
+    <string>@HEALTHOS_DIR@/.venv/bin/python</string>
+    <string>@HEALTHOS_DIR@/scripts/start_codex_bridge.py</string>
     <string>--foreground</string>
   </array>
   <key>WorkingDirectory</key>
-  <string>@HEALTOS_DIR@</string>
+  <string>@HEALTHOS_DIR@</string>
   <key>EnvironmentVariables</key>
   <dict>
     <key>PATH</key>

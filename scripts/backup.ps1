@@ -10,17 +10,18 @@ would re-encode them as text and corrupt the dump).
 
 Encryption key (never in .env, never next to the backups):
   1. BACKUP_AGE_RECIPIENT=age1...  -> age, public key only on the host (preferred)
-  2. BACKUP_KEY_FILE (default %APPDATA%\HealtOS\backup.key, readable only by your account):
+  2. BACKUP_KEY_FILE (default %APPDATA%\HealthOS\backup.key, readable only by your account):
        an age identity (AGE-SECRET-KEY-...) -> age
        any other content                    -> gpg --symmetric passphrase
   Keep a copy of the key (or the age identity) off this computer, e.g. in a password manager:
   without it every backup is unreadable. age: winget install FiloSottile.age
 
-Settings come from the environment, then %APPDATA%\HealtOS\backup.env (like systemd's
+Settings come from the environment, then %APPDATA%\HealthOS\backup.env (like systemd's
 EnvironmentFile; applied only to variables the environment does not set), then the project's
 .env file: BACKUP_HOST_DIR (default .\backups), BACKUP_STATUS_HOST_DIR (default
 .\backup-status), BACKUP_RETENTION_DAYS, BACKUP_MIN_FREE_MB; BACKUP_AGE_RECIPIENT and
-BACKUP_KEY_FILE only from the environment or backup.env.
+BACKUP_KEY_FILE only from the environment or backup.env. Installs up to 0.2.2 used the misspelled
+%APPDATA%\HealtOS: while a file is missing in %APPDATA%\HealthOS, the old one is used.
 
 Backups are kept forever. Nothing is ever deleted unless BACKUP_RETENTION_DAYS is explicitly set
 (environment, else .env) to a positive whole number of days; unset, empty, 0, "never" or anything
@@ -46,7 +47,7 @@ $GiB = [decimal]1073741824
 $StatusName = 'last-backup-status.json'
 $DotEnv = Join-Path $Root '.env'
 
-Import-HealtOSBackupEnv (Join-Path (Get-HealtOSConfigDir) 'backup.env')
+Import-HealthOSBackupEnv (Get-HealthOSConfigFile 'backup.env')
 
 function Write-Log {
     param([string]$Message)
@@ -58,7 +59,7 @@ function Get-Setting {
     param([string]$Name)
     $value = [System.Environment]::GetEnvironmentVariable($Name)
     if ($value) { return $value }
-    return (Get-HealtOSDotEnvValue -File $DotEnv -Name $Name)
+    return (Get-HealthOSDotEnvValue -File $DotEnv -Name $Name)
 }
 
 $State = @{
@@ -77,12 +78,12 @@ $State = @{
 
 $BackupDir = Get-Setting 'BACKUP_HOST_DIR'
 if (-not $BackupDir) { $BackupDir = './backups' }
-$BackupDir = Resolve-HealtOSPath -Path $BackupDir -Base $Root
+$BackupDir = Resolve-HealthOSPath -Path $BackupDir -Base $Root
 $StatusDir = Get-Setting 'BACKUP_STATUS_HOST_DIR'
 if (-not $StatusDir) { $StatusDir = './backup-status' }
-$StatusDir = Resolve-HealtOSPath -Path $StatusDir -Base $Root
+$StatusDir = Resolve-HealthOSPath -Path $StatusDir -Base $Root
 $KeyFile = $env:BACKUP_KEY_FILE
-if (-not $KeyFile) { $KeyFile = Join-Path (Get-HealtOSConfigDir) 'backup.key' }
+if (-not $KeyFile) { $KeyFile = Get-HealthOSConfigFile 'backup.key' }
 $Recipient = $env:BACKUP_AGE_RECIPIENT
 
 function Fail {
@@ -165,7 +166,7 @@ function Write-AtomicText {
     } finally {
         $stream.Dispose()
     }
-    if (-not (Test-HealtOSWindows) -and $UnixMode) { & chmod $UnixMode $temporary }
+    if (-not (Test-HealthOSWindows) -and $UnixMode) { & chmod $UnixMode $temporary }
     if (Test-Path -LiteralPath $Target -PathType Leaf) {
         try {
             [System.IO.File]::Replace($temporary, $Target, [NullString]::Value)
@@ -186,7 +187,7 @@ function Publish-StatusMetadata {
     if (-not (Test-Path -LiteralPath $StatusDir -PathType Container)) {
         New-Item -ItemType Directory -Path $StatusDir -Force | Out-Null
     }
-    if (-not (Test-HealtOSWindows)) { & chmod 755 $StatusDir }
+    if (-not (Test-HealthOSWindows)) { & chmod 755 $StatusDir }
     $lockPath = Join-Path $StatusDir '.writer.lock'
     $lock = $null
     for ($attempt = 0; $attempt -lt 120 -and $null -eq $lock; $attempt++) {
@@ -207,9 +208,9 @@ function Publish-StatusMetadata {
         $success = $previous.Success
         if ($Result -eq 'success') { $success = $Timestamp }
         $successJson = 'null'
-        if ($null -ne $success) { $successJson = ConvertTo-HealtOSJsonString $success }
-        $text = '{"schema_version": 1, "last_attempt": {"result": ' + (ConvertTo-HealtOSJsonString $Result) +
-            ', "timestamp": ' + (ConvertTo-HealtOSJsonString $Timestamp) + '}, "last_success_at": ' +
+        if ($null -ne $success) { $successJson = ConvertTo-HealthOSJsonString $success }
+        $text = '{"schema_version": 1, "last_attempt": {"result": ' + (ConvertTo-HealthOSJsonString $Result) +
+            ', "timestamp": ' + (ConvertTo-HealthOSJsonString $Timestamp) + '}, "last_success_at": ' +
             $successJson + "}`n"
         Write-AtomicText -Directory $StatusDir -Target $path -Text $text -Prefix '.status-' -UnixMode '644'
     } finally {
@@ -220,7 +221,7 @@ function Publish-StatusMetadata {
 function Write-Status {
     # Write-Status RESULT MESSAGE; atomic replace, never fatal.
     param([string]$Result, [string]$Message)
-    $timestamp = Get-HealtOSUtcStamp "yyyy'-'MM'-'dd'T'HH':'mm':'ss'Z'"
+    $timestamp = Get-HealthOSUtcStamp "yyyy'-'MM'-'dd'T'HH':'mm':'ss'Z'"
     try {
         Publish-StatusMetadata -Result $Result -Timestamp $timestamp
     } catch {
@@ -233,9 +234,9 @@ function Write-Status {
     } catch {
         return
     }
-    $free = Get-HealtOSFreeBytes $BackupDir
+    $free = Get-HealthOSFreeBytes $BackupDir
     $fileJson = 'null'
-    if ($State.Output -and $Result -eq 'success') { $fileJson = ConvertTo-HealtOSJsonString $State.Output }
+    if ($State.Output -and $Result -eq 'success') { $fileJson = ConvertTo-HealthOSJsonString $State.Output }
     $number = {
         param($Value)
         if ($null -eq $Value -or "$Value" -eq '') { return 'null' }
@@ -243,14 +244,14 @@ function Write-Status {
     }
     $lines = @(
         '{',
-        ('  "timestamp": ' + (ConvertTo-HealtOSJsonString $timestamp) + ','),
-        ('  "result": ' + (ConvertTo-HealtOSJsonString $Result) + ','),
-        ('  "message": ' + (ConvertTo-HealtOSJsonString $Message) + ','),
+        ('  "timestamp": ' + (ConvertTo-HealthOSJsonString $timestamp) + ','),
+        ('  "result": ' + (ConvertTo-HealthOSJsonString $Result) + ','),
+        ('  "message": ' + (ConvertTo-HealthOSJsonString $Message) + ','),
         ('  "file": ' + $fileJson + ','),
         ('  "size_bytes": ' + (& $number $State.SizeBytes) + ','),
         ('  "free_bytes": ' + (& $number $free) + ','),
         ('  "required_free_bytes": ' + (& $number $State.RequiredBytes) + ','),
-        ('  "retention_days": ' + (ConvertTo-HealtOSJsonString $State.RetentionLabel) + ','),
+        ('  "retention_days": ' + (ConvertTo-HealthOSJsonString $State.RetentionLabel) + ','),
         ('  "pruned_files": ' + $State.PrunedCount),
         '}'
     )
@@ -285,7 +286,7 @@ function Get-RetentionDays {
     if (Test-Path -LiteralPath 'Env:BACKUP_RETENTION_DAYS') {
         $value = [string]$env:BACKUP_RETENTION_DAYS
     } else {
-        $value = Get-HealtOSDotEnvValue -File $DotEnv -Name 'BACKUP_RETENTION_DAYS'
+        $value = Get-HealthOSDotEnvValue -File $DotEnv -Name 'BACKUP_RETENTION_DAYS'
     }
     if ($value -eq '' -or $value -ieq 'never') { return 0 }
     if ($value -notmatch '^[0-9]+$') {
@@ -333,7 +334,7 @@ function Test-KeyFile {
     } catch {
         Fail "$KeyFile is not readable by $([System.Environment]::UserName)"
     }
-    $problem = Get-HealtOSAclProblem $KeyFile
+    $problem = Get-HealthOSAclProblem $KeyFile
     if ($problem) {
         Fail ("$KeyFile must be readable only by your account ($problem); run: " +
             "powershell -ExecutionPolicy Bypass -File deploy\windows\protect-file.ps1 `"$KeyFile`"")
@@ -352,29 +353,29 @@ function Invoke-Backup {
     }
 
     if ($Recipient) {
-        $tool = Find-HealtOSCommand 'age'
+        $tool = Find-HealthOSCommand 'age'
         if (-not $tool) { Fail 'BACKUP_AGE_RECIPIENT is set but age is not installed (winget install FiloSottile.age)' }
         $method = 'age'
         $encrypt = @('--encrypt', '--recipient', $Recipient)
     } elseif (Test-KeyFile) {
         if ([System.IO.File]::ReadAllText($KeyFile) -match '(?m)^AGE-SECRET-KEY-') {
-            $tool = Find-HealtOSCommand 'age'
+            $tool = Find-HealthOSCommand 'age'
             if (-not $tool) { Fail "$KeyFile is an age identity but age is not installed (winget install FiloSottile.age)" }
             $method = 'age'
             $encrypt = @('--encrypt', '--identity', $KeyFile)
         } else {
-            $tool = Find-HealtOSCommand 'gpg'
+            $tool = Find-HealthOSCommand 'gpg'
             if (-not $tool) { Fail 'gpg is required for a passphrase key file (winget install GnuPG.Gpg4win)' }
             $method = 'gpg'
             $encrypt = @('--batch', '--quiet', '--yes', '--pinentry-mode', 'loopback', '--symmetric',
                 '--cipher-algo', 'AES256', '--passphrase-file', $KeyFile, '--output', '-')
         }
     } else {
-        Fail ("no backup key: set BACKUP_AGE_RECIPIENT (e.g. in $(Join-Path (Get-HealtOSConfigDir) 'backup.env')) " +
+        Fail ("no backup key: set BACKUP_AGE_RECIPIENT (e.g. in $(Join-Path (Get-HealthOSConfigDir) 'backup.env')) " +
             "or create $KeyFile (readable only by your account); keys do not belong in .env")
     }
 
-    $docker = Find-HealtOSCommand 'docker'
+    $docker = Find-HealthOSCommand 'docker'
     if (-not $docker) { Fail 'docker was not found; install and start Docker Desktop' }
 
     try {
@@ -384,7 +385,7 @@ function Invoke-Backup {
     } catch {
         Fail "cannot create $BackupDir"
     }
-    if (-not (Test-HealtOSWindows)) { & chmod 700 $BackupDir 2>$null }
+    if (-not (Test-HealthOSWindows)) { & chmod 700 $BackupDir 2>$null }
 
     # Free-space guard: refuse before anything is written; never delete to make room.
     $newest = Get-HealthDumps | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1
@@ -400,17 +401,17 @@ function Invoke-Backup {
         $basis = '5 GiB before the first dump'
     }
     if ($State.RequiredBytes -gt 0) {
-        $freeBefore = Get-HealtOSFreeBytes $BackupDir
+        $freeBefore = Get-HealthOSFreeBytes $BackupDir
         if ($null -eq $freeBefore) { Fail "cannot read free space of $BackupDir" }
         if ([decimal]$freeBefore -lt $State.RequiredBytes) {
-            Fail ("refusing to start: $(Format-HealtOSGiB $freeBefore) free in $BackupDir, need " +
-                "$(Format-HealtOSGiB $State.RequiredBytes) ($basis). No backup was written or deleted. " +
+            Fail ("refusing to start: $(Format-HealthOSGiB $freeBefore) free in $BackupDir, need " +
+                "$(Format-HealthOSGiB $State.RequiredBytes) ($basis). No backup was written or deleted. " +
                 "Add disk space or move old backups to other storage (docs/RUNBOOK.md, 'Disk space for " +
                 "backups'), or set BACKUP_MIN_FREE_MB.")
         }
     }
 
-    $stamp = Get-HealtOSUtcStamp "yyyyMMdd'T'HHmmss'Z'"
+    $stamp = Get-HealthOSUtcStamp "yyyyMMdd'T'HHmmss'Z'"
     $target = Join-Path $BackupDir "health-$stamp.dump.$method"
     $State.Output = $target
 
@@ -424,22 +425,22 @@ function Invoke-Backup {
         Fail 'cannot allocate a private encrypted dump file'
     }
     $State.Partial = $partial
-    if (-not (Test-HealtOSWindows)) { & chmod 600 $partial }
+    if (-not (Test-HealthOSWindows)) { & chmod 600 $partial }
 
     $ok = $true
     try {
-        $dump = Start-HealtOSProcess -FilePath $docker -WorkingDirectory $Root -RedirectInput -RedirectOutput `
+        $dump = Start-HealthOSProcess -FilePath $docker -WorkingDirectory $Root -RedirectInput -RedirectOutput `
             -ArgumentList @('compose', '--profile', 'backup', 'run', '--rm', '-T', 'backup')
         $State.Processes += $dump
         $dump.StandardInput.Close()
-        $cipher = Start-HealtOSProcess -FilePath $tool -ArgumentList $encrypt -WorkingDirectory $Root `
+        $cipher = Start-HealthOSProcess -FilePath $tool -ArgumentList $encrypt -WorkingDirectory $Root `
             -RedirectInput -RedirectOutput
         $State.Processes += $cipher
         $toCipher = $dump.StandardOutput.BaseStream.CopyToAsync($cipher.StandardInput.BaseStream)
         $toFile = $cipher.StandardOutput.BaseStream.CopyToAsync($file)
-        if (-not (Wait-HealtOSTask $toCipher)) { $ok = $false }
+        if (-not (Wait-HealthOSTask $toCipher)) { $ok = $false }
         try { $cipher.StandardInput.Close() } catch { $ok = $false }
-        if (-not (Wait-HealtOSTask $toFile)) { $ok = $false }
+        if (-not (Wait-HealthOSTask $toFile)) { $ok = $false }
         $dump.WaitForExit()
         $cipher.WaitForExit()
         if ($dump.ExitCode -ne 0 -or $cipher.ExitCode -ne 0) { $ok = $false }
@@ -474,10 +475,10 @@ function Invoke-Backup {
 
     Invoke-OptInRetention -Days $retentionDays -Keep $published
 
-    $freeAfter = Get-HealtOSFreeBytes $BackupDir
+    $freeAfter = Get-HealthOSFreeBytes $BackupDir
     if ($null -eq $freeAfter) { $freeAfter = 0 }
     Write-Status -Result 'success' -Message 'backup written'
-    Write-Log "wrote $published ($($State.SizeBytes) bytes); free space in ${BackupDir}: $(Format-HealtOSGiB $freeAfter)"
+    Write-Log "wrote $published ($($State.SizeBytes) bytes); free space in ${BackupDir}: $(Format-HealthOSGiB $freeAfter)"
     [Console]::Out.WriteLine($published)
     $State.Completed = $true
 }
@@ -497,7 +498,7 @@ try {
         $exitCode = 130
         $State.FailureReason = 'backup.ps1 was interrupted; no backup was written'
     }
-    foreach ($process in $State.Processes) { Stop-HealtOSProcess $process }
+    foreach ($process in $State.Processes) { Stop-HealthOSProcess $process }
     Remove-PartialFile $State.Partial
     Remove-PartialFile $State.StatusPartial
     if ($exitCode -ne 0 -and -not $State.StatusWritten) {

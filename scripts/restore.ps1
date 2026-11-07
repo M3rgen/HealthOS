@@ -6,7 +6,8 @@ The Windows counterpart of scripts/restore.sh, with the same behaviour.
 
 The target (default health_restore) is dropped and recreated; the live `health` database is
 never touched. Decryption keys:
-  *.age  BACKUP_AGE_IDENTITY, else BACKUP_KEY_FILE (default %APPDATA%\HealtOS\backup.key)
+  *.age  BACKUP_AGE_IDENTITY, else BACKUP_KEY_FILE (default %APPDATA%\HealthOS\backup.key, or
+         the old %APPDATA%\HealtOS\backup.key while only that exists)
   *.gpg  BACKUP_KEY_FILE passphrase file
   *.dump legacy plaintext dump
 The decrypted dump is streamed straight into pg_restore through process streams; it never
@@ -35,9 +36,9 @@ if (-not $BackupFile -or $args.Count -gt 0) {
     exit 2
 }
 
-Import-HealtOSBackupEnv (Join-Path (Get-HealtOSConfigDir) 'backup.env')
+Import-HealthOSBackupEnv (Get-HealthOSConfigFile 'backup.env')
 
-$backup = Resolve-HealtOSPath -Path $BackupFile -Base (Get-Location).ProviderPath
+$backup = Resolve-HealthOSPath -Path $BackupFile -Base (Get-Location).ProviderPath
 $target = $TargetDb
 if (-not (Test-Path -LiteralPath $backup -PathType Leaf)) { Stop-Restore "no such backup: $BackupFile" }
 if ($target -cnotmatch '^[a-z_][a-z0-9_]{0,62}$') { Stop-Restore 'target database name must match [a-z_][a-z0-9_]*' }
@@ -45,7 +46,7 @@ if (@('health', 'postgres', 'template0', 'template1') -ccontains $target) {
     Stop-Restore "refusing to restore over '$target'; pick a scratch database"
 }
 $keyFile = $env:BACKUP_KEY_FILE
-if (-not $keyFile) { $keyFile = Join-Path (Get-HealtOSConfigDir) 'backup.key' }
+if (-not $keyFile) { $keyFile = Get-HealthOSConfigFile 'backup.key' }
 
 function Test-Readable {
     param([string]$Path)
@@ -61,14 +62,14 @@ function Test-Readable {
 $decryptTool = ''
 $decryptArgs = @()
 if ($backup.EndsWith('.age')) {
-    $decryptTool = Find-HealtOSCommand 'age'
+    $decryptTool = Find-HealthOSCommand 'age'
     if (-not $decryptTool) { Stop-Restore "age is required to decrypt $backup (winget install FiloSottile.age)" }
     $identity = $env:BACKUP_AGE_IDENTITY
     if (-not $identity) { $identity = $keyFile }
     if (-not (Test-Readable $identity)) { Stop-Restore "age identity $identity is not readable" }
     $decryptArgs = @('--decrypt', '--identity', $identity, $backup)
 } elseif ($backup.EndsWith('.gpg')) {
-    $decryptTool = Find-HealtOSCommand 'gpg'
+    $decryptTool = Find-HealthOSCommand 'gpg'
     if (-not $decryptTool) { Stop-Restore "gpg is required to decrypt $backup" }
     if (-not (Test-Readable $keyFile)) { Stop-Restore "passphrase file $keyFile is not readable" }
     $decryptArgs = @('--batch', '--quiet', '--pinentry-mode', 'loopback', '--passphrase-file', $keyFile,
@@ -77,19 +78,19 @@ if ($backup.EndsWith('.age')) {
     Stop-Restore "unknown backup type: $backup"
 }
 
-$docker = Find-HealtOSCommand 'docker'
+$docker = Find-HealthOSCommand 'docker'
 if (-not $docker) { Stop-Restore 'docker was not found; install and start Docker Desktop' }
 
 function Invoke-Docker {
     param([string[]]$Arguments)
-    $process = Start-HealtOSProcess -FilePath $docker -ArgumentList $Arguments -WorkingDirectory $Root
+    $process = Start-HealthOSProcess -FilePath $docker -ArgumentList $Arguments -WorkingDirectory $Root
     $process.WaitForExit()
     if ($process.ExitCode -ne 0) { Stop-Restore "docker $($Arguments -join ' ') failed" }
 }
 
 function Get-RowCounts {
     param([string]$Database, [string]$Sql)
-    $result = Invoke-HealtOSCapture -FilePath $docker -WorkingDirectory $Root -ArgumentList @(
+    $result = Invoke-HealthOSCapture -FilePath $docker -WorkingDirectory $Root -ArgumentList @(
         'compose', 'exec', '-T', 'postgres', 'psql', '-U', 'health', '-d', $Database, '-v', 'ON_ERROR_STOP=1',
         '--tuples-only', '--no-align', "--field-separator=`t", '--command', $Sql)
     if ($result.ExitCode -ne 0) { return $null }
@@ -104,17 +105,17 @@ $source = $null
 $decrypt = $null
 $sink = $null
 try {
-    $sink = Start-HealtOSProcess -FilePath $docker -WorkingDirectory $Root -RedirectInput -ArgumentList @(
+    $sink = Start-HealthOSProcess -FilePath $docker -WorkingDirectory $Root -RedirectInput -ArgumentList @(
         'compose', 'exec', '-T', 'postgres', 'pg_restore', '-U', 'health', "--dbname=$target", '--no-owner',
         '--exit-on-error')
     if ($decryptTool) {
-        $decrypt = Start-HealtOSProcess -FilePath $decryptTool -ArgumentList $decryptArgs -RedirectInput -RedirectOutput
+        $decrypt = Start-HealthOSProcess -FilePath $decryptTool -ArgumentList $decryptArgs -RedirectInput -RedirectOutput
         $decrypt.StandardInput.Close()
         $source = $decrypt.StandardOutput.BaseStream
     } else {
         $source = [System.IO.File]::OpenRead($backup)
     }
-    if (-not (Wait-HealtOSTask $source.CopyToAsync($sink.StandardInput.BaseStream))) { $restoreOk = $false }
+    if (-not (Wait-HealthOSTask $source.CopyToAsync($sink.StandardInput.BaseStream))) { $restoreOk = $false }
     try { $sink.StandardInput.Close() } catch { $restoreOk = $false }
     if ($null -ne $decrypt) {
         $decrypt.WaitForExit()
@@ -126,8 +127,8 @@ try {
     $restoreOk = $false
 } finally {
     if ($null -eq $decrypt -and $null -ne $source) { $source.Dispose() }
-    Stop-HealtOSProcess $decrypt
-    Stop-HealtOSProcess $sink
+    Stop-HealthOSProcess $decrypt
+    Stop-HealthOSProcess $sink
 }
 if (-not $restoreOk) { Stop-Restore 'decryption or pg_restore failed' }
 
@@ -183,7 +184,7 @@ foreach ($name in $tables) {
     [Console]::Out.WriteLine("$name`t$left`t$right`t$status")
 }
 [Console]::Out.WriteLine('Counts compare a backup snapshot with the current live archive; differences alone do not imply corruption.')
-$revision = Invoke-HealtOSCapture -FilePath $docker -WorkingDirectory $Root -ArgumentList @(
+$revision = Invoke-HealthOSCapture -FilePath $docker -WorkingDirectory $Root -ArgumentList @(
     'compose', 'exec', '-T', 'postgres', 'psql', '-U', 'health', '-d', $target, '-v', 'ON_ERROR_STOP=1',
     '--tuples-only', '--no-align', '--command', 'SELECT version_num FROM alembic_version')
 if ($revision.ExitCode -ne 0) { Stop-Restore 'restored revision query failed' }

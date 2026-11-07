@@ -51,7 +51,7 @@ async function launch(options = {}) {
     const context = await newContext(contextOptions);
     context.setDefaultTimeout(STEP_TIMEOUT);
     if (!MODEL_MOTION) await context.addInitScript(() => {
-      try { if (localStorage.getItem('healtos.motion') === null) localStorage.setItem('healtos.motion', 'false'); } catch { /* no storage */ }
+      try { if (localStorage.getItem('healthos.motion') === null) localStorage.setItem('healthos.motion', 'false'); } catch { /* no storage */ }
     });
     const newPage = context.newPage.bind(context);
     context.newPage = async () => { const page = await newPage(); await throttle(page); return page; };

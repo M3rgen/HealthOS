@@ -66,4 +66,4 @@ Browser checks in `tests/browser` use Playwright's bundled Chromium (`cd fronten
 | `tests` | Unit, integration, and browser checks. |
 | `scripts` | Operations, configuration verification, and bridge launcher. |
 
-The installed CLI is still named `health-mirror`, and the distribution is `personal-health-mirror`. These internal identifiers do not affect the HealtOS repository name.
+The installed CLI is still named `health-mirror`, and the distribution is `personal-health-mirror`. These internal identifiers do not affect the HealthOS repository name.
