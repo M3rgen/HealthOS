@@ -7,32 +7,51 @@ records refuted ones and links the duplicate rows written since its checkpoint
 sources, pairs nothing decided, pairs that look like a rename) goes to the log and to
 ``health-mirror status``. The result of each data type goes to the log and to
 ``identity_reconcile_state``, which ``health-mirror status`` shows. Another run of
-identity-backfill holding the single-run lock makes the job skip (logged); a data type that
-fails (its lock stays busy) is logged with its error and retried on the next night, while the
-others still run.
+identity-backfill holding the single-run lock makes the job skip (logged).
+
+The scheduler starts it when the scheduled Google reconciliations of the night have ended
+(app/services/scheduler.py), so it rarely meets one. A data type whose lock is still busy
+after ``LOCK_ATTEMPTS`` (a watchdog recovery, a sync by hand) is tried again after all the
+others, its batches backing off until the window ends (``until``, 03:55 UTC by default) or,
+started after it, for ``wait_minutes`` (app/services/identity_reconcile_window.py). Only then
+does it fail: logged with its error, counted in ``status`` and ``/health``
+(``identity_lock_contention``), and settled by the next run from its checkpoint.
 """
 
 from __future__ import annotations
 
 import logging
+from datetime import time
 
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.core.logging import event
 from app.services.identity_backfill import identity_backfill
+from app.services.identity_reconcile_window import busy_deadline
 from app.services.source_chains import BackfillRunning
 
 logger = logging.getLogger(__name__)
 
 
 class IdentityReconciler:
-    def __init__(self, sessions: async_sessionmaker) -> None:
+    def __init__(
+        self, sessions: async_sessionmaker, until: time | None = None, wait_minutes: int = 0
+    ) -> None:
         self.sessions = sessions
+        self.until = until
+        self.wait_minutes = wait_minutes
 
     async def run(self) -> dict | None:
-        event(logger, "IDENTITY_RECONCILE_STARTED")
+        deadline = busy_deadline(self.until, self.wait_minutes)
+        event(
+            logger,
+            "IDENTITY_RECONCILE_STARTED",
+            busy_lock_wait_until=deadline.isoformat() if deadline else None,
+        )
         try:
-            results = await identity_backfill(self.sessions, incremental=True)
+            results = await identity_backfill(
+                self.sessions, incremental=True, lock_deadline=deadline
+            )
         except BackfillRunning:
             event(logger, "IDENTITY_RECONCILE_SKIPPED", reason="identity-backfill is running")
             return None

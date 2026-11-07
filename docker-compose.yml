@@ -65,6 +65,9 @@ services:
       WATCHDOG_ENABLED: ${WATCHDOG_ENABLED:-true}
       IDENTITY_RECONCILE_ENABLED: ${IDENTITY_RECONCILE_ENABLED:-true}
       BACKUP_STATUS_FILE: /run/healthos-backup/status.json
+      # Garmin Connect Personal API (optional, off by default). Enable in .env and mount the
+      # key file below; the key itself never goes into .env.
+      # GARMIN_API_KEY_FILE: /run/secrets/garmin-personal-api-key
     volumes:
       # Mount the directory, not an inode replaced atomically by backup.sh.
       # Never mount BACKUP_HOST_DIR or encryption keys into the app.
@@ -77,6 +80,11 @@ services:
         read_only: true
         bind:
           create_host_path: true
+      # Garmin Personal API key, read-only (host file mode 600); see GARMIN_API_KEY_FILE above.
+      # - type: bind
+      #   source: ${GARMIN_API_KEY_HOST_FILE:-~/.config/garmin/connect-personal-api-key}
+      #   target: /run/secrets/garmin-personal-api-key
+      #   read_only: true
     ports:
       - "127.0.0.1:${APP_PORT:-8000}:8000"
     extra_hosts:

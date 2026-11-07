@@ -9,7 +9,7 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.core.config import get_settings
-from app.models import derived_invalidation
+from app.models import derived_invalidation, garmin
 
 
 def _migration(suffix):
@@ -74,7 +74,9 @@ async def test_upgrade_and_downgrade_preserve_all_existing_triggers(tmp_path, mo
             )
         assert all(after[name] == sql for name, sql in before.items())
         assert set(after) - set(before) == set(derived_invalidation.SQLITE_TRIGGER_SQL)
-        command.upgrade(config, "20261025_0019")
+        # The models carry the columns of head (0025: provider), so the rows are stored at
+        # head and the schema is then brought back to 0019, where the comparison starts.
+        command.upgrade(config, "head")
         from derived_records import T0, manual, raw_mutation, snapshot, steps, store
 
         from app.models import raw_rejections
@@ -99,13 +101,19 @@ async def test_upgrade_and_downgrade_preserve_all_existing_triggers(tmp_path, mo
                 )
             )
             session.add(WebhookStatusEvent(reason="signature_valid", occurred_at=T0))
-        # Tables of later migrations (20261102_0022, 0023) do not exist at the 0019 target.
-        newer = {"display_preferences", *raw_rejections.TABLES}
-        # 0023's guards are expected at head only; verify names them missing at 0019.
-        later = {name: sql for name, (_, sql) in raw_rejections.SQLITE_TRIGGER_SQL.items()}
+        command.downgrade(config, "20261025_0019")
+        # Tables of later migrations (0022, 0023, 0024) do not exist at the 0019 target.
+        newer = {"display_preferences", garmin.STATE, *raw_rejections.TABLES, *garmin.TABLES}
+        # 0023's and 0024's guards are expected at head only; verify names them missing at 0019.
+        later = {
+            name: sql
+            for module in (raw_rejections, garmin)
+            for name, (_, sql) in module.SQLITE_TRIGGER_SQL.items()
+        }
         at_0019 = [
             f"protective trigger missing: {table}.{name}"
-            for name, (table, _) in raw_rejections.SQLITE_TRIGGER_SQL.items()
+            for module in (raw_rejections, garmin)
+            for name, (table, _) in module.SQLITE_TRIGGER_SQL.items()
         ]
         async with sessions() as session:
             archive = await snapshot(session, newer)

@@ -37,3 +37,14 @@
   #sports .workout-fields{grid-template-columns:minmax(0,1fr)}
 }
 @media(prefers-reduced-motion:reduce){.workout-day{animation:none}}
+/* Source and priority badges carry text; the overlapping lower-ranked sessions fold under the primary entry. */
+.workout-badges{display:inline-flex;flex-wrap:wrap;gap:6px;min-width:0}
+.workout-device{color:var(--text)}
+.workout-priority{font-size:11px;line-height:1.5;padding:2px 8px;border:1px solid var(--amber-line);border-radius:6px;color:var(--text);background:var(--amber-soft)}
+.workout-secondary{border-color:var(--line);background:none;color:var(--muted)}
+.workout-alternatives{margin-top:10px;border-top:1px solid var(--line);padding-top:8px;min-width:0}
+.workout-alternatives summary{cursor:pointer;width:fit-content;font-size:12px;font-weight:550;color:var(--amber);padding:2px 4px;border-radius:6px}
+.workout-alternatives summary:hover{background:var(--amber-soft)}
+.workout-alternatives ol{list-style:none;margin:8px 0 0;padding:0;display:grid;gap:8px}
+.workout-alternative article{padding:10px;border-style:dashed;background:var(--surface)}
+.workout-alternative h4{font-size:14px}

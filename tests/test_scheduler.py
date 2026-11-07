@@ -100,12 +100,12 @@ def test_every_job_tolerates_late_starts_and_coalesces_missed_runs():
     )
     jobs = scheduler.get_jobs()
 
+    # The identity reconciler is no cron job here: it follows the reconciliations (below).
     assert {job.id for job in jobs} == {
         "daily-reconciliation",
         "weekly-reconciliation",
         "pipeline-watchdog",
         "pipeline-freshness-refresh",
-        "identity-reconcile",
     }
     for job in jobs:
         assert job.misfire_grace_time == 3600
@@ -134,7 +134,7 @@ def test_missed_job_is_logged_at_info(caplog, monkeypatch):
     assert record.job_id == "daily-reconciliation"
 
 
-def test_identity_reconciler_runs_nightly_at_a_configurable_quiet_time():
+def test_identity_reconciler_keeps_a_fixed_time_only_without_reconciliation():
     class Reconciliation:
         async def run(self, days):
             return days
@@ -143,20 +143,31 @@ def test_identity_reconciler_runs_nightly_at_a_configurable_quiet_time():
         async def run(self):
             return None
 
-    default = build_scheduler(Settings(), Reconciliation(), identity=Identity())
+    chained = build_scheduler(Settings(), Reconciliation(), identity=Identity())
+    # Started by the end of the reconciliations (tests/test_identity_lock_window.py).
+    assert chained.get_job("identity-reconcile") is None
+    alone = Settings(reconciliation_enabled=False)
+    default = build_scheduler(alone, Reconciliation(), identity=Identity())
     job = default.get_job("identity-reconcile")
-    # 02:30 UTC: after the daily Google reconciliation starts, away from the 03:30 backup.
     assert "hour='2'" in str(job.trigger) and "minute='30'" in str(job.trigger)
     moved = build_scheduler(
-        Settings(identity_reconcile_hour_utc=4, identity_reconcile_minute=15),
+        Settings(
+            reconciliation_enabled=False,
+            identity_reconcile_hour_utc=4,
+            identity_reconcile_minute=15,
+        ),
         Reconciliation(),
         identity=Identity(),
     )
     assert "hour='4', minute='15'" in str(moved.get_job("identity-reconcile").trigger)
-    off = build_scheduler(
-        Settings(identity_reconcile_enabled=False), Reconciliation(), identity=Identity()
-    )
-    assert off.get_job("identity-reconcile") is None
+    for settings in (Settings(identity_reconcile_enabled=False), alone):
+        off = build_scheduler(
+            settings.model_copy(update={"identity_reconcile_enabled": False}),
+            Reconciliation(),
+            identity=Identity(),
+        )
+        assert off.get_job("identity-reconcile") is None
+        assert all(callback.__name__ != "listener" for callback, _ in off._listeners)
 
 
 async def test_runtime_schedules_bounded_derived_refresh(sessions):
@@ -170,3 +181,29 @@ async def test_runtime_schedules_bounded_derived_refresh(sessions):
         assert job.coalesce is True and str(job.trigger) == "interval[0:05:00]"
     finally:
         await runtime.shutdown()
+
+
+def test_garmin_pull_runs_outside_the_nightly_window_only_when_enabled(tmp_path):
+    from app.services.garmin_pull import GarminPull
+
+    class Reconciliation:
+        async def run(self, days):
+            return days
+
+    key = tmp_path / "key"
+    key.write_text("synthetic")
+    enabled = Settings(_env_file=None, garmin_enabled=True, garmin_api_key_file=key)
+    scheduler = build_scheduler(enabled, Reconciliation(), garmin=GarminPull(enabled, None))
+    job = scheduler.get_job("garmin-pull")
+    assert job.max_instances == 1 and job.coalesce is True
+    trigger = str(job.trigger)
+    assert "hour='0,4,6,8,10,12,14,16,18,20,22'" in trigger and "minute='10'" in trigger
+    hourly = Settings(_env_file=None, garmin_enabled=True, garmin_pull_interval_minutes=60)
+    moved = build_scheduler(hourly, Reconciliation(), garmin=GarminPull(hourly, None))
+    assert "hour='0,1,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23'" in str(
+        moved.get_job("garmin-pull").trigger
+    )
+    disabled = Settings(_env_file=None)
+    off = build_scheduler(disabled, Reconciliation(), garmin=GarminPull(disabled, None))
+    assert off.get_job("garmin-pull") is None
+    assert build_scheduler(disabled, Reconciliation()).get_job("garmin-pull") is None

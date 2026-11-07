@@ -123,6 +123,12 @@ from app.services.identity_backfill_state import _settled as _settled
 from app.services.identity_backfill_stats import SUMMARY_ITEMS as SUMMARY_ITEMS
 from app.services.identity_backfill_stats import BackfillStats as BackfillStats
 from app.services.identity_backfill_stats import _fingerprints as _fingerprints
+from app.services.identity_reconcile_window import (
+    LOCK_ERROR,
+    current_deadline,
+    keep_trying,
+    waiting_until,
+)
 from app.services.source_chains import (
     LOCK_TIMEOUT,
     Chains,
@@ -194,13 +200,15 @@ async def _exclusively[T](
     The lock is tried for without queueing for at most ``LOCK_TIMEOUT`` (writers never wait
     behind the request), then waited for in the queue at most ``QUEUE_TIMEOUT``; once held, any
     row lock is waited for at most ``ROW_LOCK_TIMEOUT``; then the transaction is rolled back
-    and retried after a pause (``notice`` is told). A dry run writes nothing and takes no
-    lock: it reads what is committed."""
+    and retried after a pause (``notice`` is told), ``LOCK_ATTEMPTS`` times or, in a run's
+    second round, until its deadline (``waiting_until``). A dry run writes
+    nothing and takes no lock: it reads what is committed."""
     if dry_run:
         async with sessions.begin() as session:
             await _prepare(session, statement_timeout)
             return await work(session)
-    for attempt in range(LOCK_ATTEMPTS):
+    attempt = 0
+    while keep_trying(attempt, LOCK_ATTEMPTS):
         try:
             async with sessions.begin() as session:
                 await lock_data_type(session, data_type, exclusive=True, wait=LOCK_TIMEOUT)
@@ -218,15 +226,20 @@ async def _exclusively[T](
                 retry_in_seconds=delay,
             )
             if notice is not None:
+                deadline = current_deadline()
+                limit = f"until {deadline:%H:%M} UTC" if deadline else f"of {LOCK_ATTEMPTS}"
                 notice(
                     f"{data_type}: another transaction holds the identity lock or a row this "
                     f"batch needs; nothing was written, retrying in {delay} s "
-                    f"(attempt {attempt + 1} of {LOCK_ATTEMPTS})"
+                    f"(attempt {attempt + 1} {limit})"
                 )
             await _pause(delay)
+            attempt += 1
+    deadline = current_deadline()
+    waited = f", until {deadline:%H:%M} UTC" if deadline is not None else ""
     raise LockUnavailable(
-        f"{data_type}: could not get the identity lock (or a row it needs) in "
-        f"{LOCK_ATTEMPTS} attempts (a long sync, deletion check or import of this data type "
+        f"{data_type}: {LOCK_ERROR} (or a row it needs) in "
+        f"{attempt} attempts{waited} (a long sync, deletion check or import of this data type "
         "held it); nothing of this batch was written. Run again later: an incremental run (or "
         "the next night's) settles everything since its checkpoint again and any re-settlement "
         "a run or decision still owes (identity_reconcile_state.pending_settle); a full run "
@@ -502,17 +515,22 @@ async def identity_backfill(
     statement_timeout: str = STATEMENT_TIMEOUT,
     progress: Callable[[str, BackfillStats, datetime], None] | None = None,
     notice: Notice | None = None,
+    lock_deadline: datetime | None = None,
 ) -> dict[str, BackfillStats]:
     """Raises ``BackfillRunning`` when another run holds the single-run lock.
 
     ``incremental``: only what changed since each data type's checkpoint (the nightly run);
     a data type that never had a full run gets its first full pass (``skipped`` says so).
     A data type that fails (its lock stays busy, a statement times out) is reported with its
-    ``error`` and saved in ``identity_reconcile_state``; the run goes on with the others."""
+    ``error`` and saved in ``identity_reconcile_state``; the run goes on with the others.
+    ``lock_deadline``: a data type whose lock stayed busy (a long sync of it) is tried again
+    after all the others, its batches retrying until then, before it counts as failed."""
+    mode = "incremental" if incremental else "full"
     async with backfill_lock(sessions, dry_run=dry_run):
         names = list(data_types) if data_types else await data_types_in_archive(sessions)
         results: dict[str, BackfillStats] = {}
-        for name in names:
+
+        async def run_one(name: str, *, defer: bool) -> None:
             async with sessions() as session:
                 started = await source_chains.database_now(session)
             try:
@@ -538,25 +556,28 @@ async def identity_backfill(
                         notice=notice,
                     )
             except Exception as exc:
+                if defer and isinstance(exc, LockUnavailable):
+                    # Tried again after the others, until the deadline.
+                    event(logger, "IDENTITY_RECONCILE_DATA_TYPE_DEFERRED", data_type=name)
+                    return
                 logger.exception(
                     "Identity reconciliation of a data type failed",
                     extra={"event": "IDENTITY_RECONCILE_DATA_TYPE_FAILED", "data_type": name},
                 )
                 if not dry_run:
                     await _save_state(
-                        sessions,
-                        name,
-                        started=started,
-                        stats=None,
-                        error=f"{exc}",
-                        mode="incremental" if incremental else "full",
+                        sessions, name, started=started, stats=None, error=f"{exc}", mode=mode
                     )
-                results[name] = BackfillStats(
-                    mode="incremental" if incremental else "full", error=f"{exc}"[:2000]
-                )
+                results[name] = BackfillStats(mode=mode, error=f"{exc}"[:2000])
+
+        for name in names:
+            await run_one(name, defer=lock_deadline is not None)
+        with waiting_until(lock_deadline):
+            for name in [name for name in names if name not in results]:
+                await run_one(name, defer=False)
         if not dry_run:
             await analyze_identity_tables(sessions)
-    return results
+    return {name: results[name] for name in names}
 
 
 async def analyze_identity_tables(sessions: async_sessionmaker) -> None:

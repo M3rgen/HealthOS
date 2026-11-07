@@ -58,6 +58,8 @@ SAFE_KEYS = frozenset(
     covered_session_seconds session_total_seconds stage_overlap_seconds
     session_overlap_seconds between_sessions_seconds estimated_asleep_seconds
     timed_asleep_seconds estimate_minus_timed_asleep_seconds computed_at requested_days
+    sources label alternatives precedence activity health activity_windows minutes_by_source
+    source_code provider priority group
     closed_days metrics metric_key value_days days_without_value partial_today sampling
     retrieval exclusions source_regimes basis sample_count supported_seconds target_seconds
     longest_gap_seconds completed_with_records_days completed_empty_days incomplete_days
@@ -163,7 +165,10 @@ def describe_result(arguments: object, data: dict, success: bool) -> dict:
             counts["profile_measurements"] += 1
             add_dates(row, ("measured_at",), profile_dates)
         counts["chart_points"] = sum(
-            value is not None for values in data.get("charts", {}).values() for value in values
+            value is not None
+            for values in data.get("charts", {}).values()
+            if isinstance(values, list)  # charts.sources is a card, not a series
+            for value in values
         )
         if counts["chart_points"]:
             add_dates(data, ("end_date",))

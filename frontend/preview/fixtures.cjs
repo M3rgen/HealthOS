@@ -17,10 +17,23 @@ const health = {
   pending_notifications: 0, failed_notifications: 0, failed_syncs: 0, stale_streams: [],
 };
 
+// Precedence (maintainer, 7 Nov 2026): Garmin first for sport activities, the Fitbit Air first for
+// every other health metric. It only selects what is shown first; nothing is summed or dropped.
+const PRECEDENCE = { activity: ['GARMIN', 'FITBIT', 'HEALTH_KIT'], health: ['FITBIT', 'GARMIN', 'HEALTH_KIT'] };
+const SOURCE_LABELS = { FITBIT: 'Fitbit', GARMIN: 'Garmin', HEALTH_KIT: 'Apple Sağlık', MANUAL: 'Manuel' };
+const METRICS = ['steps', 'sleep_seconds', 'resting_bpm', 'hrv_ms', 'spo2'];
+// Default: every value comes from the Fitbit alone, so no cell carries a badge.
+const sourcesOf = (row) => Object.fromEntries(METRICS.map((metric) => [metric,
+  row[metric] == null ? { source: null, label: null, alternatives: [] } : { source: 'FITBIT', label: 'Fitbit', alternatives: [] }]));
+// Garmin also measured steps and sleep on this day; the Fitbit stays first, Garmin is listed under it.
+const withGarmin = (row) => ({ ...row, sources: { ...row.sources,
+  steps: { source: 'FITBIT', label: 'Fitbit', alternatives: [{ source: 'GARMIN', label: 'Garmin', value: row.steps - 700 }] },
+  sleep_seconds: { source: 'FITBIT', label: 'Fitbit', alternatives: [{ source: 'GARMIN', label: 'Garmin', value: row.sleep_seconds + 1500 }] } } });
+
 function day(date, i) {
   const partial = date === TODAY;
   const missingSpo2 = i % 5 === 3;
-  return {
+  const row = {
     date,
     steps: Math.round((partial ? 6240 : 9100) + wave(i, 1) * 2600),
     sleep_seconds: Math.round(26400 + wave(i, 2) * 3600),
@@ -30,6 +43,7 @@ function day(date, i) {
     partial,
     status: partial ? 'partial' : missingSpo2 ? 'missing' : 'complete',
   };
+  return { ...row, sources: sourcesOf(row) };
 }
 
 function dashboard(params) {
@@ -45,13 +59,25 @@ function dashboard(params) {
       body_fat: { value: 17.8, measured_at: '2026-09-30T07:30:00Z' },
     },
     days: rows,
+    precedence: PRECEDENCE,
     charts: {
       steps: Array.from({ length: 24 }, (_, h) => end === TODAY && h > 14 ? null
         : daytime(h) ? Math.round(420 + Math.max(0, wave(h, 7)) * 900 + (h === 8 || h === 18 ? 1100 : 0)) : (h === 6 ? 60 : 0)),
       heart_rate: Array.from({ length: 24 }, (_, h) => end === TODAY && h > 14 ? null
         : h === 3 ? null : Math.round((daytime(h) ? 72 : 57) + wave(h, 9) * 6 + (h === 18 ? 24 : 0))),
+      sources: { heart_rate: { source: 'FITBIT', label: 'Fitbit', alternatives: [] }, steps: { source: 'FITBIT', label: 'Fitbit', alternatives: [] } },
     },
   };
+}
+// Scenario 'kaynaklar': two finished days also carry Garmin values for steps and sleep, and the
+// hourly charts name the Garmin as a second source.
+function dashboardWithSources(params) {
+  const data = dashboard(params);
+  return { ...data,
+    days: data.days.map((row, i) => (i === 1 || i === 3 ? withGarmin(row) : row)),
+    charts: { ...data.charts, sources: {
+      heart_rate: { source: 'FITBIT', label: 'Fitbit', alternatives: [{ source: 'GARMIN', label: 'Garmin' }] },
+      steps: { source: 'FITBIT', label: 'Fitbit', alternatives: [{ source: 'GARMIN', label: 'Garmin' }] } } } };
 }
 
 function history(params) {
@@ -89,10 +115,15 @@ const syncStatus = ['steps', 'heart-rate', 'daily-resting-heart-rate', 'sleep', 
 }));
 
 const sports = ['Yürüyüş', 'Koşu', 'Bisiklet', 'Yüzme', 'Ağırlık antrenmanı', 'Yoga'];
+// Every row names its source twice: `source` is the display label, `source_code` the stable code.
+// `priority`/`group`/`alternatives` come from the activity precedence (Garmin first): a Fitbit
+// session that overlaps a Garmin session is secondary and points at the Garmin row.
+const sourceFields = (code) => ({ source: SOURCE_LABELS[code], source_code: code,
+  provider: code === 'GARMIN' ? 'GARMIN' : code === 'MANUAL' ? 'MANUAL' : 'GOOGLE', priority: 'primary', group: null, alternatives: [] });
 function workouts(params) {
   const month = (params.get('month') || `${TODAY.slice(0, 7)}-01`).slice(0, 7);
   const last = month === TODAY.slice(0, 7) ? Number(TODAY.slice(-2)) : 28;
-  return Array.from({ length: 12 }, (_, i) => {
+  const rows = Array.from({ length: 12 }, (_, i) => {
     const date = `${month}-${String(Math.max(1, Math.round(1 + i * (last - 1) / 11))).padStart(2, '0')}`;
     const minutes = 25 + ((i * 17) % 50);
     const start = new Date(`${date}T${String(6 + (i % 3) * 3).padStart(2, '0')}:15:00Z`);
@@ -101,9 +132,18 @@ function workouts(params) {
       id: `w${i}`, exercise_type: type, start_time: start.toISOString(),
       end_time: new Date(start.getTime() + minutes * 60000).toISOString(), duration_seconds: minutes * 60,
       calories_kcal: 140 + ((i * 53) % 380), distance_meters: ['Yoga', 'Ağırlık antrenmanı'].includes(type) ? null : 1800 + i * 730,
-      source: i % 4 === 1 ? 'Manuel' : 'Fitbit',
+      ...sourceFields(i % 4 === 1 ? 'MANUAL' : i === 7 ? 'GARMIN' : 'FITBIT'),
     };
-  }).reverse();
+  });
+  // The watch recorded the run (w7); the Fitbit auto-detected a walk over the same minutes.
+  const run = rows[7];
+  const overlap = { id: 'w7-fitbit', exercise_type: 'Yürüyüş', start_time: new Date(Date.parse(run.start_time) + 5 * 60000).toISOString(),
+    end_time: new Date(Date.parse(run.end_time) - 3 * 60000).toISOString(), duration_seconds: run.duration_seconds - 8 * 60,
+    calories_kcal: run.calories_kcal - 60, distance_meters: run.distance_meters - 400,
+    ...sourceFields('FITBIT'), priority: 'secondary', group: run.id };
+  run.alternatives = [{ id: overlap.id, source: overlap.source, source_code: overlap.source_code, start_time: overlap.start_time, end_time: overlap.end_time }];
+  rows.splice(8, 0, overlap);
+  return rows.reverse();
 }
 
 const chatAnswer = '**Merhaba!** Son 7 günün özeti:\n\n' +
@@ -128,9 +168,39 @@ const webhookStatus = { last_notification_at: '2026-10-16T13:58:00Z',
   silence: { state: 'receiving', warning: false, never_received: false, since: null, threshold_seconds: 604800 },
   counters: { since: '2026-09-24T00:00:00Z', valid: 412, invalid: 0, expired: 0, reasons: {} }, last_error: null };
 
+// GET /api/devices: the archive's devices (app/services/devices.py). The watch was renamed by
+// Google ("Google Fitbit Air" -> "Fitbit Air"): one row, the old name under previous_names.
+// Each device carries its provider, source code and precedence (activity / health rank). The Garmin
+// watch is the pull-only second source: `last_seen` is its last successful pull.
+const devices = {
+  checked_at: NOW, thresholds: { connected_hours: 48, delayed_days: 7 }, google: 'ok', garmin: 'ok', google_unmatched: [],
+  note: 'Son veri, kaynağın arşivdeki en yeni kaydının fiziksel zamanı; eşitleme zamanı değil.',
+  devices: [
+    { id: '0a1b2c3d4e5f', name: 'Fitbit Air', platform: 'FITBIT', provider: 'GOOGLE', source_code: 'FITBIT', form_factor: 'WATCH', manufacturer: null, application: null,
+      recording_method: 'DERIVED', previous_names: ['Google Fitbit Air'], fingerprints: ['0a1b2c3d4e5f', '9f8e7d6c5b4a'],
+      data_types: ['daily-resting-heart-rate', 'heart-rate', 'oxygen-saturation', 'sleep', 'steps'], data_type_count: 5,
+      first_seen: '2025-11-02T06:10:00Z', last_seen: '2026-10-16T14:15:00Z', last_data: '2026-10-16T14:05:00Z', status: 'bagli',
+      google_last_sync: '2026-10-16T14:12:00Z', google_device_type: 'WATCH', precedence: { activity: 'secondary', health: 'primary' } },
+    { id: '1b2c3d4e5f60', name: 'iPhone', platform: 'HEALTH_KIT', provider: 'GOOGLE', source_code: 'HEALTH_KIT', form_factor: 'PHONE', manufacturer: 'Example Inc.',
+      application: 'com.example.health', recording_method: 'PASSIVELY_MEASURED', previous_names: [], fingerprints: ['1b2c3d4e5f60'],
+      data_types: ['steps'], data_type_count: 1, first_seen: '2026-03-20T08:00:00Z', last_seen: '2026-10-14T09:00:00Z',
+      last_data: '2026-10-13T18:40:00Z', status: 'gecikmeli', precedence: { activity: 'secondary', health: 'secondary' } },
+    { id: '2c3d4e5f6071', name: 'Aria Example', platform: 'FITBIT', provider: 'GOOGLE', source_code: 'FITBIT', form_factor: 'SCALE', manufacturer: null, application: null,
+      recording_method: 'MANUALLY_ENTERED', previous_names: [], fingerprints: ['2c3d4e5f6071'], data_types: ['weight'], data_type_count: 1,
+      first_seen: '2026-05-01T07:00:00Z', last_seen: '2026-09-06T07:30:00Z', last_data: '2026-09-06T07:30:00Z', status: 'kopuk',
+      precedence: { activity: 'unranked', health: 'unranked' } },
+    { id: 'garmin', name: 'Garmin', platform: 'GARMIN', provider: 'GARMIN', source_code: 'GARMIN', form_factor: 'WATCH', manufacturer: 'Garmin', application: null,
+      recording_method: null, previous_names: [], fingerprints: [], data_types: ['activities', 'daily-summaries', 'heart-rate', 'sleep', 'steps'], data_type_count: 5,
+      first_seen: '2026-09-20T06:00:00Z', last_seen: '2026-10-16T14:00:00Z', last_data: '2026-10-16T13:40:00Z', status: 'bagli',
+      garmin_last_pull: '2026-10-16T14:00:00Z', precedence: { activity: 'primary', health: 'secondary' } },
+  ],
+};
+
 // Alternate data sets for edge-case views. 'sync-error' shows the notice
 // banner; 'empty' is a fresh install: Google not set up and no records yet.
 function scenario(name) {
+  // Two sources disagree on steps and sleep for two days: badges, toggles and the sub-row appear.
+  if (name === 'kaynaklar') return { dashboard: dashboardWithSources };
   if (name === 'sync-error') return {
     health: { ...health, failed_syncs: 1 },
     syncStatus: syncStatus.map((row, i) => i === 3 ? { ...row, status: 'failed', last_error: 'Google API zaman aşımı (synthetic).' } : row),
@@ -145,6 +215,7 @@ function scenario(name) {
       health: { ...health, configuration: 'degraded', last_sync_success: null, latest_health_write: null, last_webhook_received: null, data_freshness: {} },
       dashboard: blank, measurements: [], syncStatus: [], workouts: () => [],
       coverage: (params) => ({ ...coverage(params), supported_data_types: [], types: [], summary: { days_without_value: 0, unknown_days: 7, incomplete_days: 0 } }),
+      devices: { ...devices, google: 'unavailable', devices: [] },
       webhookStatus: { last_notification_at: null, silence: { state: 'unconfigured', warning: false, never_received: true, since: null, threshold_seconds: 604800 },
         counters: { since: null, valid: 0, invalid: 0, expired: 0, reasons: {} }, last_error: null },
       history: (params) => ({ ...history(params), total_pages: 1, earliest_date: null, days: history(params).days.map((d) => ({ ...d, value: null })) }),
@@ -188,4 +259,4 @@ const uploadBackgroundPng = () => syntheticPng(640, 400, (u, v) => [Math.round(3
 // Includes a script and an id marker: tests assert neither ever reaches the DOM.
 const uploadLogoSvg = () => Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" id="uploaded-svg-marker"><script>window.uploadedSvgRan=true</script><circle cx="24" cy="24" r="18" fill="none" stroke="#48d88c" stroke-width="5"/><path d="M15 24h18" stroke="#48d88c" stroke-width="5" stroke-linecap="round"/></svg>');
 
-module.exports = { NOW, TODAY, health, dashboard, history, measurements, syncStatus, workouts, coverage, webhookStatus, chatAnswer, scenario, appearanceSettings, syntheticPng, uploadAvatarPng, uploadBackgroundPng, uploadLogoSvg };
+module.exports = { NOW, TODAY, health, dashboard, dashboardWithSources, history, measurements, syncStatus, workouts, coverage, webhookStatus, devices, chatAnswer, scenario, appearanceSettings, syntheticPng, uploadAvatarPng, uploadBackgroundPng, uploadLogoSvg };

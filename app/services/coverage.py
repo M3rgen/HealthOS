@@ -33,6 +33,7 @@ from sqlalchemy import and_, case, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
+from app.core.providers import GOOGLE
 from app.core.timeutil import as_utc
 from app.models.eligibility import normalized_counted, normalized_quarantined, raw_counted
 from app.models.health import SleepSession, Steps, Weight
@@ -389,6 +390,9 @@ async def _exclusions(session: AsyncSession, metric: Metric, window: Window) -> 
             where = (high > window.start, low < window.stop)
         else:
             where = (time_column >= window.start, time_column < window.stop)
+        # Google's complement only: a Garmin row (provider GARMIN) has no raw row by design
+        # and is neither a Google record nor an orphan (app/core/providers.py).
+        where = (*where, model.provider == GOOGLE)
         left_out = ~normalized_counted(model, types)
         quarantined = and_(
             left_out, or_(model.is_quarantined.is_(True), raw.is_quarantined.is_(True))

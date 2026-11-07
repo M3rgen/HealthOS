@@ -22,6 +22,7 @@ from app.models.identity import plan_each_query
 from app.models.manual import ManualMeasurement, ManualWorkout
 from app.models.manual_flags import REASON_LENGTH, TEST_FLAG
 from app.models.state import RawHealthData
+from app.services import garmin_readers
 from app.services.current_workouts import current_workouts
 from app.services.dashboard import dashboard_data
 from app.services.dashboard_window import (
@@ -31,6 +32,14 @@ from app.services.dashboard_window import (
     monthly_window,
 )
 from app.services.manual_flags import active_flags, record_flag
+from app.services.source_precedence import (
+    MANUAL,
+    PRIMARY,
+    Observation,
+    Policy,
+    label,
+    resolve_sessions,
+)
 
 
 class DashboardRoute(ManualWriteRoute):
@@ -79,6 +88,7 @@ class WorkoutInput(BaseModel):
 
 
 def workout_dict(row, source: str) -> dict:
+    """A manual workout as the API lists it (``source`` is the display label, "Manuel")."""
     return {
         "id": str(row.id),
         "exercise_type": row.exercise_type,
@@ -86,13 +96,59 @@ def workout_dict(row, source: str) -> dict:
         "end_time": as_utc(row.end_time),
         "duration_seconds": (
             float(row.duration_seconds)
-            if source == "Fitbit" and row.duration_seconds is not None
+            if source != "Manuel" and row.duration_seconds is not None
             else (as_utc(row.end_time) - as_utc(row.start_time)).total_seconds()
         ),
         "calories_kcal": float(row.calories_kcal) if row.calories_kcal is not None else None,
         "distance_meters": float(row.distance_meters) if row.distance_meters is not None else None,
         "source": source,
+        "source_code": MANUAL,
+        "provider": MANUAL,
+        "priority": PRIMARY,
+        "group": None,
+        "alternatives": [],
     }
+
+
+def place_workouts(rows: list[dict], policy: Policy | None = None) -> list[dict]:
+    """Label every row's source and place the device rows under the activity policy: a
+    session that overlaps a higher-ranked source's session is ``secondary`` and listed among
+    that session's ``alternatives``; nothing is merged or summed. Manual rows stay as they are.
+    """
+    policy = policy or Policy.from_settings()
+    placements = resolve_sessions(
+        [
+            Observation(
+                row["source_code"],
+                row,
+                provider=row["provider"],
+                record_id=f"{row['source_code']}:{row['id']}",
+                start=row["start_time"],
+                end=row["end_time"],
+            )
+            for row in rows
+        ],
+        policy,
+    )
+    by_key = {f"{row['source_code']}:{row['id']}": row for row in rows}
+    for key, row in by_key.items():
+        placement = placements[key]
+        row["source"] = label(row["source_code"])
+        row["priority"] = placement.priority
+        row["group"] = (
+            by_key[placement.group]["id"] if placement.group in by_key else placement.group
+        )
+        row["alternatives"] = [
+            {
+                "id": item.value["id"],
+                "source": label(item.source),
+                "source_code": item.source,
+                "start_time": item.value["start_time"],
+                "end_time": item.value["end_time"],
+            }
+            for item in placement.alternatives
+        ]
+    return rows
 
 
 @router.post("/workouts", status_code=201, dependencies=[Depends(require_job_request)])
@@ -119,6 +175,7 @@ async def workouts(
     start, stop = window.start, window.stop
     await plan_each_query(session)
     rows = await current_workouts(session, start, stop)
+    rows.extend(await garmin_readers.workouts(session, start, stop))
     manual = (
         await session.scalars(
             select(ManualWorkout).where(
@@ -128,6 +185,7 @@ async def workouts(
         )
     ).all()
     rows.extend(workout_dict(row, "Manuel") for row in manual)
+    place_workouts(rows)
     return sorted(rows, key=lambda row: row["start_time"], reverse=True)
 
 

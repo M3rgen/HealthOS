@@ -82,10 +82,16 @@ class Settings(BaseSettings):
     reconciliation_daily_days: int = Field(default=7, ge=1)
     reconciliation_weekly_days: int = Field(default=90, ge=1)
     # The nightly identity reconciler (identity-backfill --incremental): decides source
-    # chains and links duplicate rows. Off the daily Google reconciliation and the backup.
+    # chains and links duplicate rows. It starts when the scheduled Google reconciliations
+    # have ended; at the hour and minute below only when RECONCILIATION_ENABLED is false. A data
+    # type whose lock stays busy (any long sync) is retried until the UNTIL time (end of the
+    # nightly window); after it, and by hand, for LOCK_WAIT_MINUTES (0: 8 attempts only).
     identity_reconcile_enabled: bool = True
     identity_reconcile_hour_utc: int = Field(default=2, ge=0, le=23)
     identity_reconcile_minute: int = Field(default=30, ge=0, le=59)
+    identity_reconcile_until_hour_utc: int = Field(default=3, ge=0, le=23)
+    identity_reconcile_until_minute: int = Field(default=55, ge=0, le=59)
+    identity_reconcile_lock_wait_minutes: int = Field(default=60, ge=0, le=720)
 
     watchdog_enabled: bool = True
     watchdog_interval_seconds: int = Field(default=900, ge=60, le=86_400)
@@ -97,6 +103,27 @@ class Settings(BaseSettings):
     startup_gap_threshold_minutes: int = Field(default=120, ge=15, le=10_080)
     automatic_recovery_enabled: bool = True
     automatic_recovery_max_days: int = Field(default=7, ge=1, le=30)
+    # Cihazlarım: a device whose newest record is at most this old is "bağlı"; older than
+    # devices_delayed_days it is "kopuk"; "gecikmeli" in between.
+    devices_connected_hours: int = Field(default=48, ge=1, le=24 * 365)
+    devices_delayed_days: int = Field(default=7, ge=1, le=3650)
+
+    # Garmin Connect Personal API (app/garmin, app/services/garmin_pull.py): read-only,
+    # outbound-only pulls into the archive's own Garmin tables. Off unless enabled; the
+    # Personal API key is read from a file, never from the environment or the database.
+    garmin_enabled: bool = False
+    garmin_api_key_file: Path = Path("~/.config/garmin/connect-personal-api-key")
+    garmin_pull_interval_minutes: int = Field(default=120, ge=15, le=1440)
+    garmin_lookback_days: int = Field(default=3, ge=1, le=28)
+    # What the Garmin source is called in Cihazlarım (the Personal API exposes no device model).
+    garmin_device_name: str = Field(default="Garmin", min_length=1, max_length=120)
+
+    # Source precedence (app/services/source_precedence.py): when two sources report the same
+    # data (same type, overlapping time) the first listed source is shown, the others stay
+    # visible as alternatives; nothing is summed. Comma-separated source codes, most preferred
+    # first; a source not listed ranks after the listed ones. Reversing a policy is one line.
+    source_precedence_activity: str = "GARMIN,FITBIT,HEALTH_KIT"
+    source_precedence_health: str = "FITBIT,GARMIN,HEALTH_KIT"
 
     @property
     def production(self) -> bool:
@@ -131,6 +158,18 @@ class Settings(BaseSettings):
             names = ", ".join(sorted(set(unsafe)))
             raise ValueError(f"unsafe or missing production configuration: {names}")
         return self
+
+    @field_validator("source_precedence_activity", "source_precedence_health")
+    @classmethod
+    def normalize_precedence(cls, value: str) -> str:
+        codes = [code.strip().upper() for code in value.split(",") if code.strip()]
+        if not codes:
+            raise ValueError("a source precedence lists at least one source code")
+        if len(set(codes)) != len(codes):
+            raise ValueError("a source precedence lists each source code once")
+        if any(not code.replace("_", "").isalnum() for code in codes):
+            raise ValueError("source codes are letters, digits and underscores (FITBIT, GARMIN)")
+        return ",".join(codes)
 
     @field_validator("app_ui_token", mode="before")
     @classmethod

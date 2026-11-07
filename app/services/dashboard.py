@@ -25,7 +25,8 @@ from app.models.manual import ManualMeasurement
 from app.models.state import RawHealthData
 from app.parsers.common import first_number, parse_date, payload_for
 from app.parsers.sleep import SLEEP_NUMERIC_ERROR, sleep_asleep_seconds
-from app.services.current_heart import heart_rate_hours
+from app.services import garmin_readers
+from app.services.current_heart import heart_rate_samples
 from app.services.current_sleep import current_sleep, sleep_wake_window
 from app.services.current_steps import current_steps
 from app.services.current_weight import latest_weight
@@ -37,6 +38,17 @@ from app.services.finite_math import (
     finite_scaled_sum,
 )
 from app.services.manual_flags import excluded_measurements
+from app.services.source_precedence import (
+    GARMIN,
+    Observation,
+    Policy,
+    google_source_of,
+    resolve,
+    resolve_samples,
+)
+
+# The day values the dashboard resolves across sources (app/services/source_precedence.py).
+DAILY_METRICS = ("steps", "sleep_seconds", "resting_bpm", "hrv_ms", "spo2")
 
 # Machine-readable reasons a day's sleep value is not a plain measurement, in this order.
 SLEEP_ASSUMPTIONS = (
@@ -145,7 +157,12 @@ async def dashboard_data(
     *,
     valid_sources_only: bool = False,
     include_source_deleted: bool = False,
+    policy: Policy | None = None,
 ) -> dict:
+    """The civil-day read model: per day the five values, each the *selected* source's value
+    under the precedence policy (app/services/source_precedence.py) with the other sources'
+    values kept as ``sources[metric].alternatives``; never a sum across sources."""
+    policy = policy or Policy.from_settings()
     zone = ZoneInfo(timezone)
     window = daily_window(end_date, days, zone)
     first, start, stop = window.first, window.start, window.stop
@@ -164,6 +181,16 @@ async def dashboard_data(
         }
         for i in range(days)
     }
+    # day -> metric -> the Google platforms whose records made the value (the source label).
+    platforms: dict[date, dict[str, set]] = {day: {} for day in rows}
+
+    def seen(day: date, metric: str, record: object) -> None:
+        source = record.get("dataSource") if isinstance(record, dict) else None
+        platform = source.get("platform") if isinstance(source, dict) else None
+        platforms[day].setdefault(metric, set()).add(
+            platform if isinstance(platform, str) else None
+        )
+
     step_days: dict[date, list[tuple[float, float, float]]] = {}
     step_buckets: dict[int, list[tuple[float, float, float]]] = {}
 
@@ -256,6 +283,8 @@ async def dashboard_data(
             term = (supplied, (edge - cursor).total_seconds(), duration)
             day = local.date()
             step_days.setdefault(day, []).append(term)
+            if day in platforms:
+                seen(day, "steps", record)
             if day == end_date:
                 step_buckets.setdefault(local.hour, []).append(term)
             cursor = edge
@@ -301,6 +330,7 @@ async def dashboard_data(
         day = right.astimezone(zone).date()
         if day in rows:
             by_day.setdefault(day, []).append((span, payload))
+            seen(day, "sleep_seconds", raw_json)
     for day, values in rows.items():
         estimate = sleep_estimate(by_day.get(day, []))
         values["sleep_seconds"] = estimate.seconds
@@ -343,9 +373,31 @@ async def dashboard_data(
             value = first_number(payload, fields)
             if value is not None:
                 rows[day][key] = finite_number(value)
+                seen(day, key, item.raw_json)
 
-    heart_hours = await heart_rate_hours(
-        session, end_date, zone, valid_source(HeartRate, "heart-rate")
+    # Garmin's values of the same days, resolved against Google's by the policy: the selected
+    # source's value is the day's value, the others stay listed; nothing is summed.
+    garmin_days = await garmin_readers.daily_values(session, first, end_date, zone)
+    for day, values in rows.items():
+        values["sources"] = {}
+        for metric in DAILY_METRICS:
+            observations = []
+            if values[metric] is not None:
+                observations.append(
+                    Observation(google_source_of(platforms[day].get(metric, ())), values[metric])
+                )
+            garmin_value = garmin_days.get(day, {}).get(metric)
+            if garmin_value is not None:
+                observations.append(Observation(GARMIN, garmin_value, provider=GARMIN))
+            resolution = resolve(metric, observations, policy)
+            values[metric] = resolution.value
+            values["sources"][metric] = resolution.as_dict()
+            if metric == "sleep_seconds" and resolution.selected is not None:
+                if resolution.selected.source == GARMIN:
+                    values["sleep_assumptions"] = ["from_normalized_columns"]
+
+    heart_hours, heart_sources = await _heart_chart(
+        session, end_date, zone, valid_source(HeartRate, "heart-rate"), policy, rows[end_date]
     )
 
     measurements = []
@@ -434,10 +486,90 @@ async def dashboard_data(
         "charts": {
             "steps": step_hours,
             "heart_rate": heart_hours,
+            "sources": {
+                "steps": {
+                    key: value
+                    for key, value in rows[end_date]["sources"]["steps"].items()
+                    if key != "alternatives"
+                }
+                | {
+                    "alternatives": [
+                        {key: value for key, value in item.items() if key != "value"}
+                        for item in rows[end_date]["sources"]["steps"]["alternatives"]
+                    ]
+                },
+                "heart_rate": heart_sources,
+            },
         },
+        "precedence": policy.as_dict(),
         "sleep_method": (
             "Uyanılan güne atanır; uyanık ve huzursuz süre çıkarılır, evre bilgisi yoksa "
             "süre üst sınırdır. Örtüşen oturumlar tek sayılır; örtüşmede süre tahminidir. "
             "Günün varsayımları sleep_assumptions alanındadır."
         ),
     }
+
+
+async def _heart_chart(
+    session: AsyncSession,
+    day: date,
+    zone: ZoneInfo,
+    source_filter,
+    policy: Policy,
+    row: dict,
+) -> tuple[list[float | None], dict]:
+    """The day's hourly heart-rate means, one source per minute: inside a selected workout
+    window the activity policy picks (Garmin first), outside it the health policy (Fitbit
+    first); a source's samples are never averaged with another's. Returns the 24 means and
+    the sources card (``source``, ``label``, ``alternatives``, ``activity_windows``)."""
+    start = datetime.combine(day, time.min, zone).astimezone(UTC)
+    stop = datetime.combine(day + timedelta(days=1), time.min, zone).astimezone(UTC)
+    google = await heart_rate_samples(session, start, stop, source_filter)
+    garmin = await garmin_readers.heart_rate_samples(session, start, stop)
+    if not garmin:
+        # Google alone: the hourly means ``heart_rate_hours`` would give, from the samples
+        # already read (every raw payload is parsed once).
+        hours = hourly_means([(moment, bpm) for moment, bpm, _ in google], zone)
+        source = google_source_of(platform for _, _, platform in google) if google else None
+        return hours, {
+            "source": source,
+            "label": _label(source),
+            "alternatives": [],
+            "activity_windows": None,
+        }
+    windows = [
+        (as_utc(item["start_time"]), as_utc(item["end_time"]))
+        for item in await garmin_readers.workouts(session, start - timedelta(days=1), stop)
+    ]
+    series = {}
+    for moment, bpm, platform in google:
+        series.setdefault(google_source_of((platform,)), []).append((moment, bpm))
+    series[GARMIN] = garmin
+    kept, chosen = resolve_samples(series, windows, policy)
+    hours = hourly_means([(moment, bpm) for moment, bpm, _ in kept], zone)
+    ranked = sorted(series, key=lambda code: (policy.rank(code, "health"), code))
+    return hours, {
+        "source": ranked[0],
+        "label": _label(ranked[0]),
+        "alternatives": [{"source": code, "label": _label(code)} for code in ranked[1:]],
+        "activity_windows": GARMIN if windows else None,
+        "minutes_by_source": chosen,
+    }
+
+
+def hourly_means(samples: list[tuple[datetime, float]], zone: ZoneInfo) -> list[float | None]:
+    """Mean per local hour (24 values, None for an hour without a sample), as the heart chart
+    shows them (the shape of ``current_heart.heart_rate_hours``)."""
+    from app.services.finite_math import finite_mean
+
+    buckets: dict[int, list[float]] = {}
+    for moment, bpm in samples:
+        buckets.setdefault(moment.astimezone(zone).hour, []).append(bpm)
+    means = [finite_mean(buckets.get(hour, [])) for hour in range(24)]
+    return [round(value, 1) if value is not None else None for value in means]
+
+
+def _label(source: str | None) -> str | None:
+    from app.services.source_precedence import label
+
+    return label(source)

@@ -62,7 +62,6 @@ def test_upgrade_adds_only_new_tables_and_keeps_every_existing_row(database):
         rows = connection.execute(text("SELECT * FROM webhook_events")).all()
     tables = set(inspect(engine).get_table_names())
     command.upgrade(config, "20261102_0023")
-    command.check(config)
     assert set(inspect(engine).get_table_names()) - tables == set(raw_rejections.TABLES)
     with engine.connect() as connection:
         after = set(connection.execute(SCHEMA).tuples())
@@ -72,6 +71,8 @@ def test_upgrade_adds_only_new_tables_and_keeps_every_existing_row(database):
     added = {name for _, name, _ in after - schema}
     assert {name for name, (table, _) in raw_rejections.SQLITE_TRIGGER_SQL.items()} <= added
     assert all(any(table in name for table in raw_rejections.TABLES) for name in added), added
+    command.upgrade(config, "head")
+    command.check(config)
 
 
 @pytest.mark.parametrize("table", raw_rejections.TABLES)

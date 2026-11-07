@@ -66,9 +66,10 @@ async def test_workouts_sources_month_timezone_and_validation(sessions):
         rows = (
             await client.get("/api/dashboard/workouts?month=2026-09-01&timezone=Europe/Paris")
         ).json()
-        assert {row["source"] for row in rows} == {"Fitbit", "Manuel"}
+        # A Google record without a dataSource.platform is labelled "Google", not guessed.
+        assert {row["source"] for row in rows} == {"Google", "Manuel"}
         assert len(rows) == 2
-        assert next(row for row in rows if row["source"] == "Fitbit")["duration_seconds"] == 3500
+        assert next(row for row in rows if row["source"] == "Google")["duration_seconds"] == 3500
         assert (
             await client.get("/api/dashboard/workouts?month=2026-08-01&timezone=Europe/Paris")
         ).json() == []

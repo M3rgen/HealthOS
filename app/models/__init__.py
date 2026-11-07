@@ -62,6 +62,9 @@ __all__ = [
     "EnergyExpenditure",
     "ExerciseSession",
     "FetchRound",
+    "GarminApiResponse",
+    "GarminPullState",
+    "GarminRawRecord",
     "HeartRate",
     "HeartRateVariability",
     "IdentityReconcileState",
@@ -102,3 +105,8 @@ __all__ = [
 ]
 
 from app.models import derived_invalidation as derived_invalidation
+
+# After the Google archive's guards: the Garmin tables' guards register last (0024).
+from app.models.garmin import GarminApiResponse as GarminApiResponse
+from app.models.garmin import GarminPullState as GarminPullState
+from app.models.garmin import GarminRawRecord as GarminRawRecord

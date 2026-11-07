@@ -104,7 +104,7 @@ run(async () => {
       const google = page.locator('[data-source="Fitbit"][data-workout-id="shared"]');
       const manual = page.locator('[data-source="Manuel"][data-workout-id="shared"]');
       assert.equal(await google.locator('..').evaluate(el => el.closest('.workout-day').dataset.date), '2026-01-01');
-      assert.match(await google.textContent(), /Google · Fitbit/);
+      assert.match(await google.locator(".workout-source").textContent(), /^Fitbit$/); assert.doesNotMatch(await google.textContent(), /Google · /);
       assert.match(await google.locator('.workout-time').textContent(), /01:30.*02:30/);
       assert.deepEqual(await google.locator('dd').allTextContents(), ['58 dk', '—', '—']);
       assert.deepEqual(await manual.locator('dd').allTextContents(), ['1 sa 0 dk', '0 kcal', '0 km']);

@@ -12,7 +12,7 @@ pytestmark = pytest.mark.integration
 
 FRESHNESS_INDEX = "ix_raw_health_data_type_freshness"
 AD_HOC_INDEX = "ix_raw_health_data_type_effective_time"
-HEAD = "20261102_0023"
+HEAD = "20261107_0025"
 
 
 def _sync_url(database_url: str) -> str:

@@ -106,6 +106,12 @@ const VIEWS = {
     await page.locator('[data-page="system"]').click();
     await page.locator('#google-empty:not([hidden])').waitFor();
   } },
+  // Two sources on the same day: source badges in the table and the opened "Diğer kaynaklar" sub-row.
+  kaynaklar: { scenario: 'kaynaklar', run: async (page) => {
+    await page.locator('#history-rows .source-badge').first().waitFor();
+    await page.locator('#history-rows .source-toggle').first().click();
+    await page.locator('#history-rows .source-alternatives:not([hidden])').first().waitFor();
+  } },
   'empty-sports': { scenario: 'empty', run: async (page) => {
     await page.locator('[data-page="sports"]').click();
     await page.locator('.workouts-panel[data-empty]').waitFor();
@@ -157,6 +163,7 @@ async function mock(page, base, problems, scenario) {
     }
     if (p === '/api/sync/coverage') return json(route, call(data.coverage, q));
     if (p === '/api/webhooks/status') return json(route, data.webhookStatus);
+    if (p === '/api/devices') return json(route, data.devices);
     if (p === '/sync/status') return json(route, data.syncStatus);
     if (p === '/sync/all') return json(route, { status: 'accepted', data_types: ['steps'] }, 202);
     if (/^\/(api|sync|auth|docs|health|google-health)(\/|$)/.test(p)) { problems.push(`unmocked ${method} ${p}`); return json(route, { detail: 'preview: not mocked' }, 404); }

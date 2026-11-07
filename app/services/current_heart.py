@@ -70,3 +70,38 @@ async def heart_rate_hours(
         buckets.setdefault(hour, []).append(bpm)
     means = [finite_mean(buckets.get(hour, [])) for hour in range(24)]
     return [round(value, 1) if value is not None else None for value in means]
+
+
+async def heart_rate_samples(
+    session: AsyncSession, start: datetime, stop: datetime, source_filter
+) -> list[tuple[datetime, float, object]]:
+    """The current heart-rate samples in ``[start, stop)`` with their ``dataSource.platform``
+    (for the source label), under the caller's eligibility predicate; time-ordered."""
+    raw = aliased(RawHealthData)
+    records = await session.scalars(
+        select(raw.raw_json)
+        .select_from(HeartRate)
+        .join(
+            raw,
+            and_(
+                raw.data_type == "heart-rate",
+                raw.google_data_point_id == HeartRate.google_data_point_id,
+            ),
+        )
+        .where(
+            raw.source_start_time >= start,
+            raw.source_start_time < stop,
+            HeartRate.is_quarantined.is_(False),
+            source_filter,
+        )
+        .order_by(raw.source_start_time)
+    )
+    found = []
+    for record in records:
+        measurement = current_heart_rate(record)
+        if measurement is None:
+            continue
+        timestamp, bpm = measurement
+        source = record.get("dataSource") if isinstance(record, dict) else None
+        found.append((timestamp, bpm, source.get("platform") if isinstance(source, dict) else None))
+    return found

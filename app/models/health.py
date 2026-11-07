@@ -7,12 +7,25 @@ from decimal import Decimal
 from sqlalchemy import JSON, Boolean, DateTime, Index, Numeric, String, UniqueConstraint, false
 from sqlalchemy.orm import Mapped, mapped_column
 
+from app.core.providers import GOOGLE
 from app.db.base import Base, TimestampMixin
 
 
 class SourceMixin:
+    """The columns every normalized table shares.
+
+    ``google_data_point_id`` is the row's unique record key: Google's id (or the synthetic
+    v1/v2 id) for a Google row, ``garmin:<kind>:<key>`` for a Garmin row (app/core/providers.py).
+    ``provider`` says which, ``source_record_id`` holds the provider's own key of a non-Google
+    row (NULL for Google rows). Rows from before migration 20261107_0025 are ``GOOGLE``.
+    """
+
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     google_data_point_id: Mapped[str] = mapped_column(String(512), nullable=False, unique=True)
+    provider: Mapped[str] = mapped_column(
+        String(16), nullable=False, default=GOOGLE, server_default=GOOGLE
+    )
+    source_record_id: Mapped[str | None] = mapped_column(String(512))
     device: Mapped[str | None] = mapped_column(String(255))
     source_timezone: Mapped[str | None] = mapped_column(String(128))
     is_quarantined: Mapped[bool] = mapped_column(

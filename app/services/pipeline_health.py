@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.config import Settings
 from app.core.timeutil import as_utc
+from app.models.identity_tables import IdentityReconcileState
 from app.models.state import (
     RawHealthData,
     ReliabilityState,
@@ -18,6 +19,7 @@ from app.models.state import (
     WebhookEvent,
     WebhookNotification,
 )
+from app.services.identity_reconcile_window import lock_contention
 from app.services.raw_rejections import summary as rejection_summary
 
 
@@ -48,6 +50,9 @@ class PipelineSnapshot:
     data_freshness_checked_at: datetime | None = None
     # Distinct rejected Google records not yet acknowledged (health-mirror rejections).
     rejected_records: int = 0
+    # Data types whose last identity reconciliation gave up on a busy lock, with the nights
+    # since they were last settled: a warning, never a change of status.
+    identity_lock_contention: tuple[dict, ...] = ()
 
     def as_dict(
         self,
@@ -73,6 +78,7 @@ class PipelineSnapshot:
             "failed_notifications": self.failed_notifications,
             "failed_syncs": self.failed_syncs,
             "rejected_records": self.rejected_records,
+            "identity_lock_contention": [dict(item) for item in self.identity_lock_contention],
             "stale_streams": list(self.stale_streams),
             "reasons": list(self.reasons),
             "data_freshness": {
@@ -223,6 +229,11 @@ class PipelineHealthService:
         freshness = await self._freshness_summary(session, now)
         reliability = await session.get(ReliabilityState, 1)
         rejected_records = (await rejection_summary(session))["unacknowledged"]
+        failed_identity = (
+            await session.scalars(
+                select(IdentityReconcileState).where(IdentityReconcileState.last_error.is_not(None))
+            )
+        ).all()
 
         sync_by_type = {name: as_utc(value) for name, value in sync_rows}
         stale_after = timedelta(minutes=self.settings.pipeline_stale_threshold_minutes)
@@ -296,6 +307,7 @@ class PipelineHealthService:
             oldest_frequent_sync=oldest_frequent_sync,
             data_freshness_checked_at=freshness.checked_at,
             rejected_records=rejected_records,
+            identity_lock_contention=tuple(lock_contention(failed_identity)),
         )
 
 

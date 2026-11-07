@@ -118,8 +118,17 @@ async def snapshot(session, newer=()):
     """
     from app.db.base import Base
 
+    # The provider columns (0025) are left out: a migration test compares the rows across
+    # revisions that do not have them, and every row here is a Google row anyway.
     return {
-        name: sorted(repr(tuple(row)) for row in (await session.execute(select(table))).all())
+        name: sorted(
+            repr(tuple(row))
+            for row in (
+                await session.execute(
+                    select(*(c for c in table.c if c.name not in ("provider", "source_record_id")))
+                )
+            ).all()
+        )
         for name, table in Base.metadata.tables.items()
         if name != "derived_days" and name not in newer
     }

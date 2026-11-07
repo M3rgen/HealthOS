@@ -16,6 +16,8 @@ Every change keeps these rules; a pull request that breaks one is not merged.
    passes only `POST /webhooks/google-health`.
 4. **No new external services.** No new SaaS, telemetry, or CDN. Umay, the assistant, sends the
    records it is asked to analyze to OpenAI and keeps no persistent memory; both stay documented.
+   The one other external endpoint is the optional, read-only Garmin Connect Personal API pull
+   (`GARMIN_ENABLED`, off by default; see [docs/REFERENCE.md](docs/REFERENCE.md#garmin-connect-personal-api)).
 5. **No secrets or personal data** in commits, issues, or screenshots (see
    [Commit hygiene](#commit-hygiene) and [Use synthetic examples](#use-synthetic-examples)).
 6. **Natural Turkish interface text.** Write "Eşitleme", not "Senkronizasyon". The assistant is

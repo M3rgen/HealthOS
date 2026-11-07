@@ -235,9 +235,10 @@ rejecting a wrong chain (or deciding two sources distinct) counts both sides aga
 device once, and the opposite decision undoes that exactly. The **reconciler** (`health-mirror identity-backfill`) decides
 chains only when every
 fingerprint's whole sighting history leaves no doubt, and links the duplicates; it runs once in
-full after the deploy and then **nightly** at 02:30 UTC as the scheduler job `identity-reconcile`
-(incremental: rows changed since its last run; `IDENTITY_RECONCILE_ENABLED`,
-`IDENTITY_RECONCILE_HOUR_UTC`, `IDENTITY_RECONCILE_MINUTE`). Everything it leaves open, and every
+full after the deploy and then **nightly** as the scheduler job `identity-reconcile`, started when
+the scheduled Google reconciliations of the night have ended (incremental: rows changed since its
+last run; `IDENTITY_RECONCILE_ENABLED`; with `RECONCILIATION_ENABLED=false` at
+`IDENTITY_RECONCILE_HOUR_UTC`:`IDENTITY_RECONCILE_MINUTE`, 02:30 UTC). Everything it leaves open, and every
 chain it decided, is listed in its report and in `health-mirror status`; **you** decide those with
 `health-mirror identity-decide` (below). Double counting after a rename therefore lasts until the
 next night, or until you decide a case the rule leaves open.
@@ -412,10 +413,20 @@ a rename although evidence made them two devices, refuted chains, deferred delet
 you decide it. A data type that never had a full run gets its first full pass from the nightly
 job (`skipped: no full identity-backfill of this data type yet: ran its first full pass`).
 `IDENTITY_RECONCILE_LOCK_BUSY` (and `retrying in … s` on stderr) means a batch met a long sync, a
-deletion check or an import and backed off; `error: … could not get the identity lock` in that
-data type's `last_error` (and `IDENTITY_RECONCILE_DATA_TYPE_FAILED` in the log) that it gave up
-after 8 attempts: nothing of that batch was written, the other data types still ran, and the next
-run resumes. By hand, `identity-backfill` then exits 1 after printing the report. Run the incremental pass by hand with `identity-backfill --incremental [--dry-run]`.
+deletion check, an import or the watchdog's recovery after a restart and backed off. The run then
+goes on with the other data types (`IDENTITY_RECONCILE_DATA_TYPE_DEFERRED`) and tries the busy one
+again: the nightly job until the window ends (03:55 UTC, `IDENTITY_RECONCILE_UNTIL_HOUR_UTC`/
+`_MINUTE`), a later run and `identity-backfill` by hand for `IDENTITY_RECONCILE_LOCK_WAIT_MINUTES`
+(60; printing each retry; `0` gives up after 8 attempts).
+`error: … could not get the identity lock` in that data type's `last_error` (and
+`IDENTITY_RECONCILE_DATA_TYPE_FAILED` in the log) means it gave up: nothing of that batch was
+written, the other data types still ran, and the next run resumes from the checkpoint.
+`failed_nights` beside it in `status`, and `identity_lock_contention` in `/health` (a warning, the
+status stays as it is), count the nights it has gone unsettled. More than one: run
+`identity-backfill --incremental` by hand during the day (not right after a restart, while the
+watchdog's recovery fetches: `WATCHDOG_RECOVERY_STARTED` in the log; the run waits for it up to
+the minutes above), and check `docker compose logs app | grep -E 'RECONCILIATION_COMPLETED|IDENTITY_RECONCILE_'` for
+a reconciliation that ran past 03:55 UTC. By hand, `identity-backfill` then exits 1 after printing the report. Run the incremental pass by hand with `identity-backfill --incremental [--dry-run]`.
 
 Duration: the first pass (timelines) reads every row once, the second links in batches of 5,000
 rows, each its own transaction with `statement_timeout` 120 s. On a synthetic archive of 1.4

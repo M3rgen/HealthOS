@@ -14,6 +14,7 @@ import { request, handleUnauthorized } from './api.js';
 import { describeSyncError } from './sync-errors.js';
 import { setupCoverage } from './coverage.js';
 import { setupWebhookStatus } from './webhook-status.js';
+import { setupDevices } from './devices.js';
 import { setupBodyLoader } from './body-loader.js';
 import { createDisplayPreferences } from './display-preferences.js';
 
@@ -281,18 +282,55 @@ function paintData() {
   $('sleep-chart').setAttribute('aria-label', data.days.map(r => `${r.date}: ${duration(r.sleep_seconds)}`).join(', '));
   historyPanel.update(data);
 }
+// Per-metric formatters shared by the day table and its "other sources" sub-row. Precedence
+// only picks which source is shown in the cell; every alternative stays visible as text.
+const sourceMetrics = {
+  steps: ['Adım', value => num(value)],
+  sleep_seconds: ['Uyku', duration],
+  resting_bpm: ['Dinlenme nabzı', value => `${num(value)} bpm`],
+  hrv_ms: ['HRV', value => `${num(value, 1)} ms`],
+  spo2: ['SpO₂', value => `%${num(value, 1)}`],
+};
+const alternativesOf = (row, metric) => row.sources?.[metric]?.alternatives ?? [];
+// A text badge (never colour alone) naming the shown source, only when another source disagrees.
+function sourceBadge(row, metric) {
+  if (!alternativesOf(row, metric).length) return '';
+  return ` <span class="source-badge">${escape(row.sources[metric].label ?? row.sources[metric].source)}</span>`;
+}
+function alternativesText(row) {
+  return Object.entries(sourceMetrics)
+    .flatMap(([metric, [label, format]]) =>
+      alternativesOf(row, metric).map(alt => `${label}: ${escape(alt.label ?? alt.source)} ${format(alt.value)}`),
+    )
+    .join(' · ');
+}
 function paintHistory(data) {
   $('history-title').textContent = 'Son 7 gün';
   $('range-caption').textContent = `${shortDate(civilDate(data.start_date))} – ${fullDate(civilDate(data.end_date))}`;
   $('export-button').href =
     `/api/dashboard/export.csv?${new URLSearchParams({ days: data.days.length, end_date: data.end_date, timezone: data.timezone })}`;
   $('history-rows').innerHTML = data.days
-    .map(
-      row =>
-        `<tr class="${row.partial ? 'today-row' : ''}"><td>${escape(shortDate(civilDate(row.date)))}</td><td>${num(row.steps)}</td><td>${duration(row.sleep_seconds)}</td><td>${row.resting_bpm == null ? '—' : `${num(row.resting_bpm)} bpm`}</td><td>${row.hrv_ms == null ? '—' : `${num(row.hrv_ms, 1)} ms`}</td><td>${row.spo2 == null ? '—' : `%${num(row.spo2, 1)}`}</td><td><span class="dot ${row.status === 'complete' || row.status === 'partial' ? 'good' : 'warning'}">${states[row.status]}</span></td></tr>`,
-    )
+    .map(row => {
+      const others = alternativesText(row);
+      const subId = `source-alternatives-${row.date}`;
+      const toggle = others
+        ? `<button type="button" class="source-toggle" aria-expanded="false" aria-controls="${subId}">Diğer kaynaklar</button>`
+        : '';
+      const subRow = others
+        ? `<tr class="source-alternatives" id="${subId}" hidden><td colspan="7">${others}</td></tr>`
+        : '';
+      return `<tr class="${row.partial ? 'today-row' : ''}"><td>${escape(shortDate(civilDate(row.date)))}</td><td>${num(row.steps)}${sourceBadge(row, 'steps')}</td><td>${duration(row.sleep_seconds)}${sourceBadge(row, 'sleep_seconds')}</td><td>${row.resting_bpm == null ? '—' : `${num(row.resting_bpm)} bpm`}${sourceBadge(row, 'resting_bpm')}</td><td>${row.hrv_ms == null ? '—' : `${num(row.hrv_ms, 1)} ms`}${sourceBadge(row, 'hrv_ms')}</td><td>${row.spo2 == null ? '—' : `%${num(row.spo2, 1)}`}${sourceBadge(row, 'spo2')}</td><td><span class="dot ${row.status === 'complete' || row.status === 'partial' ? 'good' : 'warning'}">${states[row.status]}</span>${toggle}</td></tr>${subRow}`;
+    })
     .join('');
 }
+$('history-rows').addEventListener('click', event => {
+  const button = event.target.closest('.source-toggle');
+  if (!button) return;
+  const open = button.getAttribute('aria-expanded') !== 'true';
+  button.setAttribute('aria-expanded', String(open));
+  const subRow = document.getElementById(button.getAttribute('aria-controls'));
+  if (subRow) subRow.hidden = !open;
+});
 async function refresh() {
   if (busy) {
     pendingRefresh = true;
@@ -367,6 +405,7 @@ setupMeasurementFlags({ request, notice, reload: () => refresh().then(loadMeasur
 async function loadSystem() {
   coveragePanel.refresh();
   webhookPanel.refresh();
+  devicesPanel.refresh();
   try {
     const rows = await request('/sync/status');
     $('sync-rows').innerHTML = rows.length
@@ -535,6 +574,7 @@ const workouts = setupWorkouts({
 });
 const coveragePanel = setupCoverage({ request, getZone: () => zone, getToday: today, escape });
 const webhookPanel = setupWebhookStatus({ request, getZone: () => zone });
+const devicesPanel = setupDevices({ request, getZone: () => zone, escape });
 // Asked in parallel with the first refresh, so the first paint never waits for it.
 const firstDisplaySync = display.sync();
 await refresh();

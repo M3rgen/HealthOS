@@ -290,3 +290,13 @@ dialog[open]{animation:dialog-in var(--dur) var(--ease-out)}
 /* Content taller than its panel scrolls inside that panel, never past its edge. */
 #measurements>.panel,.sync-history,.workouts-panel{overflow:auto;overscroll-behavior:contain}
 
+/* Source precedence in the day table: a text badge names the shown source only where another
+   source disagrees; the toggle reveals those alternatives as text in one sub-row. */
+.source-badge{display:inline-block;margin-left:6px;padding:1px 6px;border:1px solid var(--line);border-radius:var(--radius-pill);font-size:10px;font-weight:550;letter-spacing:.01em;color:var(--muted);vertical-align:middle;line-height:1.5}
+.source-toggle{margin-left:8px;padding:2px 8px;border:1px solid var(--amber-line);border-radius:var(--radius-pill);background:var(--amber-soft);color:var(--text);font:inherit;font-size:11px;font-weight:550;line-height:1.5;vertical-align:middle}
+.source-toggle:hover{background:color-mix(in srgb,var(--amber) 20%,transparent)}
+.source-toggle[aria-expanded="true"]{background:var(--amber);color:var(--button-ink);border-color:var(--amber)}
+/* Outranks the centred `.page td[colspan]` empty-table message style. */
+.page .source-alternatives td[colspan]{white-space:normal;text-align:left;font-size:12px;line-height:1.5;color:var(--muted);padding:0 12px 8px;border-top:0;overflow-wrap:anywhere}
+@media(max-width:540px){.page .source-alternatives td[colspan]{padding:0 10px 6px;font-size:11px}}
+.today-row+.source-alternatives td{box-shadow:inset 2px 0 0 var(--amber)}

@@ -16,6 +16,7 @@ from app.models.state import RawHealthData
 from app.services.coverage import coverage_response
 from app.services.dashboard import dashboard_data
 from app.services.derived import build_range, derived_range
+from app.services.devices import device_report
 from app.services.health_interpretation import derived_window, interpret, refusal
 from app.services.health_windows import bounds, input_bounds, interpretation_window
 from app.services.interpretation_types import ACTIONS
@@ -43,6 +44,7 @@ class ArchiveQuery(BaseModel):
         "physiology",
         "longitudinal",
         "relationship",
+        "devices",
     ]
     start_date: date | None = None
     end_date: date | None = None
@@ -64,7 +66,7 @@ class ArchiveQuery(BaseModel):
     @model_validator(mode="after")
     def validate_range(self):
         zone = ZoneInfo(self.timezone)
-        if self.action != "inventory":
+        if self.action not in ("inventory", "devices"):
             if not self.start_date or not self.end_date:
                 raise ValueError("start_date ve end_date gerekli.")
             days = (self.end_date - self.start_date).days + 1
@@ -155,7 +157,14 @@ HEALTH_TOOL = {
         "New actions: at most 90 days (relationship 180), 50000 inputs, 16 MiB input, 64 KiB "
         "response. Statistics use the whole requested window, independent of limit; follow "
         "next_cursor using cursor with identical query parameters (limit may differ); "
-        "stale_cursor requires restarting. Structured refusals are complete JSON. No SQL or "
+        "stale_cursor requires restarting. Structured refusals are complete JSON. devices lists "
+        "the user's devices (Cihazlarım): one entry per device with its renamed forms merged, "
+        "its data types, first/last sighting, the time of its newest record, the status "
+        "bagli/gecikmeli/kopuk and its precedence per category; no date range needed. Source "
+        "precedence: when several devices report the same data, sport activities show Garmin "
+        "first and every other health metric shows the Fitbit first; daily and devices return "
+        "the selected source with the other sources as alternatives (never summed), and the "
+        "legacy daily fields hold the selected source's value. No SQL or "
         "writes allowed. Reads refresh only a disposable derived cache; raw and manual data "
         "are never written. "
     ),
@@ -261,6 +270,8 @@ async def read_health(arguments: dict) -> dict:
             # One source/cache/eligibility snapshot across every scientific read.
             await session.execute(text("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ"))
         await plan_each_query(session)
+        if query.action == "devices":
+            return await device_report(session)
         if query.action == "inventory":
             rows = await session.execute(
                 select(

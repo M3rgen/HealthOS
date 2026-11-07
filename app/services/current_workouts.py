@@ -1,4 +1,9 @@
-"""Read Google workouts from the current payload, preserving the normalized archive."""
+"""Read Google workouts from the current payload, preserving the normalized archive.
+
+Each row carries its source: ``source_code`` (the record's ``dataSource.platform``, e.g.
+``FITBIT``; ``GOOGLE`` when the record names none) and ``provider`` (``GOOGLE``). The
+display label and the precedence placement are added by the API (app/api/dashboard.py).
+"""
 
 from datetime import datetime
 
@@ -11,6 +16,7 @@ from app.models.eligibility import normalized_counted
 from app.models.health import ExerciseSession
 from app.models.state import RawHealthData
 from app.parsers import normalize
+from app.services.source_precedence import google_source
 
 
 def current_workout(identifier: object, record: object) -> dict | None:
@@ -45,8 +51,14 @@ def current_workout(identifier: object, record: object) -> dict | None:
         "distance_meters": (
             float(values["distance_meters"]) if values["distance_meters"] is not None else None
         ),
-        "source": "Fitbit",
+        "source_code": google_source(_platform(record)),
+        "provider": "GOOGLE",
     }
+
+
+def _platform(record: object) -> object:
+    source = record.get("dataSource") if isinstance(record, dict) else None
+    return source.get("platform") if isinstance(source, dict) else None
 
 
 async def current_workouts(session: AsyncSession, start: datetime, stop: datetime) -> list[dict]:

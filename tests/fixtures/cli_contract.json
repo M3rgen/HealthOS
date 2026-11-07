@@ -1,5 +1,5 @@
 {
-  "root_help": "                                                                                \n Usage: root [OPTIONS] COMMAND [ARGS]...                                        \n                                                                                \n Operate the Personal Health Data Mirror.                                       \n                                                                                \n╭─ Options ────────────────────────────────────────────────────────────────────╮\n│ --install-completion          Install completion for the current shell.      │\n│ --show-completion             Show completion for the current shell, to copy │\n│                               it or customize the installation.              │\n│ --help                        Show this message and exit.                    │\n╰──────────────────────────────────────────────────────────────────────────────╯\n╭─ Commands ───────────────────────────────────────────────────────────────────╮\n│ status                  Show synchronization and backfill status.            │\n│ backfill                Start or resume the historical backfill and wait for │\n│                         completion.                                          │\n│ sync                    Run incremental synchronization for one or every     │\n│                         configured data type.                                │\n│ reconcile               Re-read a recent window across every mirrored data   │\n│                         type.                                                │\n│ webhook-readiness       Report secret-safe Google Health subscriber          │\n│                         prerequisites.                                       │\n│ webhook-status          Show secret-safe local webhook receipt and           │\n│                         processing status.                                   │\n│ webhook-replay-pending  Retry stored pending and failed webhook elements     │\n│                         without a Google resend.                             │\n│ verify                  Check archive guards, payload and body hashes,       │\n│                         version history, and sync errors.                    │\n│ history                 List every stored version of raw records (oldest     │\n│                         first) as JSON.                                      │\n│ import-versions         Add payload versions (and whole records) that only   │\n│                         survive in old dumps.                                │\n│ identity-backfill       Decide source chains, add v2 aliases and link        │\n│                         duplicate rows of a record (idempotent).             │\n│ identity-decide         Decide what the reconciler left open: two sources    │\n│                         are one device, or two devices.                      │\n│ identity-sources        List a data type's source fingerprints: spans,       │\n│                         devices, chains (with review state),                 │\n│                         pairs kept apart, the owner's decisions, and what    │\n│                         the chain rule leaves open.                          │\n│ responses               List stored Google responses (newest first, metadata │\n│                         only) as JSON.                                       │\n│ export-response         Write one stored Google response body byte for byte  │\n│                         (metadata goes to stderr).                           │\n│ probe                   Probe accessible Google Health types without         │\n│                         archiving records or a backfill.                     │\n│ rejections              Eşitlemede reddedilen Google kayıtlarını listele,    │\n│                         onayla ya da dışa aktar.                             │\n╰──────────────────────────────────────────────────────────────────────────────╯\n\n",
+  "root_help": "                                                                                \n Usage: root [OPTIONS] COMMAND [ARGS]...                                        \n                                                                                \n Operate the Personal Health Data Mirror.                                       \n                                                                                \n╭─ Options ────────────────────────────────────────────────────────────────────╮\n│ --install-completion          Install completion for the current shell.      │\n│ --show-completion             Show completion for the current shell, to copy │\n│                               it or customize the installation.              │\n│ --help                        Show this message and exit.                    │\n╰──────────────────────────────────────────────────────────────────────────────╯\n╭─ Commands ───────────────────────────────────────────────────────────────────╮\n│ status                  Show synchronization and backfill status.            │\n│ backfill                Start or resume the historical backfill and wait for │\n│                         completion.                                          │\n│ sync                    Run incremental synchronization for one or every     │\n│                         configured data type.                                │\n│ reconcile               Re-read a recent window across every mirrored data   │\n│                         type.                                                │\n│ webhook-readiness       Report secret-safe Google Health subscriber          │\n│                         prerequisites.                                       │\n│ webhook-status          Show secret-safe local webhook receipt and           │\n│                         processing status.                                   │\n│ webhook-replay-pending  Retry stored pending and failed webhook elements     │\n│                         without a Google resend.                             │\n│ verify                  Check archive guards, payload and body hashes,       │\n│                         version history, and sync errors.                    │\n│ history                 List every stored version of raw records (oldest     │\n│                         first) as JSON.                                      │\n│ import-versions         Add payload versions (and whole records) that only   │\n│                         survive in old dumps.                                │\n│ identity-backfill       Decide source chains, add v2 aliases and link        │\n│                         duplicate rows of a record (idempotent).             │\n│ identity-decide         Decide what the reconciler left open: two sources    │\n│                         are one device, or two devices.                      │\n│ identity-sources        List a data type's source fingerprints: spans,       │\n│                         devices, chains (with review state),                 │\n│                         pairs kept apart, the owner's decisions, and what    │\n│                         the chain rule leaves open.                          │\n│ responses               List stored Google responses (newest first, metadata │\n│                         only) as JSON.                                       │\n│ export-response         Write one stored Google response body byte for byte  │\n│                         (metadata goes to stderr).                           │\n│ probe                   Probe accessible Google Health types without         │\n│                         archiving records or a backfill.                     │\n│ rejections              Eşitlemede reddedilen Google kayıtlarını listele,    │\n│                         onayla ya da dışa aktar.                             │\n│ garmin-status           Garmin Connect Personal API arşivinin çekme durumunu │\n│                         göster (değer ve sır içermez).                       │\n│ garmin-pull             Garmin'den son GARMIN_LOOKBACK_DAYS günü bir kez çek │\n│                         (zamanlayıcının yaptığı iş).                         │\n│ garmin-backfill         Garmin geçmişini parça parça çek; kesilirse aynı     │\n│                         sınırlarla kaldığı yerden sürer.                     │\n╰──────────────────────────────────────────────────────────────────────────────╯\n\n",
   "commands": {
     "status": {
       "help": "                                                                                \n Usage: root status [OPTIONS]                                                   \n                                                                                \n Show synchronization and backfill status.                                      \n                                                                                \n╭─ Options ────────────────────────────────────────────────────────────────────╮\n│ --help          Show this message and exit.                                  │\n╰──────────────────────────────────────────────────────────────────────────────╯\n\n",
@@ -585,6 +585,90 @@
           "type": "<IntRange x>=1>",
           "help": "Bu numaralı kaydın kendisini standart çıktıya yaz.",
           "is_flag": false
+        }
+      ]
+    },
+    "garmin-status": {
+      "help": "                                                                                \n Usage: root garmin-status [OPTIONS]                                            \n                                                                                \n Garmin Connect Personal API arşivinin çekme durumunu göster (değer ve sır      \n içermez).                                                                      \n                                                                                \n╭─ Options ────────────────────────────────────────────────────────────────────╮\n│ --help          Show this message and exit.                                  │\n╰──────────────────────────────────────────────────────────────────────────────╯\n\n",
+      "parameters": []
+    },
+    "garmin-pull": {
+      "help": "                                                                                \n Usage: root garmin-pull [OPTIONS]                                              \n                                                                                \n Garmin'den son GARMIN_LOOKBACK_DAYS günü bir kez çek (zamanlayıcının yaptığı   \n iş).                                                                           \n                                                                                \n╭─ Options ────────────────────────────────────────────────────────────────────╮\n│ --kind        <str>  Yalnız bu türleri çek (tekrarlanabilir); boşsa hepsi.   │\n│ --help               Show this message and exit.                             │\n╰──────────────────────────────────────────────────────────────────────────────╯\n\n",
+      "parameters": [
+        {
+          "name": "kind",
+          "opts": [
+            "--kind"
+          ],
+          "secondary_opts": [],
+          "default": null,
+          "required": false,
+          "nargs": 1,
+          "multiple": true,
+          "type": "STRING",
+          "help": "Yalnız bu türleri çek (tekrarlanabilir); boşsa hepsi.",
+          "is_flag": false
+        }
+      ]
+    },
+    "garmin-backfill": {
+      "help": "                                                                                \n Usage: root garmin-backfill [OPTIONS]                                          \n                                                                                \n Garmin geçmişini parça parça çek; kesilirse aynı sınırlarla kaldığı yerden     \n sürer.                                                                         \n                                                                                \n╭─ Options ────────────────────────────────────────────────────────────────────╮\n│ *  --since          <str>  İlk gün, YYYY-AA-GG. [required]                   │\n│    --until          <str>  Son gün (dahil), varsayılan bugün.                │\n│    --kind           <str>  Yalnız bu türleri çek (tekrarlanabilir); boşsa    │\n│                            hepsi.                                            │\n│    --dry-run               Ağa çıkmadan ve yazmadan yalnız istek sayılarını  │\n│                            göster.                                           │\n│    --help                  Show this message and exit.                       │\n╰──────────────────────────────────────────────────────────────────────────────╯\n\n",
+      "parameters": [
+        {
+          "name": "since",
+          "opts": [
+            "--since"
+          ],
+          "secondary_opts": [],
+          "default": null,
+          "required": true,
+          "nargs": 1,
+          "multiple": false,
+          "type": "STRING",
+          "help": "İlk gün, YYYY-AA-GG.",
+          "is_flag": false
+        },
+        {
+          "name": "until",
+          "opts": [
+            "--until"
+          ],
+          "secondary_opts": [],
+          "default": null,
+          "required": false,
+          "nargs": 1,
+          "multiple": false,
+          "type": "STRING",
+          "help": "Son gün (dahil), varsayılan bugün.",
+          "is_flag": false
+        },
+        {
+          "name": "kind",
+          "opts": [
+            "--kind"
+          ],
+          "secondary_opts": [],
+          "default": null,
+          "required": false,
+          "nargs": 1,
+          "multiple": true,
+          "type": "STRING",
+          "help": "Yalnız bu türleri çek (tekrarlanabilir); boşsa hepsi.",
+          "is_flag": false
+        },
+        {
+          "name": "dry_run",
+          "opts": [
+            "--dry-run"
+          ],
+          "secondary_opts": [],
+          "default": false,
+          "required": false,
+          "nargs": 1,
+          "multiple": false,
+          "type": "BOOL",
+          "help": "Ağa çıkmadan ve yazmadan yalnız istek sayılarını göster.",
+          "is_flag": true
         }
       ]
     }

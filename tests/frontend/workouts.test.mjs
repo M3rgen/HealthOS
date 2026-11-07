@@ -70,7 +70,7 @@ test('local start day, distinct source/id pairs, cross-day end, null and measure
   assert.equal((html.match(/class="workout-day"/g) || []).length, 1);
   assert.match(html, /data-date="2026-01-01"/);
   assert.equal((html.match(/data-workout-id="shared"/g) || []).length, 2);
-  assert.match(html, /Google · Fitbit/); assert.match(html, /workout-manual/);
+  assert.match(html, /workout-device">Fitbit</); assert.doesNotMatch(html, /Google · /); assert.match(html, /workout-manual/);
   assert.match(html, /01:30/); assert.match(html, /2 Ocak 2026 · /);
   assert.match(html, /3500 s/); assert.match(html, /3600 s/);
   assert.equal((html.match(/<dd>—<\/dd>/g) || []).length, 2);
@@ -123,4 +123,29 @@ test('manual save refreshes the selected-zone start month and preserves optional
   pending[1].resolve([{...rows[1],id:'saved'}]); await save;
   assert.equal($('workout-save').getAttribute('aria-disabled'), 'false');
   assert.match($('workout-rows').innerHTML, /data-workout-id="saved"/);
+});
+
+test('activity precedence: the secondary overlap folds under its primary, an orphan secondary stays top level', async () => {
+  const {$,pending,controller} = setup();
+  const garmin = {id:'g1',source:'Garmin',source_code:'GARMIN',provider:'GARMIN',priority:'primary',group:null,
+    alternatives:[{id:'f1',source:'Fitbit',source_code:'FITBIT',start_time:'2026-01-10T07:05:00Z',end_time:'2026-01-10T07:50:00Z'}],
+    exercise_type:'Koşu',start_time:'2026-01-10T07:00:00Z',end_time:'2026-01-10T08:00:00Z',duration_seconds:3600,calories_kcal:520,distance_meters:9800};
+  const fitbit = {id:'f1',source:'Fitbit',source_code:'FITBIT',provider:'GOOGLE',priority:'secondary',group:'g1',alternatives:[],
+    exercise_type:'Yürüyüş',start_time:'2026-01-10T07:05:00Z',end_time:'2026-01-10T07:50:00Z',duration_seconds:2700,calories_kcal:300,distance_meters:4000};
+  const orphan = {...fitbit,id:'f2',group:'missing',start_time:'2026-01-11T07:00:00Z',end_time:'2026-01-11T07:30:00Z'};
+  const loading = controller.update(); pending[0].resolve([fitbit, garmin, orphan, rows[1]]); await loading;
+  const html = $('workout-rows').innerHTML;
+  // Three top-level entries: the Garmin run, the orphan Fitbit walk and the manual row; the overlap is nested.
+  assert.equal((html.match(/class="workout-entry"/g) || []).length, 3);
+  assert.equal((html.match(/class="workout-alternative"/g) || []).length, 1);
+  assert.match(html, /data-workout-id="g1"[\s\S]*workout-device">Garmin<\/span><span class="workout-priority">Öncelikli</);
+  assert.match(html, /<details class="workout-alternatives"><summary>Diğer kaynaklar \(1\)<\/summary>[\s\S]*data-workout-id="f1"[\s\S]*İkincil/);
+  assert.match(html, /class="workout-entry" data-source="Fitbit" data-workout-id="f2"[\s\S]*İkincil/);
+  assert.equal((html.match(/Öncelikli/g) || []).length, 1);
+  assert.doesNotMatch(html, /Google · /);
+  assert.equal($('workout-status').textContent, '3 antrenman · 1 ikincil kayıt');
+  // Rows without the precedence fields (older responses) render as plain primary entries.
+  const plain = controller.update(); pending[1].resolve(rows); await plain;
+  assert.doesNotMatch($('workout-rows').innerHTML, /workout-priority|workout-alternatives/);
+  assert.equal($('workout-status').textContent, '2 antrenman');
 });

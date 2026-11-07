@@ -48,6 +48,7 @@ def identity_backfill(
 
     from app.services.identity_backfill import BackfillStats, LockUnavailable
     from app.services.identity_backfill import identity_backfill as run_backfill
+    from app.services.identity_reconcile_window import busy_deadline
     from app.services.source_chains import BackfillRunning
 
     if not re.fullmatch(r"[1-9][0-9]*(ms|s|min)", statement_timeout):
@@ -79,6 +80,11 @@ def identity_backfill(
                 statement_timeout=statement_timeout,
                 progress=progress,
                 notice=lambda message: typer.echo(message, err=True),
+                # A data type a long sync holds (a watchdog recovery, a reconciliation) is
+                # tried again after the others for IDENTITY_RECONCILE_LOCK_WAIT_MINUTES.
+                lock_deadline=None
+                if dry_run
+                else busy_deadline(None, context.settings().identity_reconcile_lock_wait_minutes),
             )
         )
     except (BackfillRunning, LockUnavailable) as exc:

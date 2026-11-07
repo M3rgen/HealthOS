@@ -25,6 +25,7 @@ def status() -> None:
             )
             from app.models.identity import IdentityReconcileState
             from app.services.identity import identity_tables_missing
+            from app.services.identity_reconcile_window import failed_nights
             from app.sync.deletions import deferred_deletions
 
             identity = []
@@ -61,6 +62,8 @@ def status() -> None:
                         "last_mode": row.last_mode,
                         "last_result": json.loads(row.last_result) if row.last_result else None,
                         "last_error": row.last_error,
+                        # Nights in a row without a successful run (null: the last run did).
+                        "failed_nights": failed_nights(row),
                     }
                     for row in identity
                 ],

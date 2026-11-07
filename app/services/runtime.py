@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass, field
+from datetime import time
 
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
@@ -14,6 +15,7 @@ from app.google_health.webhook import WebhookSignatureVerifier
 from app.services.credentials import CredentialStore
 from app.services.derived import DerivedRefresh
 from app.services.discovery import DiscoveryService
+from app.services.garmin_pull import GarminPull
 from app.services.identity_reconciler import IdentityReconciler
 from app.services.pipeline_health import PipelineHealthService
 from app.services.responses import DatabaseResponseArchive
@@ -44,6 +46,8 @@ class Runtime:
     webhook_status: WebhookStatusService
     derived: DerivedRefresh | None = None
     identity: IdentityReconciler | None = None
+    # Garmin Connect Personal API pull; present when GARMIN_ENABLED (app/services/garmin_pull.py).
+    garmin: GarminPull | None = None
     tasks: set[asyncio.Task] = field(default_factory=set)
     scheduler: object | None = None
 
@@ -87,6 +91,8 @@ class Runtime:
         await self.oauth.http.aclose()
         await self.google.http.aclose()
         await self.webhook_verifier.http.aclose()
+        if self.garmin is not None:
+            await self.garmin.aclose()
 
 
 def build_runtime(settings: Settings, sessions: async_sessionmaker) -> Runtime:
@@ -131,6 +137,13 @@ def build_runtime(settings: Settings, sessions: async_sessionmaker) -> Runtime:
         discovery=DiscoveryService(google, discovery_specs, settings.sync_concurrency),
         pipeline_health=pipeline_health,
         watchdog=watchdog,
-        identity=IdentityReconciler(sessions),
+        identity=IdentityReconciler(
+            sessions,
+            time(
+                settings.identity_reconcile_until_hour_utc, settings.identity_reconcile_until_minute
+            ),
+            settings.identity_reconcile_lock_wait_minutes,
+        ),
         derived=DerivedRefresh(sessions),
+        garmin=GarminPull(settings, sessions) if settings.garmin_enabled else None,
     )

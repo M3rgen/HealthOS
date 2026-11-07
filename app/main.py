@@ -12,7 +12,19 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
 
-from app.api import auth, backfill, codex, dashboard, google_health, health, login, sync, webhooks
+from app.api import (
+    auth,
+    backfill,
+    codex,
+    dashboard,
+    devices,
+    garmin,
+    google_health,
+    health,
+    login,
+    sync,
+    webhooks,
+)
 from app.api import settings as settings_api
 from app.core.auth import SessionStore, UITokenMiddleware
 from app.core.config import get_settings
@@ -77,6 +89,7 @@ def create_app() -> FastAPI:
                 runtime.pipeline_health,
                 runtime.identity,
                 runtime.derived,
+                runtime.garmin,
             )
             scheduler.start()
             runtime.scheduler = scheduler
@@ -86,6 +99,7 @@ def create_app() -> FastAPI:
                 reconciliation_enabled=settings.reconciliation_enabled,
                 watchdog_enabled=settings.watchdog_enabled,
                 identity_reconcile_enabled=settings.identity_reconcile_enabled,
+                garmin_enabled=settings.garmin_enabled,
             )
             if settings.watchdog_enabled:
                 runtime.spawn(runtime.watchdog.startup_check())
@@ -133,6 +147,8 @@ def create_app() -> FastAPI:
     application.include_router(dashboard.router)
     application.include_router(codex.router)
     application.include_router(settings_api.router)
+    application.include_router(devices.router)
+    application.include_router(garmin.router)
     static = Path(__file__).parent / "static"
     if static.is_dir():
         application.mount("/assets", StaticFiles(directory=static / "assets"), name="assets")

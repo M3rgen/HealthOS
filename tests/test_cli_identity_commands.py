@@ -2,7 +2,7 @@
 
 import asyncio
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock
 
 import pytest
@@ -168,3 +168,27 @@ def test_identity_sources_retains_json_and_service_failures(cli_database, monkey
         assert result.stdout == "" and result.exception is error
     else:
         assert result.stdout == json.dumps(report, indent=2, default=str) + "\n"
+
+
+def test_identity_backfill_by_hand_waits_the_configured_minutes_for_a_busy_lock(
+    cli_database, monkeypatch
+):
+    """A sync holding a data type (the watchdog's recovery after a restart) is waited for
+    IDENTITY_RECONCILE_LOCK_WAIT_MINUTES; a dry run takes no lock and waits for nothing."""
+    from app.cli._context import context
+
+    seen = []
+
+    async def backfill(sessions, **kwargs):
+        seen.append(kwargs["lock_deadline"])
+        return {}
+
+    monkeypatch.setattr(identity_backfill, "identity_backfill", backfill)
+    settings = context.settings().model_copy(update={"identity_reconcile_lock_wait_minutes": 30})
+    monkeypatch.setattr(context, "settings", lambda: settings)
+    before = datetime.now(UTC)
+    assert RUNNER.invoke(cli.app, ["identity-backfill", "--incremental"]).exit_code == 0
+    assert RUNNER.invoke(cli.app, ["identity-backfill", "--dry-run"]).exit_code == 0
+    waited, dry = seen
+    assert dry is None
+    assert before + timedelta(minutes=30) <= waited <= datetime.now(UTC) + timedelta(minutes=30)

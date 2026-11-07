@@ -16,6 +16,10 @@ from app.cli.archive_commands import history as history
 from app.cli.archive_commands import import_versions as import_versions
 from app.cli.archive_commands import responses as responses
 from app.cli.archive_commands import verify as verify
+from app.cli.garmin_commands import KINDS_OPTION as KINDS_OPTION
+from app.cli.garmin_commands import garmin_backfill as garmin_backfill
+from app.cli.garmin_commands import garmin_pull as garmin_pull
+from app.cli.garmin_commands import garmin_status as garmin_status
 from app.cli.identity_commands import AFTER_OPTION as AFTER_OPTION
 from app.cli.identity_commands import DATA_TYPES_OPTION as DATA_TYPES_OPTION
 from app.cli.identity_commands import identity_backfill as identity_backfill
@@ -68,6 +72,9 @@ for _command in (
     export_response,
     probe,
     rejections,
+    garmin_status,
+    garmin_pull,
+    garmin_backfill,
 ):
     app.command()(_command)
 

@@ -16,9 +16,40 @@ in this file.
   received data); its downgrade drops it, and each browser falls back to its local copy.
 - `20261102_0023` adds three append-only tables; its downgrade refuses while any of them holds a
   row.
+- `20261107_0024` adds the three Garmin tables (`garmin_api_responses`, `garmin_raw_records`,
+  `garmin_pull_state`); only new tables and their guards, no existing table is altered or
+  referenced. Its downgrade refuses while either archive table holds a row. Nothing changes
+  for a deployment without `GARMIN_ENABLED`.
+- `20261107_0025` adds two columns to each of the fifteen normalized tables (`steps`,
+  `heart_rate`, `sleep_sessions`, `exercise_sessions`, …): `provider` (`GOOGLE` for every existing
+  row through the column default; `GARMIN` for rows normalized from the Garmin archive) and
+  `source_record_id`. Only `ADD COLUMN`: on PostgreSQL a constant default is a catalog change
+  (no table rewrite, a momentary lock per table), on SQLite the triggers and `analytics_*` views
+  are kept (a table rebuild was measured to fail on them, so `google_data_point_id` keeps its NOT
+  NULL and holds a Garmin row's `garmin:<kind>:<key>` key). No row is read or changed. Its
+  downgrade drops the columns and refuses while a non-Google row exists. The two new settings
+  `SOURCE_PRECEDENCE_ACTIVITY` and `SOURCE_PRECEDENCE_HEALTH` have defaults; nothing changes for
+  a deployment without Garmin data except the new `sources`, `precedence`, `priority` and
+  `alternatives` fields in the dashboard, workouts and devices responses.
 
 ### Fixed
 
+- The nightly identity reconciler no longer gives up on a data type the daily Google
+  reconciliation is still storing (#262). Started at a fixed 02:30 UTC, it met heart-rate's lock
+  held for 20 to 60 minutes of the 7-day run and gave up after 8 attempts, three nights in a row,
+  leaving heart-rate's renamed sources unlinked. It now starts when the scheduled reconciliations
+  of the night have ended (the daily run, on Sunday also the weekly one; at
+  `IDENTITY_RECONCILE_HOUR_UTC`:`IDENTITY_RECONCILE_MINUTE` only with `RECONCILIATION_ENABLED=false`),
+  and a data type still busy (any long sync of it: a reconciliation, the watchdog's recovery
+  after a restart, a sync by hand) is tried again after the others until the window ends
+  (`IDENTITY_RECONCILE_UNTIL_HOUR_UTC`/`_MINUTE`, 03:55 UTC) or, for a run started later and for
+  `identity-backfill` by hand, for `IDENTITY_RECONCILE_LOCK_WAIT_MINUTES` (60; `0` keeps the 8
+  attempts), backing off up to 60 s; each attempt keeps the lock contract (0.1 s without
+  queueing, 1 s in the queue, 2 s per row lock). A
+  data type that still fails is listed in `/health` under `identity_lock_contention` with its
+  `nights` (a warning; `status` is unchanged) and in `health-mirror status` as `failed_nights`.
+  No migration
+  ([docs/REFERENCE.md](docs/REFERENCE.md#reconciliation)).
 - A page that repeats an earlier `nextPageToken` of the same fetch no longer loses its records:
   they are stored in `raw_health_data` with their Google responses, deduplicated as usual, while
   the repeated token is never saved as a checkpoint, `last_successful_sync` does not advance and
@@ -61,6 +92,51 @@ in this file.
 
 ### Added
 
+- Source precedence (the maintainer's decision of 7 November 2026): when several devices report
+  the same data, sport activities show Garmin first and every other health metric shows the
+  Fitbit first; the other sources stay visible as alternatives and nothing is summed. The order
+  per category is configuration (`SOURCE_PRECEDENCE_ACTIVITY=GARMIN,FITBIT,HEALTH_KIT`,
+  `SOURCE_PRECEDENCE_HEALTH=FITBIT,GARMIN,HEALTH_KIT`; reverse a line to reverse the rule). The
+  dashboard's day values, hourly heart chart, Umay's `daily` and `devices`, the workouts list and
+  `GET /api/garmin/daily` go through the resolver (`app/services/source_precedence.py`) and return
+  `source`/`alternatives`; the interface shows a text badge for the primary source, the secondary
+  sources in a collapsed row or "diğer kaynaklar", and Cihazlarım says per device in which
+  category it is primary ([docs/REFERENCE.md](docs/REFERENCE.md#source-precedence)).
+- `garmin-backfill` normalizes every archived activity that begins in its `--since`/`--until`
+  window, whenever it was first archived: an archive filled before normalization existed gets
+  its activities into `exercise_sessions` from one backfill over their window (the periodic pull
+  still normalizes only what it archived itself).
+- Garmin phase 2: the Garmin raw archive is normalized into the shared normalized tables tagged
+  `provider = 'GARMIN'` after every pull and backfill (steps and distance, heart-rate samples,
+  resting heart rate, sleep, HRV, SpO₂, stress and body battery as scalar metrics, activities as
+  exercise sessions), idempotently (unchanged rows are not written). Google's readers never see
+  these rows (they join through `raw_health_data`), deletion marking never marks them, and the
+  Cihazlarım panel lists the Garmin source (`GARMIN_DEVICE_NAME`) with its last pull, newest data
+  and precedence ([docs/REFERENCE.md](docs/REFERENCE.md#garmin-connect-personal-api)).
+- Cihazlarım (System): every device the archive has seen, one row per device, with its
+  platform, a status in words and colour (`bagli` for a newest record within 48 hours,
+  `gecikmeli` up to 7 days, `kopuk` beyond; `DEVICES_CONNECTED_HOURS`, `DEVICES_DELAYED_DAYS`),
+  the age of its newest record with the exact time in the chosen zone, the number of its data
+  types and an accessible details dialog (data types, first and last sighting, previous names).
+  A device renamed by Google ("Google Fitbit Air" → "Fitbit Air") is one row, joined by the live
+  source chain. Served by `GET /api/devices`, read-only from `raw_source_sightings` and
+  `raw_source_chains`; no migration. Google's paired devices add "Google son eşitleme" when the
+  call succeeds and never block the list when it fails (`google: unavailable`). Umay's
+  `health_archive` gains the `devices` action
+  ([docs/REFERENCE.md](docs/REFERENCE.md#devices)).
+- Garmin Connect Personal API as a second, read-only source (maintainer's decision of
+  7 November 2026; off by default). With `GARMIN_ENABLED=true` and the Personal API key in
+  `GARMIN_API_KEY_FILE` (never in `.env`, the database or a log), the scheduler job `garmin-pull`
+  fetches the last `GARMIN_LOOKBACK_DAYS` every `GARMIN_PULL_INTERVAL_MINUTES` outside the
+  02:00–03:59 UTC window: daily summaries, steps, stress, body battery, sleep (per day and
+  summaries), heart rate, SpO₂, HRV (per day and summaries) and activity summaries. Every HTTP
+  exchange is kept byte for byte in `garmin_api_responses` and every distinct record payload in
+  `garmin_raw_records` (append-only; a changed day is a new row, the earlier row stays).
+  `health-mirror garmin-status`, `garmin-pull` and `garmin-backfill --since … [--until] [--dry-run]`
+  (chunked by the endpoints' limits, checkpoint per kind, resumes); `GET /api/garmin/status` and
+  `GET /api/garmin/daily?from&to`. Garmin data is not normalized into the Google tables or shown
+  on the dashboard in this phase ([docs/REFERENCE.md](docs/REFERENCE.md#garmin-connect-personal-api)
+  has the dependency map and the phase 2 options). No new dependency: a thin `httpx` client.
 - Coverage says why a day has no value. Umay's `coverage` card (schema 2) reads the retrieval
   receipts: per metric it counts closed days by retrieval state and splits the days without a
   value into `empty_response` (Google returned nothing), `returned_without_value`,

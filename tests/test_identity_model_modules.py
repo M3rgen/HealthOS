@@ -60,6 +60,7 @@ def test_legacy_model_exports_are_the_same_objects(module, names):
         "manual_flags",
         "retrieval",
         "webhook_status",
+        "garmin",
     ],
 )
 def test_cold_imports_register_models_and_guards_once_in_archive_order(first):
@@ -75,7 +76,7 @@ def test_cold_imports_register_models_and_guards_once_in_archive_order(first):
         from app.db.base import Base
         from app.models import identity, identity_constants, identity_guards, identity_tables
         from app.models import derived_invalidation, manual_flags, raw_versions, retrieval
-        from app.models import raw_rejections, webhook_status
+        from app.models import garmin, raw_rejections, webhook_status
 
         assert 'app.services.identity' not in sys.modules
         assert 'app.services.raw_history' not in sys.modules
@@ -84,7 +85,7 @@ def test_cold_imports_register_models_and_guards_once_in_archive_order(first):
         tables = dict(Base.metadata.tables)
         for name in ('identity_queries', 'identity_tables', 'identity_constants',
                      'identity_guards', 'raw_versions', 'raw_rejections', 'manual_flags',
-                     'retrieval', 'webhook_status', 'identity'):
+                     'retrieval', 'webhook_status', 'garmin', 'identity'):
             importlib.import_module('app.models.' + name)
         importlib.reload(identity)
         assert tuple(Base.metadata.dispatch.after_create) == listeners
@@ -118,6 +119,7 @@ def test_cold_imports_register_models_and_guards_once_in_archive_order(first):
                 *getattr(retrieval, ddl),
                 *getattr(webhook_status, ddl),
                 *getattr(derived_invalidation, ddl),
+                *getattr(garmin, ddl),
             )
             assert [sql for sql in statements if sql in expected] == list(expected)
             counts = Counter(statements)
@@ -139,6 +141,7 @@ def test_cold_imports_register_models_and_guards_once_in_archive_order(first):
             | retrieval.SQLITE_TRIGGER_SQL
             | webhook_status.SQLITE_TRIGGER_SQL
             | derived_invalidation.SQLITE_TRIGGER_SQL
+            | garmin.SQLITE_TRIGGER_SQL
         )
         assert triggers.keys() == expected.keys()
         for name, (_, sql) in expected.items():

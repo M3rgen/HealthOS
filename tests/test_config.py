@@ -51,3 +51,24 @@ def test_production_accepts_explicit_non_placeholder_secrets():
         _env_file=None,
     )
     assert settings.app_env == "production"
+
+
+def test_garmin_is_off_by_default_and_its_bounds_hold():
+    settings = Settings(_env_file=None)
+    assert settings.garmin_enabled is False
+    assert str(settings.garmin_api_key_file) == "~/.config/garmin/connect-personal-api-key"
+    assert settings.garmin_pull_interval_minutes == 120
+    assert settings.garmin_lookback_days == 3
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, garmin_pull_interval_minutes=5)
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, garmin_lookback_days=29)
+    custom = Settings(
+        _env_file=None,
+        garmin_enabled=True,
+        garmin_api_key_file="/run/secrets/garmin-key",
+        garmin_lookback_days=7,
+    )
+    assert (
+        custom.garmin_enabled and custom.garmin_api_key_file.as_posix() == "/run/secrets/garmin-key"
+    )
