@@ -143,7 +143,10 @@ def test_identity_reconciler_keeps_a_fixed_time_only_without_reconciliation():
         async def run(self):
             return None
 
-    chained = build_scheduler(Settings(), Reconciliation(), identity=Identity())
+    # Explicit: CI exports RECONCILIATION_ENABLED=false, which Settings() would read.
+    chained = build_scheduler(
+        Settings(_env_file=None, reconciliation_enabled=True), Reconciliation(), identity=Identity()
+    )
     # Started by the end of the reconciliations (tests/test_identity_lock_window.py).
     assert chained.get_job("identity-reconcile") is None
     alone = Settings(reconciliation_enabled=False)

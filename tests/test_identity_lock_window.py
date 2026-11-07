@@ -35,6 +35,9 @@ from app.services.scheduler import build_scheduler
 from app.services.source_chains import LockBusy
 
 NIGHT = datetime(2026, 10, 19, 2, 30, tzinfo=UTC)
+# Explicit, never read from the environment: CI exports RECONCILIATION_ENABLED=false, which a
+# bare Settings() picks up (the identity job then keeps its fixed time instead of the chain).
+CHAINED = Settings(_env_file=None, reconciliation_enabled=True)
 UNTIL = time(3, 55)
 
 
@@ -208,7 +211,7 @@ class Identity:
 
 async def test_the_reconciler_starts_when_the_daily_reconciliation_ends():
     reconciliation, identity = Reconciliation(), Identity()
-    scheduler = build_scheduler(Settings(), reconciliation, identity=identity)
+    scheduler = build_scheduler(CHAINED, reconciliation, identity=identity)
     scheduler.start()
     try:
         assert scheduler.get_job("identity-reconcile") is None
@@ -221,7 +224,7 @@ async def test_the_reconciler_starts_when_the_daily_reconciliation_ends():
 
 
 def test_the_reconciler_waits_for_every_reconciliation_in_flight():
-    scheduler = build_scheduler(Settings(), Reconciliation(), identity=Identity())
+    scheduler = build_scheduler(CHAINED, Reconciliation(), identity=Identity())
     now = datetime(2026, 11, 8, 3, 0, tzinfo=UTC)
 
     def dispatch(code: int, job_id: str) -> None:

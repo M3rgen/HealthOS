@@ -35,6 +35,20 @@ async function mock(page) {
   });
 }
 
+// The installed clock flows in real time until paused. pauseAt first stops it, waiting for the
+// timers it is running; on a slow runner that alone can carry it past a target read just before
+// ("Cannot fast-forward to the past"), whatever the margin. The failed call has already paused
+// the clock, so a target read from the page after it is always ahead.
+async function pauseJustAhead(page) {
+  const ahead = async () => page.clock.pauseAt(await page.evaluate(() => Date.now()) + 1000);
+  try {
+    await ahead();
+  } catch (error) {
+    if (!/fast-forward to the past/.test(String(error))) throw error;
+    await ahead();
+  }
+}
+
 async function retryScenarios(browser, width, height) {
   const page = await browser.newPage({viewport: {width, height}});
   await mock(page);
@@ -82,10 +96,7 @@ async function retryScenarios(browser, width, height) {
   await page.goto(TARGET);
   await page.waitForFunction(() => document.querySelectorAll('#history-rows tr').length === 7);
   await page.clock.install();
-  // The installed clock flows until paused and its first real-time sync can run it a little ahead
-  // of Node's Date.now(), so pausing at new Date() can land in the clock's past ("Cannot
-  // fast-forward to the past"). Pause just ahead of the page's own clock instead.
-  await page.clock.pauseAt(await page.evaluate(() => Date.now()) + 1000);
+  await pauseJustAhead(page);
   await page.locator('#assistant-open').click({force: true});
   await page.clock.runFor(25);
 
