@@ -666,7 +666,9 @@ def test_bridge_python_range_is_shared_and_matches_the_lock():
     assert f"return '{spec}'" in text(WINDOWS_DIR / "common.ps1")
     assert 'run uv sync --frozen --no-dev --python "$BRIDGE_PYTHON"' in text(ROOT / "install.sh")
     source = code_only(INSTALLER)
-    assert "& $uv sync --frozen --no-dev --python (Get-HealtOSBridgePython)" in source
+    # In the environment: PowerShell does not quote '<' or '>' for a uv.cmd shim.
+    assert "$env:UV_PYTHON = Get-HealtOSBridgePython" in source
+    assert "& $uv sync --frozen --no-dev | Out-Host" in source
     bridge_task = text(WINDOWS_DIR / "start-umay-bridge.ps1")
     assert "'--no-dev', '--python', (Get-HealtOSBridgePython)," in bridge_task
     ci = yaml.safe_load(text(ROOT / ".github" / "workflows" / "ci.yml"))
@@ -679,6 +681,39 @@ def test_bridge_python_range_is_shared_and_matches_the_lock():
     block = block[: block.index("[[package]]")]
     for minor in range(int(low), int(high)):
         assert f"cp3{minor}-cp3{minor}-" in block, minor
+
+
+def bridge_task_log(home: dict[str, str]) -> str:
+    logs = sorted(Path(home["HOME"]).rglob("umay-bridge.log"))
+    if not logs:
+        return "\n(no umay-bridge.log under HOME)"
+    return "".join(
+        f"\n--- {log} ---\n{log.read_text(encoding='utf-8', errors='replace')}" for log in logs
+    )
+
+
+@needs_pwsh
+@pytest.mark.parametrize(
+    "value, expected",
+    [
+        ("run", "run"),
+        (">=3.12,<3.15", '">=3.12,<3.15"'),
+        ("a&b", '"a&b"'),
+        ("x|y^z", '"x|y^z"'),
+        ("(1)", '"(1)"'),
+        ("C:\\with space\\", '"C:\\with space\\\\"'),
+        ('say "hi"', '"say \\"hi\\""'),
+        ("", '""'),
+    ],
+)
+def test_windows_arguments_are_quoted_for_cmd_shims(value: str, expected: str):
+    script = (
+        f". '{WINDOWS_DIR / 'common.ps1'}'; "
+        "Write-Output ('ARG=' + (ConvertTo-HealtOSArgument $env:HEALTOS_TEST_ARG))"
+    )
+    result = pwsh("-Command", script, env={**os.environ, "HEALTOS_TEST_ARG": value})
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip().splitlines()[-1] == f"ARG={expected}"
 
 
 def fake_bridge_tree(tmp_path: Path, env_text: str) -> Path:
@@ -753,8 +788,10 @@ def test_bridge_task_passes_the_env_token_and_never_rewrites_env(
     )
     task = root / "deploy" / "windows" / "start-umay-bridge.ps1"
     result = pwsh("-File", str(task), env=env)
-    assert result.returncode == 0, result.stdout + result.stderr
+    # The task writes only to its log file; show it when the task fails.
+    assert result.returncode == 0, result.stdout + result.stderr + bridge_task_log(home)
     assert text(root / ".env") == env_text
+    # On Windows the fake uv is a .cmd shim: the quoted range must survive cmd.exe.
     assert "run --frozen --no-dev --python >=3.12,<3.15 --project" in text(tmp_path / "uv.log")
     log = next(Path(home["HOME"]).rglob("umay-bridge.log"))
     assert "bridge token=token-from-dotenv" in text(log)
@@ -762,7 +799,7 @@ def test_bridge_task_passes_the_env_token_and_never_rewrites_env(
     (root / ".env").write_text("CODEX_BRIDGE_TOKEN=\n", encoding="utf-8")
     (tmp_path / "uv.log").unlink()
     result = pwsh("-File", str(task), env=env)
-    assert result.returncode == 1
+    assert result.returncode == 1, bridge_task_log(home)
     assert "CODEX_BRIDGE_TOKEN is empty" in text(log)
     assert not (tmp_path / "uv.log").exists()
     assert text(root / ".env") == "CODEX_BRIDGE_TOKEN=\n"

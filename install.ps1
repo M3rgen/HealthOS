@@ -1250,8 +1250,15 @@ function Install-HostJobs {
             $uv = Find-Tool 'uv'
             Push-Location $script:RepoDir
             # Runtime dependencies only, like install.sh (the bridge needs no development tools), on a
-            # Python that uv.lock has wheels for.
-            try { & $uv sync --frozen --no-dev --python (Get-HealtOSBridgePython) | Out-Host } finally { Pop-Location }
+            # Python that uv.lock has wheels for. The range goes in UV_PYTHON, not on the command
+            # line: PowerShell does not quote '<' or '>', and a uv.cmd shim would hand them to
+            # cmd.exe as redirections.
+            $previousPython = $env:UV_PYTHON
+            $env:UV_PYTHON = Get-HealtOSBridgePython
+            try { & $uv sync --frozen --no-dev | Out-Host } finally {
+                Pop-Location
+                $env:UV_PYTHON = $previousPython
+            }
             if ($LASTEXITCODE -ne 0) { Say-Warn (M 'uv sync failed; the bridge task will retry at the next sign-in.' 'uv sync ba\u015far\u0131s\u0131z; k\u00f6pr\u00fc g\u00f6revi bir sonraki oturumda yeniden dener.') }
             $code = Invoke-ChildScript (Join-Path $windowsDir 'start-umay-bridge.ps1') @{}
             if ($code -ne 0) {

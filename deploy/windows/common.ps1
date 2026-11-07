@@ -88,9 +88,12 @@ function Import-HealtOSBackupEnv {
 
 function ConvertTo-HealtOSArgument {
     # Quote one argument for a Windows command line (CommandLineToArgvW rules; .NET applies the
-    # same rules when it splits ProcessStartInfo.Arguments on other systems).
+    # same rules when it splits ProcessStartInfo.Arguments on other systems). Arguments with
+    # cmd.exe operators (< > & | ^ ( )) are quoted too: when the program is a .cmd or .bat shim,
+    # cmd.exe reads the command line and would otherwise treat '<3.15' as a redirection. The
+    # quotes are removed again for a .exe, so its argument is unchanged.
     param([string]$Value)
-    if ($Value.Length -gt 0 -and $Value -notmatch '[\s"]') { return $Value }
+    if ($Value.Length -gt 0 -and $Value -notmatch '[\s"<>&|^()]') { return $Value }
     $builder = New-Object System.Text.StringBuilder
     [void]$builder.Append('"')
     $backslashes = 0
