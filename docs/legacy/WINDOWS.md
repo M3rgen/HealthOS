@@ -1,9 +1,16 @@
 # Windows host notes (legacy)
 
-HealtOS first ran on a Windows desktop with Docker Desktop. The supported deployment is now a Linux
-VM described in [DEPLOYMENT.md](../DEPLOYMENT.md). These notes are kept for anyone still running the
-stack on Windows, and for the staged move documented in
-[WINDOWS_TO_LINUX_MIGRATION.md](WINDOWS_TO_LINUX_MIGRATION.md). Nothing here is tested in CI.
+> **Installing on Windows today:** use the installer, `install.ps1`, described in
+> [INSTALL.md › Windows 10 and 11](../INSTALL.md#windows-10-and-11)
+> ([Türkçe](../INSTALL.tr.md#windows-10-ve-11)). It writes `.env`, schedules the encrypted backup
+> with Task Scheduler (`scripts/backup.ps1`), turns on Docker Desktop autostart and can run the
+> Umay bridge as a scheduled task. The notes below are the earlier manual steps; they still work
+> and remain the reference for the bridge's Codex CLI and for cloudflared on Windows.
+
+HealtOS first ran on a Windows desktop with Docker Desktop. The recommended deployment is a Linux
+server ([DEPLOYMENT.md](../DEPLOYMENT.md)). These notes are kept for anyone running the stack on
+Windows by hand, and for the staged move documented in
+[WINDOWS_TO_LINUX_MIGRATION.md](WINDOWS_TO_LINUX_MIGRATION.md).
 
 The application, Compose file and backups behave the same on Docker Desktop. The differences are in
 how the host keeps things running and in a few command spellings.
@@ -18,9 +25,10 @@ docker compose up --build -d
 curl.exe --fail http://127.0.0.1:8000/health/live
 ```
 
-`scripts/backup.sh` and `scripts/restore.sh` are bash scripts. On Windows run them from Git Bash or
-WSL with `age` or `gpg` installed; there is no PowerShell port and no Windows scheduled task in this
-repository. `docker-compose.windows.yml` predates the encrypted backup script: it only bind-mounts
+`scripts/backup.sh` and `scripts/restore.sh` are bash scripts. On Windows, use their PowerShell
+equivalents `scripts/backup.ps1` and `scripts/restore.ps1` (same behaviour; `winget install
+FiloSottile.age`), which the installer schedules with Task Scheduler; the bash scripts still run
+from Git Bash or WSL. `docker-compose.windows.yml` predates the encrypted backup script: it only bind-mounts
 `WINDOWS_BACKUP_HOST_DIR` into the `backup` container, which now streams the dump to `backup.sh`
 instead of writing a file, so the override is no longer needed for backups.
 

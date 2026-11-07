@@ -1525,7 +1525,7 @@ Optional and off by default (`GARMIN_ENABLED=false`). Garmin's Personal API is a
 pull-only source for the owner's own Garmin Connect account: there is no webhook, no OAuth
 consent screen and no write endpoint. HealthOS treats it as a **second source next to Google
 Health**, in its own tables; nothing Google-shaped is touched. The exception to the "no new
-external services" rule was decided by the maintainer on 7 November 2026 (`AGENTS.md`, rule 6).
+external services" rule was decided by the maintainer on 7 November 2026.
 
 **Key and token.** The Personal API key (created in Garmin Connect, valid for a limited period;
 Garmin e-mails a week before it expires) lives in a file, `GARMIN_API_KEY_FILE` (default

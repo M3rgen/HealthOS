@@ -30,6 +30,11 @@
 # Other settings: BACKUP_HOST_DIR (default ./backups). All settings may come
 # from the environment or the project's .env file. stdout carries only the path
 # of the new backup; everything else goes to stderr.
+#
+# Host tools: bash (3.2 or newer, so macOS works too), docker compose, age or
+# gpg, and Python 3.11+ (stdlib only) for the metadata. BACKUP_PYTHON names the
+# interpreter; otherwise the first Python 3.11+ among python3, python3.13,
+# python3.12, python3.11 and the checkout's .venv is used, else python3.
 set -euo pipefail
 umask 077
 
@@ -39,10 +44,31 @@ cd "$ROOT"
 GIB=$((1024 * 1024 * 1024))
 STATUS_NAME=last-backup-status.json
 
+pick_python() {
+  # Older system interpreters (macOS 3.9, Ubuntu 22.04 3.10) cannot publish the
+  # metadata; prefer any 3.11+ that is present. Same scripts, same arguments.
+  local candidate
+  if [ -n "${BACKUP_PYTHON:-}" ]; then
+    printf '%s' "$BACKUP_PYTHON"
+    return 0
+  fi
+  for candidate in python3 python3.13 python3.12 python3.11 "$ROOT/.venv/bin/python"; do
+    command -v "$candidate" >/dev/null 2>&1 || continue
+    if "$candidate" -c 'import sys; sys.exit(sys.version_info < (3, 11))' >/dev/null 2>&1; then
+      printf '%s' "$candidate"
+      return 0
+    fi
+  done
+  printf 'python3'
+}
+PYTHON="$(pick_python)"
+
 env_file_value() {
-  # Reads one plain KEY=value from .env without sourcing it (it holds secrets).
+  # Reads one plain KEY=value (or `export KEY=value`) from .env without sourcing it (it holds
+  # secrets).
   [ -f .env ] || return 0
-  sed -n "s/^[[:space:]]*$1[[:space:]]*=[[:space:]]*//p" .env | tail -n 1 | sed "s/^[\"']//; s/[\"']$//"
+  sed -n "s/^[[:space:]]*\(export[[:space:]][[:space:]]*\)\{0,1\}$1[[:space:]]*=[[:space:]]*//p" .env \
+    | tail -n 1 | sed "s/^[\"']//; s/[\"']$//"
 }
 
 setting() {
@@ -95,7 +121,7 @@ write_status() {
   timestamp="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   # Separate directory: only sanitized metadata is mounted into the app. Publish
   # before replacing the private legacy file, so its old success can be migrated.
-  python3 "$ROOT/scripts/write_backup_status.py" "$status_dir" \
+  "$PYTHON" "$ROOT/scripts/write_backup_status.py" "$status_dir" \
     "$backup_dir/$STATUS_NAME" "$result" "$timestamp" 2>/dev/null \
     || echo "backup: could not publish status metadata" >&2
   mkdir -p "$backup_dir" 2>/dev/null || return 0
@@ -184,7 +210,9 @@ esac
 check_key_file() {
   [ -f "$key_file" ] || return 1
   [ -r "$key_file" ] || fail "$key_file is not readable by $(id -un)"
-  # Group/other permission bits must all be unset (chmod 600 or 400).
+  # Group/other permission bits must all be unset (chmod 600 or 400). ls -l is the portable
+  # (GNU and BSD) way to read the mode string.
+  # shellcheck disable=SC2012
   [ "$(ls -ln "$key_file" | cut -c5-10)" = "------" ] \
     || fail "$key_file must not be readable by group or others; run: chmod 600 $key_file"
   [ -s "$key_file" ] || fail "$key_file is empty"
@@ -238,14 +266,14 @@ fi
 
 stamp="$(date -u +%Y%m%dT%H%M%SZ)"
 output="$backup_dir/health-$stamp.dump.$method"
-partial="$(python3 -m app.services.backup_files create "$output")" \
+partial="$("$PYTHON" -m app.services.backup_files create "$output")" \
   || fail "cannot allocate a private encrypted dump file"
 
 if ! docker compose --profile backup run --rm -T backup | "${encrypt[@]}" >"$partial"; then
   fail "pg_dump or encryption failed; no backup was written"
 fi
 [ -s "$partial" ] || fail "encrypted dump is empty; no backup was written"
-output="$(python3 -m app.services.backup_files publish "$partial" "$output")" \
+output="$("$PYTHON" -m app.services.backup_files publish "$partial" "$output")" \
   || fail "cannot publish encrypted dump; existing backups were preserved"
 partial=""
 size_bytes="$(wc -c <"$output" | tr -d ' ')"

@@ -6,6 +6,58 @@ in this file.
 
 ## Unreleased
 
+## [0.2.2] - 2026-11-07
+
+### Installation
+
+Added: a guided, bilingual (English / Türkçe) installer for every platform
+([docs/INSTALL.md](docs/INSTALL.md), Turkish: [docs/INSTALL.tr.md](docs/INSTALL.tr.md)).
+
+- `install.sh` (Linux, Raspberry Pi, NAS, cloud VPS, macOS; also macOS's bash 3.2) and
+  `install.ps1` (Windows PowerShell 5.1 and PowerShell 7) take the same options (`--platform`,
+  `--mode trial|full`, `--sources google,garmin,apple|none`, `--dir`, `--ref`, `--backups`,
+  `--autostart`, `--umay`, `--yes`, `--dry-run`, `--no-start`, …) and the same exit codes (0 ok,
+  1 failed step, 2 bad arguments or unsupported environment). One-line bootstrap with
+  `curl … | bash` or `irm … | iex`; outside a checkout the installer clones the repository at
+  `--ref` (default `main`).
+- The wizard lists every platform with a note each: Linux server / VM (default and preselected),
+  Raspberry Pi / ARM64 (64-bit OS only), NAS (Synology, QNAP, Unraid, TrueNAS SCALE), macOS
+  (Docker Desktop, OrbStack or Colima), Windows 10/11 (Docker Desktop with WSL 2) and cloud VPS.
+  On macOS and Windows it preselects the detected host.
+- Data sources are configured in the same run: Google Health API v4 (client ID and secret, a
+  generated Fernet key, the redirect URI printed), Garmin Connect Personal API (`GARMIN_ENABLED`,
+  key file mounted read-only through the new `docker-compose.garmin.yml`), Apple Health
+  (`export.zip` upload needs nothing; the Health Auto Export receiver stays off unless chosen,
+  and then gets its token file and the new `docker-compose.apple.yml` mount), or none.
+- `trial` mode adds the development override; `full` mode lists the production values that are
+  still missing before anything starts. The Compose files are selected through `COMPOSE_FILE` in
+  `.env`, so plain `docker compose …` uses the same files afterwards.
+- `.env` is copied to `.env.bak-<UTC stamp>` before every change; then missing or empty keys are
+  filled, `COMPOSE_FILE` follows the current choices and a chosen source's `GARMIN_ENABLED` /
+  `APPLE_RECEIVER_ENABLED` is turned from `false` to `true`. An existing secret is never replaced
+  and only the few values listed in [docs/INSTALL.md](docs/INSTALL.md#what-the-installer-changes-and-what-it-never-does) can change. A re-run keeps the previous mode unless `--mode` is given, and an explicit `--garmin-key-file` that does not exist fails with exit code 2. Secrets are generated
+  without Python on the host. The installers never run `docker compose down -v`, never remove a
+  volume and never delete a backup or any other file; running them again is safe.
+- Host jobs on every OS: the daily encrypted backup (systemd timer on Linux, launchd agent on
+  macOS, Task Scheduler task with the new `scripts/backup.ps1` and `scripts/restore.ps1` on
+  Windows; same semantics as `scripts/backup.sh`: kept forever, free-space guard,
+  `last-backup-status.json`), autostart after a reboot, and the optional Umay bridge as a
+  service (systemd unit, launchd agent or scheduled task). The installer offers to create an age
+  identity outside the checkout and `.env` (`/etc/healthos/backup.key` or
+  `~/.config/healtos/backup.key` on Linux, `~/Library/Application Support/HealtOS/backup.key`
+  on macOS, `%APPDATA%\HealtOS\backup.key` on Windows) and warns to keep a copy off the host.
+- The systemd units are rendered with the checkout directory chosen by the installer instead of
+  a fixed `/opt/healthos`; their behaviour is unchanged. Without root the installer installs them
+  as user units (`systemctl --user`, lingering on); new launchd templates are in
+  `deploy/launchd/`, Task Scheduler helpers in `deploy/windows/`.
+- `scripts/backup.sh` also runs on macOS (bash 3.2, BSD tools) and uses the first Python 3.11+
+  it finds (`BACKUP_PYTHON` overrides); its behaviour is otherwise unchanged.
+- All pinned images run on amd64 and arm64. 32-bit ARM (armv7) is not supported.
+- CI runs the installers' dry-run tests on Ubuntu, macOS and Windows, and one real trial
+  installation with Docker on Ubuntu.
+- The README starts with the installer, a platform table and a data-source table, and explains
+  how to let a coding agent run the installation ([docs/AI_INSTALL.md](docs/AI_INSTALL.md)).
+
 ### Upgrade notes
 
 - Migrations `20261102_0022` and `20261102_0023` run automatically when the app starts and only

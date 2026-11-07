@@ -1,0 +1,23 @@
+# Optional token mount for the Apple Health receiver (Health Auto Export; off by default).
+# Only the receiver needs this file; export.zip uploads from the System page need nothing.
+# Add it to COMPOSE_FILE in .env (install.sh does it when you turn the receiver on), e.g.
+#   COMPOSE_FILE=docker-compose.yml:docker-compose.apple.yml
+# and set in .env:
+#   APPLE_RECEIVER_ENABLED=true
+#   APPLE_RECEIVER_TOKEN_HOST_FILE=/absolute/path/to/apple-receiver-token
+#   APPLE_RECEIVER_TOKEN_HOST_GID=<group id of that file>
+#   APPLE_RECEIVER_ENDPOINT_URI=https://health.example.org/webhooks/apple-health
+# The token stays in its own file, read-only in the container, never in .env. The app runs as
+# uid 10001, so on Linux Docker Engine the host file must be readable by its group (mode 640)
+# and that group is added to the container below. install.sh sets both.
+services:
+  app:
+    environment:
+      APPLE_RECEIVER_TOKEN_FILE: /run/secrets/apple-receiver-token
+    group_add:
+      - "${APPLE_RECEIVER_TOKEN_HOST_GID:-10001}"
+    volumes:
+      - type: bind
+        source: ${APPLE_RECEIVER_TOKEN_HOST_FILE:?Set APPLE_RECEIVER_TOKEN_HOST_FILE to the receiver token file}
+        target: /run/secrets/apple-receiver-token
+        read_only: true

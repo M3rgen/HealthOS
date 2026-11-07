@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Optional Umay bridge on macOS: the launchd twin of deploy/systemd/healthos-bridge.service.
+  It supervises scripts/start_codex_bridge.py in the foreground under your own account and
+  ChatGPT login (run `codex login` first). On macOS the bridge listens on 127.0.0.1:8766;
+  Docker Desktop, OrbStack and Colima forward host.docker.internal there. The token comes from
+  the bridge's private bridge.token or CODEX_BRIDGE_TOKEN in the checkout's .env; nothing
+  secret is stored in this file. Privacy: questions and the records Umay requests go to OpenAI.
+
+  install.sh renders this template into ~/Library/LaunchAgents/org.healtos.bridge.plist with
+  absolute paths and loads it:
+    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/org.healtos.bridge.plist
+  Placeholders: @HEALTOS_DIR@ (checkout with a .venv made by uv sync (frozen, no dev)), @PATH@ (must
+  reach the codex CLI), @LOG_DIR@.
+  Restart:  launchctl kickstart -k gui/$(id -u)/org.healtos.bridge
+  Stop:     launchctl bootout gui/$(id -u)/org.healtos.bridge
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>org.healtos.bridge</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>@HEALTOS_DIR@/.venv/bin/python</string>
+    <string>@HEALTOS_DIR@/scripts/start_codex_bridge.py</string>
+    <string>--foreground</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>@HEALTOS_DIR@</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>@PATH@</string>
+  </dict>
+  <key>RunAtLoad</key>
+  <true/>
+  <!-- Any exit is unexpected (the bridge turns even exit 0 into a failure); restart after 10 s. -->
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
+  <key>ExitTimeOut</key>
+  <integer>15</integer>
+  <key>Umask</key>
+  <integer>63</integer>
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>StandardOutPath</key>
+  <string>@LOG_DIR@/bridge.log</string>
+  <key>StandardErrorPath</key>
+  <string>@LOG_DIR@/bridge.log</string>
+</dict>
+</plist>

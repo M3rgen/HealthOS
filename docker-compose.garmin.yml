@@ -1,0 +1,21 @@
+# Optional Garmin Connect Personal API key mount (off by default). Add this file to
+# COMPOSE_FILE in .env (install.sh does it when you pick Garmin), for example
+#   COMPOSE_FILE=docker-compose.yml:docker-compose.garmin.yml
+# and set in .env:
+#   GARMIN_ENABLED=true
+#   GARMIN_API_KEY_HOST_FILE=/absolute/path/to/connect-personal-api-key
+#   GARMIN_API_KEY_HOST_GID=<group id of that file>
+# The key stays in its own file, read-only in the container, never in .env. The app runs as
+# uid 10001, so on Linux Docker Engine the host file must be readable by its group (mode 640)
+# and that group is added to the container below. install.sh sets both.
+services:
+  app:
+    environment:
+      GARMIN_API_KEY_FILE: /run/secrets/garmin-personal-api-key
+    group_add:
+      - "${GARMIN_API_KEY_HOST_GID:-10001}"
+    volumes:
+      - type: bind
+        source: ${GARMIN_API_KEY_HOST_FILE:?Set GARMIN_API_KEY_HOST_FILE to the Garmin key file}
+        target: /run/secrets/garmin-personal-api-key
+        read_only: true

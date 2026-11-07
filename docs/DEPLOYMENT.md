@@ -6,6 +6,12 @@ Google's webhook. Day-two procedures (updates, key rotation, restore drills, dia
 [runbook](RUNBOOK.md). For a quick local trial without Google, the [README](../README.md#get-started)
 is enough.
 
+The guided installer (`install.sh`, see [INSTALL.md](INSTALL.md#linux-server-or-vm-default))
+automates steps 1 to 4 and 8 of this guide, and installs the bridge unit of step 9 on request; it
+never overwrites `.env` or deletes anything. This page remains the manual reference for the same
+setup. Other platforms (Raspberry Pi, NAS, macOS, Windows, cloud VPS) are covered in
+[INSTALL.md](INSTALL.md#platforms).
+
 Placeholders: `<vm-host>` is the VM's SSH address, `<user>` your SSH account, `webhook.example.com`
 the public webhook hostname, `/opt/healthos` the checkout directory (the systemd backup unit assumes
 that path; adjust it there if you choose another).
@@ -290,8 +296,10 @@ are sent to OpenAI.
    drops Docker's rules; run `sudo systemctl restart docker` after such a reload.
    [`codex-bridge.ufw.sh`](../deploy/firewall/codex-bridge.ufw.sh) is the ufw equivalent.
 
-No systemd unit is shipped for the bridge: rerun the launcher after a reboot (it reuses a healthy
-bridge). Restarting and token rotation are in the [runbook](RUNBOOK.md#restart-the-umay-bridge).
+To keep the bridge running across reboots, install
+[`deploy/systemd/healthos-bridge.service`](../deploy/systemd/healthos-bridge.service) (the
+installer does this with `--umay yes`); otherwise rerun the launcher after a reboot (it reuses a
+healthy bridge). Restarting and token rotation are in the [runbook](RUNBOOK.md#restart-the-umay-bridge).
 
 ## Final checklist
 
@@ -303,5 +311,6 @@ bridge). Restarting and token rotation are in the [runbook](RUNBOOK.md#restart-t
 - Exactly one app instance runs the scheduler. If you start a second copy (for example during a
   migration), set `RECONCILIATION_ENABLED=false` and `WATCHDOG_ENABLED=false` there.
 
-Running on Windows or moving off it: see [legacy notes](legacy/WINDOWS.md) and the
+Running on Windows: see the [Windows section of INSTALL.md](INSTALL.md#windows-10-and-11) and the
+[Windows notes](legacy/WINDOWS.md); moving off Windows: the
 [migration plan](legacy/WINDOWS_TO_LINUX_MIGRATION.md).

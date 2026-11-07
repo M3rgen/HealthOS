@@ -1,13 +1,10 @@
-# Optional current-Windows override. The base file remains the default deployment.
-# Set WINDOWS_BACKUP_HOST_DIR to an existing Docker Desktop-accessible directory
-# before including this file.
-services:
-  backup:
-    volumes:
-      - type: bind
-        source: ${WINDOWS_BACKUP_HOST_DIR:?Set WINDOWS_BACKUP_HOST_DIR before using the Windows override}
-        target: /backups
-      - type: bind
-        source: ./scripts
-        target: /scripts
-        read_only: true
+# Windows (Docker Desktop with the WSL 2 backend) needs no Compose override: install.ps1 runs
+# docker-compose.yml unchanged (plus docker-compose.dev.yml in trial mode and the Garmin/Apple
+# overrides you choose, all through COMPOSE_FILE in .env with COMPOSE_PATH_SEPARATOR=;).
+#
+# Backups run on the host: scripts/backup.ps1 streams pg_dump from the `backup` service and
+# encrypts it with age before it reaches the disk, so the `backup` container mounts nothing. The
+# old WINDOWS_BACKUP_HOST_DIR bind mount that used to live here is gone (set BACKUP_HOST_DIR
+# instead). This file adds nothing and is kept only so an older COMPOSE_FILE that names it still
+# works.
+services: {}

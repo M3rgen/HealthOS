@@ -66,6 +66,16 @@ jobs:
         env:
           APP_ENV_FILE: .env.example
         run: docker compose --env-file .env.example config --quiet
+      - name: Compose override combinations
+        env:
+          APP_ENV_FILE: .env.example
+          GARMIN_API_KEY_HOST_FILE: /tmp/ci-garmin-key
+          APPLE_RECEIVER_TOKEN_HOST_FILE: /tmp/ci-apple-token
+        run: |
+          for override in dev garmin apple windows; do
+            echo "base + $override"
+            docker compose --env-file .env.example -f docker-compose.yml -f "docker-compose.$override.yml" config --quiet
+          done
       - name: Reproducible application image
         run: docker build --tag personal-health-mirror:ci .
 
@@ -97,3 +107,83 @@ jobs:
           HEALTHOS_TEST_STEP_TIMEOUT_MS: "60000"
           HEALTHOS_TEST_TIMEOUT_MS: "600000"
         run: npm run test:browser
+
+  installer:
+    # Installer scripts (install.sh / install.ps1) on every host OS; pwsh exists on all runners.
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: astral-sh/setup-uv@d0d8abe699bfb85fec6de9f7adb5ae17292296ff # v6
+        with:
+          version: "0.12.1"
+          enable-cache: true
+      - name: Installer tests
+        run: uv run --frozen --extra dev pytest -q tests/test_installer_unix.py tests/test_installer_windows.py
+
+  installer-linux-docker:
+    # Real end-to-end trial install with Docker on a Linux runner.
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Run installer (trial mode)
+        run: bash install.sh --non-interactive --mode trial --sources none --backups no --autostart no --lang en
+      - name: Check liveness endpoint
+        # install.sh already waited for /health/live; this asserts the result once.
+        run: curl -fsS http://127.0.0.1:8000/health/live
+      - name: Real encrypted backup
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends age
+          age-keygen -o "$RUNNER_TEMP/ci-backup.key"
+          recipient="$(age-keygen -y "$RUNNER_TEMP/ci-backup.key")"
+          BACKUP_AGE_RECIPIENT="$recipient" bash scripts/backup.sh
+          ls -l backups
+          ls backups/health-*.dump.age
+          cat backups/last-backup-status.json
+          grep -Eq '"result": *"success"' backups/last-backup-status.json
+      - name: Compose logs on failure
+        if: failure()
+        run: docker compose logs --no-color
+      - name: Stop stack
+        if: always()
+        run: docker compose down
+
+  installer-windows-ps51:
+    # Windows PowerShell 5.1 (shell: powershell), the version a stock Windows PC runs.
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Parse every .ps1 with the 5.1 parser
+        shell: powershell
+        run: |
+          $PSVersionTable.PSVersion
+          $bad = 0
+          Get-ChildItem -Recurse -Filter *.ps1 -File |
+            Where-Object { $_.FullName -notmatch '[\\/](node_modules|\.git|\.venv)[\\/]' } |
+            ForEach-Object {
+              $tokens = $null; $errors = $null
+              [void][System.Management.Automation.Language.Parser]::ParseFile($_.FullName, [ref]$tokens, [ref]$errors)
+              if ($errors -and $errors.Count -gt 0) {
+                $bad++
+                foreach ($e in $errors) { Write-Host "$($_.FullName):$($e.Extent.StartLineNumber): $($e.Message)" }
+              } else {
+                Write-Host "ok  $($_.FullName)"
+              }
+            }
+          if ($bad -gt 0) { exit 1 }
+      - name: Dry-run installer (trial and full)
+        shell: powershell
+        run: |
+          foreach ($mode in 'trial', 'full') {
+            $out = Join-Path $env:RUNNER_TEMP "dry-$mode.env"
+            .\install.ps1 -DryRun -NonInteractive -Lang en -Platform windows -Mode $mode -Sources none -EnvOut $out
+            if ($LASTEXITCODE -ne 0) { throw "install.ps1 -Mode $mode exited with $LASTEXITCODE" }
+            if (-not (Test-Path $out)) { throw "no preview written for $mode" }
+          }
