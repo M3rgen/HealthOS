@@ -127,9 +127,12 @@ async def test_health_answers_quickly_while_an_export_is_parsed(monkeypatch, ses
     assert result["status"] == "done"
     assert result["records_read"] == 120_000
     assert result["records_new"] == 1
-    # Many /health answers arrived while the import ran, every one of them fast.
+    # Many /health answers arrived while the import ran. A parse that blocked the event loop
+    # would allow only a handful, each as slow as the parse; a shared CI runner may stall one
+    # answer, so the typical answer is held to 0.2 s and the worst to 2 s.
     assert during >= 5, (during, latencies)
-    assert max(latencies) < 0.2, max(latencies)
+    assert sorted(latencies)[len(latencies) // 2] < 0.2, sorted(latencies)[-5:]
+    assert max(latencies) < 2, max(latencies)
 
 
 def _bomb(size: int = 80 * 1024**2) -> bytes:

@@ -77,7 +77,7 @@ def pyc_body(data: bytes) -> bytes:
     return data[PYC_MTIME[1] :]
 
 
-def without_password_change_day(data: bytes) -> bytes:
+def without_shadow_change_day(data: bytes) -> bytes:
     """Shadow lines with the build-day field blanked; hashes and every other field are kept."""
     lines = []
     for line in data.split(b"\n"):
@@ -95,7 +95,7 @@ def fingerprint(name: str, data: bytes) -> str | None:
     if name.endswith(".pyc") and len(data) >= PYC_HEADER:
         data = data[: PYC_MTIME[0]] + pyc_body(data)
     elif name in SHADOW:
-        data = without_password_change_day(data)
+        data = without_shadow_change_day(data)
     elif name.endswith(".dist-info/RECORD"):
         kept = [line for line in data.splitlines(keepends=True) if UV_CACHE.encode() not in line]
         data = b"".join(kept)

@@ -243,8 +243,11 @@ def _session_seconds(request: Request) -> int:
 
 
 def _language(request: Request, lang: str | None) -> str:
-    if lang is not None and lang in TEXT:
-        return lang
+    # Literals rather than the received value: only these two strings can reach the page.
+    if lang == "tr":
+        return "tr"
+    if lang == "en":
+        return "en"
     first = request.headers.get("accept-language", "").split(",", 1)[0].split(";", 1)[0]
     return "en" if first.strip().split("-", 1)[0].lower() == "en" else "tr"
 

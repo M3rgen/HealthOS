@@ -1091,7 +1091,7 @@ collect_env_backups() {
   dir="$(env_backup_dir)"
   prefix="$(env_backup_prefix)"
   for old in "$DIR"/.env.bak-*; do
-    [ -f "$old" ] && [ ! -L "$old" ] || continue
+    if [ ! -f "$old" ] || [ -L "$old" ]; then continue; fi
     name="$prefix${old##*/}"
     dest="$dir/$name"
     if [ -f "$dest" ] && cmp -s "$old" "$dest"; then continue; fi

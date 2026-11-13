@@ -241,7 +241,7 @@ def require_strong_token(token):
     if legacy and option_enabled(ALLOW_LEGACY_SECRETS):
         print(
             "Uyarı: CODEX_BRIDGE_TOKEN üretilmiş bir sır kadar güçlü değil "
-            f"({ALLOW_LEGACY_SECRETS}); yenisini üretip değiştir.",
+            "(HEALTHOS_ALLOW_LEGACY_SECRETS); yenisini üretip değiştir.",
             file=sys.stderr,
         )
         return
@@ -250,7 +250,7 @@ def require_strong_token(token):
         'Yenisini üret: python3 -c "import secrets; print(secrets.token_urlsafe(48))".'
     )
     if legacy:
-        message += f" Geçici olarak korumak için {ALLOW_LEGACY_SECRETS}=1 ayarla."
+        message += " Geçici olarak korumak için HEALTHOS_ALLOW_LEGACY_SECRETS=1 ayarla."
     raise SystemExit(message)
 
 

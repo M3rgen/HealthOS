@@ -16,6 +16,9 @@ from app.services.archive.storage import store_records
 pytestmark = pytest.mark.integration
 
 
+# 32 writers on separate connections are slow on a shared two-core runner; the claim is that
+# every round completes with exact counts, not how fast it does.
+@pytest.mark.timeout(240)
 async def test_32_writers_store_60_overlapping_records_for_three_rounds(database_url, migrated):
     # Every task holds a separate connection before the round starts: the default pool
     # would otherwise throttle the 32 writers and conceal contention.

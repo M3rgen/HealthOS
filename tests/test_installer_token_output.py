@@ -9,7 +9,6 @@ terminal. install.ps1 runs with -DryRun-free fake checkouts only where pwsh exis
 from __future__ import annotations
 
 import os
-import pty
 import re
 import subprocess
 import threading
@@ -22,6 +21,8 @@ from test_installer_unix import pytestmark as pytestmark  # bash on a Unix host
 
 def run_on_terminal(box: Sandbox, *args: str) -> tuple[int, str]:
     """install.sh with stdout on a pseudo-terminal (stdin stays /dev/null: no questions)."""
+    import pty  # Unix only; importing it at module level breaks collection on Windows.
+
     master, slave = pty.openpty()
     chunks: list[bytes] = []
 
