@@ -14,10 +14,10 @@ from sqlalchemy import text
 
 from app.core.config import get_settings
 from app.core.provenance import new_context_id, provenance
-from app.db.session import SessionLocal
+from app.db.session import SessionLocal, database_lifespan
 from app.google_health.pagination import iter_pages
-from app.services.runtime import build_runtime
-from app.services.storage import StoreStats, store_page
+from app.runtime import build_runtime
+from app.services.archive.storage import StoreStats, store_page
 
 AUDIT_SQL = """
 WITH daily AS (
@@ -74,7 +74,7 @@ async def repair_window(google, sessions, spec, start, stop, run) -> StoreStats:
     return stats
 
 
-async def main(args):
+async def run(args: argparse.Namespace):
     end = datetime.now(ZoneInfo(args.timezone)).date() - timedelta(days=1)
     before = await audit(args.timezone, end)
     print(
@@ -130,6 +130,11 @@ async def main(args):
         await runtime.shutdown()
     if failures:
         raise SystemExit(1)
+
+
+async def main(args: argparse.Namespace):
+    async with database_lifespan(get_settings(), SessionLocal):
+        await run(args)
 
 
 if __name__ == "__main__":

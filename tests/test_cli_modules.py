@@ -3,6 +3,7 @@
 import asyncio
 import importlib
 import json
+import logging
 import subprocess
 import sys
 import tomllib
@@ -14,10 +15,12 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 import typer.rich_utils
 from cli_records import cli_database as cli_database
+from sqlalchemy.exc import StatementError
 from typer.main import get_command
 from typer.testing import CliRunner
 
 from app.cli import main as cli
+from app.core.config import Settings
 from app.models.state import BackfillJob, JobStatus, SyncState, WebhookEvent, WebhookNotification
 
 RUNNER = CliRunner()
@@ -32,23 +35,29 @@ EXPORTS = {
     "identity_commands": (
         "identity_backfill identity_decide identity_sources DATA_TYPES_OPTION AFTER_OPTION"
     ),
-    "sync_commands": "status _chains_to_review backfill sync reconcile probe",
+    "sync_commands": "status backfill sync reconcile probe",
     "webhook_commands": "webhook_readiness webhook_status webhook_replay_pending",
     "rejection_commands": "rejections",
     "garmin_commands": "garmin_status garmin_pull garmin_backfill KINDS_OPTION",
+    "google_commands": "google_rebind",
     "apple_commands": "apple_token apple_import apple_status apple_normalize",
+    "demo_commands": "demo",
+    "import_commands": "import_fit",
 }
+# Commands added after the contract was captured; each is tested where it lives.
+LATER = ["google-rebind", "demo", "import-fit"]
 
 
 def test_entry_point_and_flat_registration_are_unchanged():
     project = tomllib.loads(Path("pyproject.toml").read_text())
-    assert project["project"]["scripts"]["health-mirror"] == "app.cli.main:app"
+    assert project["project"]["scripts"] == {"healthos": "app.cli.main:app"}
+    assert not hasattr(cli, "legacy")
     assert not cli.app.registered_groups
     callbacks = [item.callback for item in cli.app.registered_commands]
-    assert len(callbacks) == len(set(callbacks)) == 24
+    assert len(callbacks) == len(set(callbacks)) == 27
     assert [callback.__name__.replace("_", "-") for callback in callbacks] == list(
         CONTRACT["commands"]
-    )
+    ) + LATER
     for module, names in EXPORTS.items():
         implementation = importlib.import_module(f"app.cli.{module}")
         for name in names.split():
@@ -66,7 +75,19 @@ def test_help_and_parameters_match_the_original_cli(name, monkeypatch):
     assert result.exit_code == 0, result.output
     assert result.stderr == ""
     if name is None:
-        assert result.stdout == CONTRACT["root_help"]
+        assert all(name in result.stdout for name in LATER)
+        legacy_lines = []
+        later_command = False
+        for line in result.stdout.split("\n"):
+            if any(line.startswith(f"│ {name} ") for name in LATER) or (
+                later_command and line.startswith("│  ")
+            ):
+                later_command = True
+                continue
+            later_command = False
+            legacy_lines.append(line)
+        legacy_help = "\n".join(legacy_lines)
+        assert legacy_help == CONTRACT["root_help"]
         return
     expected = CONTRACT["commands"][name]
     assert result.stdout == expected["help"]
@@ -96,7 +117,7 @@ def test_command_modules_import_before_the_entry_point(module):
             "-c",
             f"import app.cli.{module}; import sys; "
             "assert 'app.cli.main' not in sys.modules; import app.cli.main; "
-            "assert len(app.cli.main.app.registered_commands) == 24",
+            "assert len(app.cli.main.app.registered_commands) == 27",
         ],
         capture_output=True,
         text=True,
@@ -152,7 +173,7 @@ def test_runtime_commands_keep_overrides_output_and_shutdown(
     runtime = SimpleNamespace(
         **{service: SimpleNamespace(**{method: operation})}, shutdown=AsyncMock()
     )
-    settings = object()
+    settings = SimpleNamespace(google_enabled=True)
     build = Mock(return_value=runtime)
     runner = Mock(side_effect=asyncio.run)
     monkeypatch.setattr(cli, "get_settings", lambda: settings)
@@ -167,13 +188,16 @@ def test_runtime_commands_keep_overrides_output_and_shutdown(
     assert runner.call_count == 1
     assert result.exit_code == int(fail)
     assert result.stdout == ("" if fail else expected)
-    assert result.stderr == ""
     if fail:
-        assert result.exception is failure
+        assert result.stderr == "Komut tamamlanamadı. Hata türü: RuntimeError\n"
+    else:
+        assert result.stderr == ""
 
 
 @pytest.mark.parametrize("command", ["sync", "reconcile"])
-def test_partial_service_failure_stays_on_stdout_and_returns_one(monkeypatch, command):
+def test_partial_service_failure_stays_on_stdout_and_returns_one(
+    cli_database, monkeypatch, command
+):
     values = {"steps": 2, "sleep": ValueError("synthetic")}
     runtime = SimpleNamespace(
         incremental=SimpleNamespace(run_all=AsyncMock(return_value=values)),
@@ -188,7 +212,7 @@ def test_partial_service_failure_stays_on_stdout_and_returns_one(monkeypatch, co
     runtime.shutdown.assert_awaited_once()
 
 
-def test_webhook_replay_reports_failed_elements_before_exiting(monkeypatch):
+def test_webhook_replay_reports_failed_elements_before_exiting(cli_database, monkeypatch):
     runtime = SimpleNamespace(
         webhook_processor=SimpleNamespace(
             process_pending=AsyncMock(return_value=SimpleNamespace(failed_elements=2))
@@ -302,3 +326,94 @@ def test_verify_keeps_sync_errors_on_stderr(cli_database):
         "0 stored Google responses and 0 identity aliases\n"
     )
     assert result.stderr == "sync error: steps: synthetic\n"
+
+
+@pytest.mark.parametrize("sql_error", [False, True])
+def test_unexpected_cli_failure_has_safe_stderr_and_redacted_log(monkeypatch, caplog, sql_error):
+    detail = (
+        "synthetic-private-health-value /synthetic-private-dir/health-store.sqlite "
+        "refresh_token=synthetic-private-token"
+    )
+    error = (
+        StatementError(detail, "SELECT raw_json FROM health", {"value": detail}, ValueError(detail))
+        if sql_error
+        else RuntimeError(detail)
+    )
+
+    def fail():
+        raise error
+
+    monkeypatch.setattr(cli, "get_settings", fail)
+    result = RUNNER.invoke(cli.app, ["sync"])
+    assert result.exit_code == 1 and result.stdout == ""
+    assert result.stderr == f"Komut tamamlanamadı. Hata türü: {type(error).__name__}\n"
+    (record,) = [r for r in caplog.records if r.name == "app.cli._errors"]
+    assert record.levelno == logging.ERROR and record.error_type == type(error).__name__
+    assert record.error_frames and record.exc_info is None and record.exc_text is None
+    emitted = result.output + caplog.text + repr(vars(record))
+    assert all(
+        value not in emitted
+        for value in (
+            detail,
+            "synthetic-private",
+            "/synthetic-private-dir/health-store.sqlite",
+            "SELECT raw_json",
+            "Traceback",
+        )
+    )
+
+
+@pytest.mark.parametrize("error", [typer.BadParameter("synthetic"), typer.Exit(7), typer.Abort()])
+def test_cli_adapter_preserves_typer_control_exceptions(monkeypatch, error):
+    def fail():
+        raise error
+
+    monkeypatch.setattr(cli, "get_settings", fail)
+    result = RUNNER.invoke(cli.app, ["sync"])
+    assert result.exit_code == (
+        7 if isinstance(error, typer.Exit) else 1 if isinstance(error, typer.Abort) else 2
+    )
+    assert "Komut tamamlanamadı" not in result.output
+
+
+def test_actual_cli_entry_never_renders_unexpected_traceback():
+    script = """
+from app.cli import main
+def fail():
+    raise RuntimeError('SELECT raw_json; /private/health-store.sqlite; synthetic-private-token')
+main.get_settings = fail
+main.app()
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", script, "sync"], capture_output=True, text=True, timeout=30
+    )
+    assert result.returncode == 1 and result.stdout == ""
+    assert "Komut tamamlanamadı. Hata türü: RuntimeError" in result.stderr
+    assert "error_type=RuntimeError" in result.stderr and "error_frames=" in result.stderr
+    assert all(
+        value not in result.stderr
+        for value in ("SELECT", "/private/", "synthetic-private", "Traceback", str(Path.cwd()))
+    )
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [["sync"], ["sync", "steps"], ["probe"], ["backfill", "--reset-abandoned"], ["reconcile"]],
+)
+@pytest.mark.parametrize("sources", ["none", "apple", "garmin"])
+def test_google_commands_refuse_disabled_source_before_runtime(monkeypatch, arguments, sources):
+    monkeypatch.setenv("HEALTHOS_SOURCES", sources)
+    settings = Settings(_env_file=None, app_env="test")
+    build = Mock(side_effect=AssertionError("disabled command must not build a runtime"))
+    sessions = Mock(side_effect=AssertionError("disabled command must not access the database"))
+    monkeypatch.setattr(cli, "get_settings", lambda: settings)
+    monkeypatch.setattr(cli, "build_runtime", build)
+    monkeypatch.setattr(cli, "SessionLocal", sessions)
+
+    result = RUNNER.invoke(cli.app, arguments)
+
+    assert result.exit_code == 1
+    assert result.stdout == ""
+    assert result.stderr == "Bu kurulumda Google kaynağı kapalı.\n"
+    build.assert_not_called()
+    sessions.assert_not_called()

@@ -1,11 +1,33 @@
 """Encrypted artifacts are published completely and never replace an existing name."""
 
+import importlib
+import runpy
 import stat
+import sys
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
-from app.services import backup_files
+from app.services.operations import backup_files
+
+
+def test_legacy_module_entry_point_delegates_arguments(monkeypatch):
+    calls = []
+    legacy_module = backup_files.__name__.replace(".operations.", ".")
+
+    def main(args):
+        calls.append(args)
+        return 0
+
+    monkeypatch.setattr(backup_files, "main", main)
+    monkeypatch.setattr(sys, "argv", ["backup_files", "check-stream"])
+    monkeypatch.delitem(sys.modules, legacy_module, raising=False)
+    with pytest.raises(SystemExit) as exit_info:
+        runpy.run_module(legacy_module, run_name="__main__", alter_sys=True)
+    assert exit_info.value.code == 0
+    assert calls == [["check-stream"]]
+    importlib.import_module(legacy_module)
+    assert sys.modules[legacy_module] is backup_files
 
 
 @pytest.mark.parametrize("method", ["age", "gpg"])

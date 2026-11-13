@@ -1,120 +1,62 @@
-"""scripts/backup.sh and scripts/restore.sh against a fake `docker` CLI (no Docker needed)."""
+"""Backup shell behavior against synthetic commands, without Docker."""
 
 import json
 import os
 import shutil
 import signal
 import stat
-import subprocess
-import tempfile
-import time
-from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
-
-ROOT = Path(__file__).resolve().parents[1]
-DUMP = b"PGDMP-synthetic-dump\n"
-BASH = shutil.which("bash")
-GPG = shutil.which("gpg")
-GIB = 1024**3
-needs_gpg = pytest.mark.skipif(GPG is None, reason="gpg is required")
+from support.backup_scripts import (
+    BASH,
+    DUMP,
+    GIB,
+    PROCESS_GUARD,
+    ROOT,
+    backup_env_file,
+    backup_process,
+    fake_sudo,
+    file_clock,
+    needs_gpg,
+    old_dumps,
+    partials,
+    run,
+    status,
+    wait_for,
+    write_key,
+)
+from support.backup_scripts import (
+    fake_age as fake_age,
+)
+from support.backup_scripts import (
+    fixed_age as fixed_age,
+)
+from support.backup_scripts import (
+    sandbox as sandbox,
+)
 
 pytestmark = pytest.mark.skipif(BASH is None, reason="bash is required")
 
-FAKE_DOCKER = """#!/usr/bin/env bash
-echo "$*" >> "$FAKE_DOCKER_LOG"
-case "$*" in
-  *"--profile backup run --rm -T backup"*)
-    [ -z "${FAKE_DOCKER_FAIL:-}" ] || exit 1
-    printf '%s\\n' "${FAKE_DUMP_TEXT:-PGDMP-synthetic-dump}" ;;
-  *pg_restore*) cat > "$FAKE_RESTORE_SINK" ;;
-  *alembic_version*) echo 20261017_0007 ;;
-  *psql*) printf 'manual_measurements\\t1\\nraw_health_data\\t0\\n' ;;
-esac
-"""
 
-# Real df unless FAKE_DF_AVAIL_KB is set; then a POSIX `df -Pk` line with that "Available".
-FAKE_DF = """#!/usr/bin/env bash
-if [ -n "${FAKE_DF_AVAIL_KB:-}" ]; then
-  echo "Filesystem 1024-blocks Used Available Capacity Mounted on"
-  echo "fake 999999999 1 $FAKE_DF_AVAIL_KB 1% /"
-  exit 0
-fi
-exec /bin/df "$@"
-"""
-
-
-@pytest.fixture
-def sandbox(tmp_path: Path):
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
-    docker = bin_dir / "docker"
-    docker.write_text(FAKE_DOCKER, encoding="utf-8")
-    docker.chmod(0o755)
-    df = bin_dir / "df"
-    df.write_text(FAKE_DF, encoding="utf-8")
-    df.chmod(0o755)
-    # gpg-agent's socket path must be short; pytest's macOS tmp_path is too long.
-    gnupg = Path(tempfile.mkdtemp(prefix="hos-gpg-", dir="/tmp" if os.path.isdir("/tmp") else None))
-    env = {
-        "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
-        "HOME": str(tmp_path),
-        "GNUPGHOME": str(gnupg),
-        "BACKUP_HOST_DIR": str(tmp_path / "backups"),
-        "BACKUP_STATUS_HOST_DIR": str(tmp_path / "metadata"),
-        "BACKUP_KEY_FILE": str(tmp_path / "backup.key"),
-        "FAKE_DOCKER_LOG": str(tmp_path / "docker.log"),
-        "FAKE_RESTORE_SINK": str(tmp_path / "restored.dump"),
-        # 100 GiB free unless a test says otherwise, independent of the real disk.
-        "FAKE_DF_AVAIL_KB": str(100 * 1024 * 1024),
-    }
-    yield env
-    if shutil.which("gpgconf"):
-        subprocess.run(["gpgconf", "--kill", "gpg-agent"], env=env, check=False)
-    shutil.rmtree(gnupg, ignore_errors=True)
-
-
-def run(script: str, env: dict[str, str], *args: str) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        [BASH, str(ROOT / "scripts" / script), *args],
-        env=env,
-        text=True,
-        capture_output=True,
-        check=False,
+def test_old_host_python_fails_before_docker(fake_age):
+    python = Path(fake_age["PATH"].split(os.pathsep)[0]) / "python3"
+    python.write_text(
+        '#!/usr/bin/env bash\nif [ "$1" = -V ]; then\n'
+        '  echo "Python 3.9.6" >&2; exit 0\nfi\nexit 1\n'
     )
+    python.chmod(0o755)
+    # The installer extension's backup.sh picks any Python 3.11+ it finds: name only the old one.
+    fake_age["BACKUP_PYTHON"] = str(python)
 
+    result = run("backup.sh", fake_age)
 
-def write_key(env: dict[str, str], mode: int = 0o600) -> Path:
-    key = Path(env["BACKUP_KEY_FILE"])
-    key.write_text("synthetic-test-passphrase-not-a-secret\n", encoding="utf-8")
-    key.chmod(mode)
-    return key
-
-
-def status(env: dict[str, str]) -> dict:
-    path = Path(env["BACKUP_HOST_DIR"]) / "last-backup-status.json"
-    return json.loads(path.read_text(encoding="utf-8"))
-
-
-def old_dumps(backups: Path, days: int = 20) -> tuple[list[Path], list[Path]]:
-    """Old health-* dumps (prunable) and old non-dump files (never prunable)."""
-    backups.mkdir(exist_ok=True)
-    old = time.time() - days * 86_400
-    dumps = [
-        backups / "health-20250101T000000Z.dump.gpg",
-        backups / "health-20250102T000000Z.dump.age",
-        backups / "health-20250101.dump",
-    ]
-    others = [backups / "notes.txt", backups / "other-20250101.dump"]
-    for path in (*dumps, *others):
-        path.write_bytes(b"x")
-        os.utime(path, (old, old))
-    return dumps, others
-
-
-def partials(backups: Path) -> list[Path]:
-    return list(backups.glob("*.partial"))
+    assert result.returncode != 0
+    assert (
+        "backup: needs python3 >= 3.11 on the host (found: Python 3.9.6); see docs/DEPLOYMENT.md"
+    ) in result.stderr
+    assert "Traceback" not in result.stderr
+    assert not Path(fake_age["FAKE_DOCKER_LOG"]).exists()
 
 
 @needs_gpg
@@ -152,127 +94,6 @@ def test_backup_is_encrypted_timestamped_and_keeps_old_dumps_by_default(sandbox)
     assert "--dbname=health_restore" in log
 
 
-@needs_gpg
-@pytest.mark.parametrize("value", ["", "0", "never", "NEVER", "36500"])
-def test_unset_zero_never_and_36500_retention_delete_nothing(sandbox, value):
-    backups = Path(sandbox["BACKUP_HOST_DIR"])
-    dumps, others = old_dumps(backups, days=400)
-    write_key(sandbox)
-
-    result = run("backup.sh", {**sandbox, "BACKUP_RETENTION_DAYS": value})
-
-    assert result.returncode == 0, result.stderr
-    assert all(path.exists() for path in (*dumps, *others))
-    assert len(list(backups.glob("health-*.dump*"))) == len(dumps) + 1
-    assert status(sandbox)["pruned_files"] == 0
-
-
-def run_with_env_file(
-    tmp_path: Path, env: dict[str, str], content: str
-) -> subprocess.CompletedProcess[str]:
-    # .env lives in the repository root; simulate it through a copy of the script tree.
-    tree = tmp_path / "tree"
-    (tree / "scripts").mkdir(parents=True)
-    shutil.copy(ROOT / "scripts" / "backup.sh", tree / "scripts" / "backup.sh")
-    shutil.copy(ROOT / "scripts" / "write_backup_status.py", tree / "scripts")
-    (tree / "app" / "services").mkdir(parents=True)
-    shutil.copy(ROOT / "app" / "services" / "backup_status.py", tree / "app" / "services")
-    shutil.copy(ROOT / "app" / "services" / "backup_files.py", tree / "app" / "services")
-    (tree / ".env").write_text(content, encoding="utf-8")
-    return subprocess.run(
-        [BASH, str(tree / "scripts" / "backup.sh")],
-        env=env,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-
-
-@needs_gpg
-def test_retention_from_env_file_36500_is_accepted(sandbox, tmp_path: Path):
-    backups = Path(sandbox["BACKUP_HOST_DIR"])
-    dumps, _ = old_dumps(backups, days=400)
-    write_key(sandbox)
-
-    result = run_with_env_file(tmp_path, sandbox, "BACKUP_RETENTION_DAYS=36500\n")
-
-    assert result.returncode == 0, result.stderr
-    assert all(path.exists() for path in dumps)
-    assert status(sandbox)["retention_days"] == "36500"
-
-
-@needs_gpg
-def test_a_positive_retention_in_env_file_prunes(sandbox, tmp_path: Path):
-    backups = Path(sandbox["BACKUP_HOST_DIR"])
-    dumps, others = old_dumps(backups)
-    write_key(sandbox)
-
-    result = run_with_env_file(tmp_path, sandbox, "BACKUP_RETENTION_DAYS=7\n")
-
-    assert result.returncode == 0, result.stderr
-    assert not any(path.exists() for path in dumps)
-    assert all(path.exists() for path in others)
-    assert status(sandbox)["retention_days"] == "7"
-
-
-@needs_gpg
-@pytest.mark.parametrize("value", ["", "0", "never"])
-def test_an_explicit_empty_or_never_environment_value_overrides_env_file(
-    sandbox, tmp_path: Path, value
-):
-    # An empty BACKUP_RETENTION_DAYS in the environment used to fall back to .env's 7.
-    backups = Path(sandbox["BACKUP_HOST_DIR"])
-    dumps, others = old_dumps(backups)
-    write_key(sandbox)
-
-    result = run_with_env_file(
-        tmp_path, {**sandbox, "BACKUP_RETENTION_DAYS": value}, "BACKUP_RETENTION_DAYS=7\n"
-    )
-
-    assert result.returncode == 0, result.stderr
-    assert all(path.exists() for path in (*dumps, *others))
-    report = status(sandbox)
-    assert report["retention_days"] == "never" and report["pruned_files"] == 0
-
-
-@needs_gpg
-def test_explicit_positive_retention_prunes_only_old_health_dumps(sandbox):
-    backups = Path(sandbox["BACKUP_HOST_DIR"])
-    dumps, others = old_dumps(backups)
-    recent = backups / "health-20991231T000000Z.dump.age"
-    recent.write_bytes(b"x")
-    write_key(sandbox)
-
-    result = run("backup.sh", {**sandbox, "BACKUP_RETENTION_DAYS": "7"})
-
-    assert result.returncode == 0, result.stderr
-    output = Path(result.stdout.strip())
-    assert output.exists() and recent.exists()
-    assert not any(path.exists() for path in dumps)
-    assert all(path.exists() for path in others)
-    report = status(sandbox)
-    assert report["retention_days"] == "7" and report["pruned_files"] == len(dumps)
-
-
-@needs_gpg
-@pytest.mark.parametrize("value", ["-5", "abc", "7d", " 7", "1e3", "99999999999999999999"])
-def test_any_other_retention_value_keeps_every_backup(sandbox, value):
-    # Neither deletes nor stops the backup: a typo must not cost a night's backup.
-    backups = Path(sandbox["BACKUP_HOST_DIR"])
-    dumps, others = old_dumps(backups)
-    write_key(sandbox)
-
-    result = run("backup.sh", {**sandbox, "BACKUP_RETENTION_DAYS": value})
-
-    assert result.returncode == 0, result.stderr
-    assert all(path.exists() for path in (*dumps, *others))
-    report = status(sandbox)
-    assert report["result"] == "success"
-    assert report["retention_days"] == "never" and report["pruned_files"] == 0
-    if len(value) <= 9:
-        assert "keeping every backup" in result.stderr
-
-
 def test_low_disk_refuses_to_start_writes_nothing_and_deletes_nothing(sandbox):
     backups = Path(sandbox["BACKUP_HOST_DIR"])
     dumps, others = old_dumps(backups)
@@ -308,7 +129,7 @@ def test_free_space_default_is_twice_the_newest_dump(sandbox):
     backups.mkdir()
     older = backups / "health-20250101T000000Z.dump.gpg"
     older.write_bytes(b"x")
-    os.utime(older, (time.time() - 86_400,) * 2)
+    os.utime(older, (file_clock(backups) - 86_400,) * 2)
     newest = backups / "health-20250102T000000Z.dump.gpg"
     with newest.open("wb") as handle:  # sparse: 3 GiB apparent size, no real disk use
         handle.truncate(3 * GIB)
@@ -387,64 +208,6 @@ def test_systemd_timer_runs_backup_script_daily():
     assert "logger" in failure and "user.crit" in failure
 
 
-@pytest.fixture
-def fake_age(sandbox):
-    """Exercise pipeline completion/failure without a gpg-agent or encryption service."""
-    binary = Path(sandbox["PATH"].split(os.pathsep)[0]) / "age"
-    binary.write_text(
-        "#!/usr/bin/env bash\n"
-        'if [[ " $* " == *" --decrypt "* ]]; then\n'
-        '  tail -n +2 "${@: -1}" | base64 -d; exit $?\n'
-        "fi\n"
-        'printf "ciphertext-header\\n"\n'
-        "base64\n"
-        'if [ -n "${FAKE_ENCRYPT_GATE:-}" ]; then\n'
-        '  touch "$FAKE_ENCRYPT_GATE.ready"\n'
-        '  while [ ! -e "$FAKE_ENCRYPT_GATE.release" ]; do sleep 0.02; done\n'
-        "fi\n"
-        '[ -z "${FAKE_ENCRYPT_FAIL:-}" ] || exit 1\n'
-    )
-    binary.chmod(0o755)
-    return {**sandbox, "BACKUP_AGE_RECIPIENT": "synthetic-public-recipient"}
-
-
-@pytest.fixture
-def fixed_age(fake_age):
-    binary = Path(fake_age["PATH"].split(os.pathsep)[0]) / "date"
-    binary.write_text(
-        '#!/usr/bin/env bash\ncase "$*" in\n'
-        "  *%Y%m%d*) echo 20261025T033000Z ;;\n"
-        "  *) echo 2026-10-25T03:30:00Z ;;\nesac\n"
-    )
-    binary.chmod(0o755)
-    return fake_age
-
-
-def wait_for(path: Path):
-    deadline = time.monotonic() + 10
-    while not path.exists():
-        assert time.monotonic() < deadline, f"timed out waiting for {path.name}"
-        time.sleep(0.02)
-
-
-@contextmanager
-def backup_process(env):
-    process = subprocess.Popen(
-        [BASH, str(ROOT / "scripts" / "backup.sh")],
-        env=env,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        start_new_session=True,
-    )
-    try:
-        yield process
-    finally:
-        if process.poll() is None:
-            os.killpg(process.pid, signal.SIGKILL)
-        process.communicate(timeout=5)
-
-
 @pytest.mark.parametrize("method", ["age", "gpg"])
 def test_fixed_second_successes_preserve_existing_targets_and_restore(fixed_age, method):
     env = dict(fixed_age)
@@ -473,7 +236,7 @@ def test_fixed_second_successes_preserve_existing_targets_and_restore(fixed_age,
         assert Path(env["FAKE_RESTORE_SINK"]).read_bytes() == DUMP
     # The default free-space guard discovers new names; opt-in retention also does.
     for path in snapshots:
-        os.utime(path, (time.time() - 20 * 86400,) * 2)
+        os.utime(path, (file_clock(backups) - 20 * 86400,) * 2)
     result = run("backup.sh", {**env, "BACKUP_RETENTION_DAYS": "7"})
     assert result.returncode == 0, result.stderr
     assert status(env)["pruned_files"] == 3
@@ -520,7 +283,7 @@ def test_concurrent_backups_and_legacy_status_have_private_temporary_files(fixed
             Path(env["FAKE_STATUS_GATE"] + ".release").touch()
         outputs = []
         for process in (first, second):
-            stdout, stderr = process.communicate(timeout=10)
+            stdout, stderr = process.communicate(timeout=PROCESS_GUARD)
             assert process.returncode == 0, stderr
             assert "could not" not in stderr
             outputs.append(Path(stdout.strip()))
@@ -551,7 +314,7 @@ def test_failed_or_cancelled_peer_cannot_remove_another_runs_files(fixed_age, tm
             os.killpg(peer.pid, getattr(signal, "SIG" + failure))
         else:
             Path(env["FAKE_ENCRYPT_GATE"] + ".release").touch()
-        stdout, stderr = peer.communicate(timeout=10)
+        stdout, stderr = peer.communicate(timeout=PROCESS_GUARD)
         assert peer.returncode == (143 if failure == "TERM" else 130 if failure == "INT" else 1)
         assert not stdout, stderr
         assert len(partials(backups)) == 1
@@ -562,7 +325,7 @@ def test_failed_or_cancelled_peer_cannot_remove_another_runs_files(fixed_age, tm
         )
         assert metadata["last_success_at"] == "2026-10-25T03:30:00Z"
         Path(other["FAKE_ENCRYPT_GATE"] + ".release").touch()
-        stdout, stderr = survivor.communicate(timeout=10)
+        stdout, stderr = survivor.communicate(timeout=PROCESS_GUARD)
         assert survivor.returncode == 0, stderr
         assert Path(stdout.strip()).read_bytes() == before
     assert original.read_bytes() == before and not partials(backups)
@@ -663,128 +426,121 @@ def test_shell_metadata_publication_failure_is_sanitized_and_keeps_legacy(sandbo
     assert status(sandbox)["result"] == "failure"
 
 
-@pytest.fixture
-def count_docker(sandbox, tmp_path):
-    docker = Path(sandbox["PATH"].split(os.pathsep)[0]) / "docker"
-    docker.write_text("""#!/usr/bin/env bash
-printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
-case "$*" in
-  *pg_restore*) cat > "$FAKE_RESTORE_SINK" ;;
-  *alembic_version*)
-    [ -z "${FAIL_REVISION_QUERY:-}" ] || exit 1
-    echo 20261025_0020 ;;
-  *psql*)
-    case " $* " in
-      *" -d health "*)
-        [ -z "${FAIL_LIVE_QUERY:-}" ] || { echo "/private/query secret" >&2; exit 1; }
-        printf '%s' "$LIVE_COUNTS" ;;
-      *)
-        [ -z "${FAIL_RESTORED_QUERY:-}" ] || exit 1
-        printf '%s' "$RESTORED_COUNTS" ;;
-    esac ;;
-esac
-""")
-    docker.chmod(0o755)
-    dump = tmp_path / "synthetic.dump"
-    dump.write_bytes(DUMP)
-    return {**sandbox, "RESTORED_COUNTS": "same\t2\n", "LIVE_COUNTS": "same\t2\n"}, dump
-
-
-def comparisons(report):
-    return {
-        fields[0]: fields[1:]
-        for fields in (line.split("\t") for line in report.splitlines())
-        if len(fields) == 4 and fields[0] != "table"
-    }
-
-
-def test_restore_compares_union_of_tables_without_calling_changes_corruption(count_docker):
-    env, dump = count_docker
-    env.update(
-        {
-            "RESTORED_COUNTS": "same\t0\nchanged\t2\nold_table\t3\n",
-            "LIVE_COUNTS": "changed\t9\nnew_table\t4\nsame\t0\n",
-        }
-    )
-    result = run("restore.sh", env, str(dump))
+def test_recipient_comes_from_backup_env_like_the_systemd_unit_gives_it(fake_age):
+    env = {**fake_age}
+    del env["BACKUP_AGE_RECIPIENT"]
+    backup_env_file(env, "BACKUP_AGE_RECIPIENT=age1-from-backup-env\n")
+    result = run("backup.sh", env)
     assert result.returncode == 0, result.stderr
-    assert comparisons(result.stdout) == {
-        "same": ["0", "0", "equal"],
-        "changed": ["2", "9", "different"],
-        "old_table": ["3", "-", "restored_only"],
-        "new_table": ["-", "4", "live_only"],
-    }
-    assert "differences alone do not imply corruption" in result.stdout
-    log = Path(env["FAKE_DOCKER_LOG"]).read_text()
-    assert "dropdb -U health --if-exists health_restore" in log
-    assert "dropdb -U health --if-exists health\n" not in log
-    assert "pg_restore -U health --dbname=health_restore" in log
-    assert Path(env["FAKE_RESTORE_SINK"]).read_bytes() == DUMP
+    assert result.stdout.strip().endswith(".dump.age")
 
 
-@pytest.mark.parametrize("side", ["LIVE", "RESTORED"])
-@pytest.mark.parametrize("failure", ["query", "malformed", "duplicate", "negative"])
-def test_restore_query_failures_and_invalid_results_never_produce_a_comparison(
-    count_docker,
-    side,
-    failure,
-):
-    env, dump = count_docker
-    if failure == "query":
-        env[f"FAIL_{side}_QUERY"] = "1"
-    else:
-        env[f"{side}_COUNTS"] = {
-            "malformed": "same\toops\n",
-            "duplicate": "same\t1\nsame\t1\n",
-            "negative": "same\t-1\n",
-        }[failure]
-    result = run("restore.sh", env, str(dump))
-    assert result.returncode != 0
-    assert not comparisons(result.stdout)
-    assert "comparison" not in result.stdout
-    assert "/private/query" not in result.stderr
-
-
-@pytest.mark.parametrize("target", ["health", "postgres", "template0", "template1", "bad;name"])
-def test_comparison_changes_keep_scratch_database_guard(count_docker, target):
-    env, dump = count_docker
-    result = run("restore.sh", env, str(dump), target)
-    assert result.returncode != 0
-    assert not Path(env["FAKE_DOCKER_LOG"]).exists()
-
-
-def test_successful_empty_live_query_is_distinct_from_a_query_error(count_docker):
-    env, dump = count_docker
-    env["LIVE_COUNTS"] = ""
-    result = run("restore.sh", env, str(dump))
+def test_the_environment_beats_backup_env(fake_age):
+    backup_env_file(fake_age, "BACKUP_HOST_DIR=/nonexistent/from-backup-env\n")
+    result = run("backup.sh", {**fake_age})
     assert result.returncode == 0, result.stderr
-    assert comparisons(result.stdout) == {"same": ["2", "-", "restored_only"]}
+    assert Path(result.stdout.strip()).parent == Path(fake_age["BACKUP_HOST_DIR"])
 
 
-@pytest.mark.parametrize("live", ["same\t2\n", ""])
-def test_restore_without_tables_fails_explicitly(count_docker, live):
-    env, dump = count_docker
-    env.update({"RESTORED_COUNTS": "", "LIVE_COUNTS": live})
-    result = run("restore.sh", env, str(dump))
-    assert result.returncode != 0
-    assert "restored database health_restore has no tables" in result.stderr
-    assert "row-count query failed" not in result.stderr
-    assert not comparisons(result.stdout) and "comparison" not in result.stdout
-
-
-def test_large_integer_counts_are_compared_exactly(count_docker):
-    env, dump = count_docker
-    env.update(
-        {"LIVE_COUNTS": "same\t9007199254740993\n", "RESTORED_COUNTS": "same\t9007199254740992\n"}
-    )
-    result = run("restore.sh", env, str(dump))
+@needs_gpg
+def test_key_file_from_backup_env_is_used(sandbox, tmp_path):
+    key = tmp_path / "other.key"
+    key.write_text("synthetic-test-passphrase-not-a-secret\n", encoding="utf-8")
+    key.chmod(0o600)
+    env = {**sandbox}
+    del env["BACKUP_KEY_FILE"]
+    backup_env_file(env, f"BACKUP_KEY_FILE={key}\n")
+    result = run("backup.sh", env)
     assert result.returncode == 0, result.stderr
-    assert comparisons(result.stdout)["same"][2] == "different"
+    assert result.stdout.strip().endswith(".dump.gpg")
 
 
-def test_revision_query_error_is_not_a_successful_restore_report(count_docker):
-    env, dump = count_docker
-    result = run("restore.sh", {**env, "FAIL_REVISION_QUERY": "1"}, str(dump))
-    assert result.returncode != 0
-    assert "restored revision query failed" in result.stderr
-    assert "Alembic revision:" not in result.stdout
+@pytest.mark.skipif(os.geteuid() == 0, reason="a root-only file is readable by root")
+def test_root_only_backup_env_reruns_under_sudo(sandbox, tmp_path):
+    path = backup_env_file(sandbox, "BACKUP_AGE_RECIPIENT=age1-from-backup-env\n")
+    path.chmod(0o000)
+    calls = fake_sudo(sandbox, tmp_path)
+    try:
+        result = run("backup.sh", sandbox)
+    finally:
+        path.chmod(0o600)
+    assert result.returncode == 0, result.stderr
+    assert "readable only by root" in result.stderr and "sudo" in result.stderr
+    assert calls.read_text(encoding="utf-8").strip().endswith("scripts/backup.sh")
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="a root-only directory is readable by root")
+def test_backup_env_inside_a_root_only_directory_reruns_under_sudo(sandbox, tmp_path):
+    # DEPLOYMENT step 8: /etc/healthos is mode 700, so the file inside cannot even be stat'ed.
+    private = tmp_path / "healthos"
+    private.mkdir()
+    env = {**sandbox, "BACKUP_ENV_FILE": str(private / "backup.env")}
+    backup_env_file(env, "BACKUP_AGE_RECIPIENT=age1-from-backup-env\n")
+    calls = fake_sudo(sandbox, tmp_path)
+    private.chmod(0o000)
+    try:
+        result = run("backup.sh", env)
+    finally:
+        private.chmod(0o700)
+    assert result.returncode == 0, result.stderr
+    assert "accessible only by root" in result.stderr
+    logged = calls.read_text(encoding="utf-8")
+    assert f"BACKUP_ENV_FILE={private / 'backup.env'}" in logged
+    assert logged.strip().endswith("scripts/backup.sh")
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="a root-only directory is readable by root")
+def test_restore_reruns_under_sudo_when_the_backup_directory_is_root_only(sandbox, tmp_path):
+    backups = Path(sandbox["BACKUP_HOST_DIR"])
+    backups.mkdir()
+    dump = backups / "health-20250101T000000Z.dump.age"
+    dump.write_bytes(b"ciphertext")
+    calls = fake_sudo(sandbox, tmp_path)
+    backups.chmod(0o000)
+    try:
+        result = run("restore.sh", {**sandbox, "BACKUP_AGE_IDENTITY": "/k/id"}, str(dump))
+    finally:
+        backups.chmod(0o700)
+    assert result.returncode == 0, result.stderr
+    logged = calls.read_text(encoding="utf-8")
+    assert "BACKUP_AGE_IDENTITY=/k/id" in logged and logged.strip().endswith(str(dump))
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="a root-only directory is writable by root")
+def test_root_only_backup_directory_reruns_under_sudo(sandbox, tmp_path):
+    backups = Path(sandbox["BACKUP_HOST_DIR"])
+    backups.mkdir(mode=0o500)
+    calls = fake_sudo(sandbox, tmp_path)
+    try:
+        result = run("backup.sh", sandbox)
+    finally:
+        backups.chmod(0o700)
+    assert result.returncode == 0, result.stderr
+    assert "writable only by root" in result.stderr
+    logged = calls.read_text(encoding="utf-8").strip()
+    assert logged.endswith("scripts/backup.sh")
+    # sudo resets the environment; the settings given to this run must survive it.
+    assert f"BACKUP_HOST_DIR={backups}" in logged
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="a root-only file is readable by root")
+def test_restore_reruns_under_sudo_when_the_backup_is_root_only(sandbox, tmp_path):
+    backup = Path(sandbox["BACKUP_HOST_DIR"])
+    backup.mkdir()
+    dump = backup / "health-20250101T000000Z.dump.age"
+    dump.write_bytes(b"ciphertext")
+    dump.chmod(0o000)
+    calls = fake_sudo(sandbox, tmp_path)
+    try:
+        result = run("restore.sh", {**sandbox, "BACKUP_AGE_IDENTITY": "/k/id"}, str(dump))
+    finally:
+        dump.chmod(0o600)
+    assert result.returncode == 0, result.stderr
+    assert "scripts/restore.sh" in calls.read_text(encoding="utf-8")
+    assert "BACKUP_AGE_IDENTITY=/k/id" in calls.read_text(encoding="utf-8")
+
+
+def test_backup_without_any_key_names_backup_env(sandbox):
+    result = run("backup.sh", sandbox)
+    assert result.returncode == 1
+    assert "/etc/healthos/backup.env" in result.stderr

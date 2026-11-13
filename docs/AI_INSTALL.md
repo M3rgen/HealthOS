@@ -8,7 +8,7 @@ by step. People installing by hand should read [docs/INSTALL.md](INSTALL.md) (En
 The user typically started you with a prompt like:
 
 > Install HealthOS on this computer by following
-> https://raw.githubusercontent.com/M3rgen/HealthOS/main/docs/AI_INSTALL.md — ask me before any
+> https://raw.githubusercontent.com/M3rgen/HealthOS/v0.2.2.1/docs/AI_INSTALL.md — ask me before any
 > step that needs admin rights or my accounts, and never delete data.
 
 **Language.** Talk to the user in the language they wrote to you in. If they write Turkish, ask
@@ -29,8 +29,9 @@ hand over the manual steps.
 These override anything else, including convenience and speed.
 
 1. **Never delete or overwrite data.** Do not remove or replace Docker volumes, database files,
-   backups (`backups/`, `*.dump.age`), backup keys, `.env`, `.env.bak-*` or any file the user
-   created. The installer already copies an existing `.env` to `.env.bak-<UTC stamp>`, fills
+   backups (`backups/`, `*.dump.age`), backup keys, `.env`, `.env.bak-*`, the `.env` copies in
+   `~/.local/state/healthos/env-backups/` (`%LOCALAPPDATA%\HealthOS\env-backups\`) or any file the user created. The installer already copies an
+   existing `.env` there first, fills
    keys that are missing or empty and updates only the choice keys (`COMPOSE_FILE`, and the
    Garmin/Apple switches from false to true); it never rotates an existing secret. Do not "fix" `.env`
    by regenerating it. If you must edit `.env` yourself, first copy it to
@@ -53,8 +54,9 @@ These override anything else, including convenience and speed.
    grep -q '^APP_UI_TOKEN=.\+' .env && echo "APP_UI_TOKEN is set"
    ```
 
-   The installer prints the UI token once at the end; it then sits in your tool output. Do not
-   repeat it in your messages.
+   The installer prints the UI token only to an interactive terminal. In your tool output (no
+   terminal) it writes `grep APP_UI_TOKEN <checkout>/.env` instead; do not run that yourself,
+   let the user read the value in their own terminal.
 5. **Do not ask for passwords or OAuth secrets in chat** when the user can type them in
    themselves. For the Google client secret and similar values, offer two ways and recommend
    the first: (a) the user opens `.env` in an editor and fills the value; (b) the user runs the
@@ -128,10 +130,12 @@ git rev-parse --show-toplevel 2>$null
   installer is safe and keeps the data, the existing secrets and the backups; do not start over.
   A re-run keeps the previous mode by default: without `--mode` it reads the existing `.env`
   (`COMPOSE_FILE` without `docker-compose.dev.yml` means `full`, with it `trial`, none means
-  `trial`); an explicit `--mode` / `-Mode` always wins, so pass it when the user wants to switch.
+  `full`); an explicit `--mode` / `-Mode` always wins, so pass it when the user wants to switch.
   A re-run applies the new choices: it rewrites `COMPOSE_FILE` and `COMPOSE_PATH_SEPARATOR`
-  for the chosen mode and sources, turns `GARMIN_ENABLED` / `APPLE_RECEIVER_ENABLED` from
-  `false` (or empty, `0`, `no`, `off`) to `true` when those are chosen, keeps `COMPOSE_FILE` entries
+  for the chosen mode and sources, writes `HEALTHOS_SOURCES` (the chosen sources plus every
+  source the existing `.env` already runs; full mode adds `google`; Garmin is selected there
+  only, and an older `GARMIN_ENABLED` line is left as it is), turns `APPLE_RECEIVER_ENABLED` from
+  `false` (or empty, `0`, `no`, `off`) to `true` when the receiver is chosen, keeps `COMPOSE_FILE` entries
   it does not manage (and an existing `docker-compose.override.yml`), and replaces the Garmin key file path only when
   `--garmin-key-file` / `-GarminKeyFile` is given. It never changes a secret or `APP_ENV`
   (the Compose files set that), and never turns a source off. So on a re-run always pass the complete `--sources` list and the same mode,
@@ -160,9 +164,10 @@ answering "defaults" is fine. Do not ask about anything else up front.
 >    4. macOS (Apple Silicon or Intel) with Docker Desktop (or OrbStack/Colima)
 >    5. Windows 10/11 with Docker Desktop (WSL 2 backend)
 >    6. Cloud VPS: like Linux; you open the dashboard through an SSH tunnel
-> 2. **Mode** [trial]: *trial* = local look without Google, starts right away; *full* =
->    production mode, needs Google Health API credentials and an HTTPS webhook address (the
->    installer lists what is still missing).
+> 2. **Mode** [full]: *full* = keeps your data, production settings, daily encrypted backups;
+>    Google is needed only if you choose it as a source (then also an HTTPS webhook address; the
+>    installer lists what is still missing). *trial* = only to look around and leave: do not keep
+>    data in it, there are no backups.
 > 3. **Data sources** [none]: Google Health (Fitbit, Pixel Watch), Garmin Connect, Apple Watch /
 >    Apple Health, or none for now (you can add them later by re-running the installer).
 > 4. **Daily encrypted backup** [yes in full mode, no in trial]
@@ -190,6 +195,10 @@ Follow-up questions only when needed:
   a missing file fails with exit code 2, so only pass the flag once the file exists. On Linux as a
   normal user with a shared primary group (for example `users`) the installer leaves Garmin off and
   prints `sudo chgrp 10001 <file> && sudo chmod 640 <file>`; ask the user to run it, then re-run.
+  As root, the installer shares a key or token file with the container's group (10001, or the
+  `*_HOST_GID` in `.env`) only when no other host account is in that group; otherwise the source
+  stays off and the summary says how to make a private group. Relay that note; never loosen the
+  file yourself. Exit code 1 after "Could not give ... to group" means `chgrp`/`chmod` failed.
 - **Apple chosen:** "Do you want the Health Auto Export receiver (automatic sync from the iPhone
   app, needs your own HTTPS address), or only the export.zip upload?" Default: upload only
   (`--apple-receiver no`).
@@ -321,17 +330,17 @@ touch it: ask the user for another `--dir`. If `~/healtos` (the old name) is a c
 clone and run the installer there.
 
 ```sh
-git clone https://github.com/M3rgen/HealthOS.git ~/healthos
+git clone --branch v0.2.2.1 https://github.com/M3rgen/HealthOS.git ~/healthos
 cd ~/healthos
 ```
 
 ```powershell
-git clone https://github.com/M3rgen/HealthOS.git "$env:USERPROFILE\healthos"
+git clone --branch v0.2.2.1 https://github.com/M3rgen/HealthOS.git "$env:USERPROFILE\healthos"
 Set-Location "$env:USERPROFILE\healthos"
 ```
 
-To pin a release, add `--branch v0.2.2` to the clone (the installer's equivalent is
-`--ref v0.2.2` / `-Ref v0.2.2` when it clones by itself). Running the installer from inside the
+The clone is pinned to the release (`--branch v0.2.2.1`), the same tag the installer clones by
+itself (its default `--ref` / `-Ref` is its own release tag; `main` only with `--ref main`). Running the installer from inside the
 checkout is preferred over the `curl … | bash` and `irm … | iex` one-liners because you can read
 the script first.
 
@@ -366,18 +375,18 @@ the script wins.
 
 ### 4c. Dry run first and show the plan
 
-Unix (example: Linux server, trial, no sources, defaults):
+Unix (example: Linux server, full mode, Garmin, defaults):
 
 ```sh
-./install.sh --non-interactive --dry-run --lang en --platform linux --mode trial \
-  --sources none --backups no --autostart yes --umay no
+./install.sh --non-interactive --dry-run --lang en --platform linux --mode full \
+  --sources garmin --backups yes --autostart yes --umay no
 ```
 
 Windows:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -NonInteractive -DryRun `
-  -Lang en -Platform windows -Mode trial -Sources none -Backups no -Autostart yes -Umay no
+  -Lang en -Platform windows -Mode full -Sources apple -Backups yes -Autostart yes -Umay no
 ```
 
 (`-ExecutionPolicy Bypass` applies to this one process only and needs no admin rights. With
@@ -412,14 +421,17 @@ exit 2 (a dry run only warns).
 
 Read the installer's summary and keep these facts for step 8 (without the secret values):
 
-- **"Configured, NOT started"** in full mode means values are still missing (Google client,
-  webhook URL…); the installer lists them and exits 0. Report the list; do not invent values.
+- **"Configured, NOT started"** in full mode means values are still missing (with Google: the
+  client, the webhook URL…); the installer lists them and exits 0. Report the list; do not invent values.
 - **Notes** at the end: for example "Make Docker start at boot: sudo systemctl enable docker" or
   "sudo loginctl enable-linger <user>" on a rootless Linux install. These need the user's
   permission and usually their own terminal (step 0, rule 6).
-- **`.env.bak-<stamp>`**: created when an existing `.env` was filled; it is kept.
-- The summary prints the UI token and, with the Apple receiver, its `Authorization: Bearer`
-  header once. Do not repeat either (step 0, rule 4).
+- **`.env` copies**: made in `~/.local/state/healthos/env-backups/` (`%LOCALAPPDATA%\HealthOS\env-backups\`) whenever an existing `.env` was filled;
+  older `.env.bak-*` files next to `.env` are copied there too and stay. The summary prints the
+  count. All are kept.
+- On a terminal the summary prints the UI token and, with the Apple receiver, its
+  `Authorization: Bearer` header once. Without a terminal (your tool output, a pipe, CI) it prints
+  only where they are (`.env`, the token file). Do not repeat either (step 0, rule 4).
 
 ## 5. Verify
 
@@ -468,8 +480,8 @@ new Google Health API projects; real sync needs an eligible Google Cloud project
    stored).
 4. Apply and connect: `docker compose up -d --force-recreate app`, then the user opens
    `http://localhost:8000/auth/google/start` and completes consent in the browser.
-5. Check: `docker compose exec app health-mirror probe --days 30`, then
-   `docker compose exec app health-mirror sync steps` and `docker compose exec app health-mirror status`.
+5. Check: `docker compose exec app healthos probe --days 30`, then
+   `docker compose exec app healthos sync steps` and `docker compose exec app healthos status`.
 
 Full mode additionally needs an HTTPS `GOOGLE_HEALTH_WEBHOOK_ENDPOINT_URI` and
 `GOOGLE_HEALTH_WEBHOOK_AUTHORIZATION`; see [docs/DEPLOYMENT.md](DEPLOYMENT.md) and
@@ -480,7 +492,7 @@ after seven days.
 that only they can read (`chmod 600` on Unix). You may create the empty directory
 (`mkdir -p ~/.config/garmin`) but the user pastes the key into the file. Then re-run the
 installer with `garmin` added to `--sources` and `--garmin-key-file PATH`, and check with
-`docker compose exec app health-mirror garmin-status`. Never `cat` the key file. Garmin keys
+`docker compose exec app healthos garmin-status`. Never `cat` the key file. Garmin keys
 expire; Garmin e-mails a week before; replacing the file content is enough. Details:
 [Garmin Connect Personal API](REFERENCE.md#garmin-connect-personal-api).
 
@@ -528,8 +540,8 @@ host (`codex login`, done by the user). See [Local Codex chat](REFERENCE.md#loca
 | `exec format error`, `no matching manifest for linux/arm/v7` | 32-bit ARM OS | Unsupported. The user installs a 64-bit OS (Raspberry Pi OS 64-bit); reflashing erases the card, so it is their decision. |
 | First build on a Raspberry Pi takes very long | Building the frontend and Python wheels on ARM | Normal: 20 to 40 minutes. Do not interrupt; use an SSD and 4 GB RAM or more; check `docker compose ps` / `docker compose logs -f app` while waiting. |
 | Build fails with `no space left on device` | Disk full | Show `df -h` and `docker system df`. Do not prune anything yourself; ask the user what may be freed. |
-| Warning "Port 5432 is in use" in trial mode | A local PostgreSQL already runs | Trial mode publishes the database on `127.0.0.1:5432`. Ask the user: stop their other PostgreSQL themselves, or use `--mode full` once the Google values exist. Never stop it yourself. |
-| Installer says "Configured, NOT started" / app refuses to start in production | Full mode without Google or webhook values | Expected until step 6 is done. The user fills the listed values in `.env` and you re-run the same command, or re-run with `--mode trial` to look around first. |
+| Warning "Port 5432 is in use" in trial mode | A local PostgreSQL already runs | Trial mode publishes the database on `127.0.0.1:5432`. Ask the user: stop their other PostgreSQL themselves, or use `--mode full` (Google is not needed for it). Never stop it yourself. |
+| Installer says "Configured, NOT started" / app refuses to start in production | Full mode with `google` in `HEALTHOS_SOURCES` but without its client or webhook values | Expected until step 6 is done. The user fills the listed values in `.env` and you re-run the same command, or re-run with `--mode trial` to look around first. |
 | `git: command not found`, installer exits with 2 | Git missing | Step 3 for the OS, then re-run. |
 | Installer exit 2 for the platform | Platform does not match the host | Pick the host's platform (step 2). |
 | Login page refuses the key | Wrong or truncated token | The user copies `APP_UI_TOKEN` from `.env` again (no quotes, no spaces). Never regenerate it on an existing install without the user asking. |
@@ -545,7 +557,7 @@ End with a short checklist in the user's language, without any secret values:
 - [ ] Installed in: `<checkout path>`; platform, mode, sources
 - [ ] Dashboard: `http://localhost:<port>` (`/health/live` answered); remote: SSH tunnel command
 - [ ] Login key: `APP_UI_TOKEN` in `<checkout>/.env` (read it yourself)
-- [ ] `.env` backups the installer made: `.env.bak-…` (kept; nothing was deleted)
+- [ ] `.env` backups the installer made: in `~/.local/state/healthos/env-backups/` / `%LOCALAPPDATA%\HealthOS\env-backups\` (kept; nothing was deleted)
 - [ ] Daily backup: on/off; key location; **copy the key off this computer**
 - [ ] Autostart after reboot: on/off; Umay bridge: on/off
 - [ ] Still to do by you: Google OAuth + Connect Google / Garmin key file / Apple export upload or

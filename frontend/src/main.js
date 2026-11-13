@@ -1,599 +1,196 @@
+// The dashboard's composition root: builds each part, wires their callbacks and starts polling.
+// Everything else lives in its own module; nothing here renders.
 import './style.css';
-import { renderIcons, iconMarkup } from './icons.js';
-import { setupMeasurements } from './measurements.js';
-import { setupProfileValues } from './profile-values.js';
-import { focusVisible, replaceWithFocus } from './accessibility.js';
-import { setupChat } from './chat.js';
-import { setupMetricHistory } from './metric-history.js';
-import { setupCalendar } from './calendar.js';
-import { setupHistoryPanel } from './history-panel.js';
-import { setupWorkouts } from './workouts.js';
-import { flagCells, isTest, setupMeasurementFlags } from './measurement-flags.js';
+import { focusVisible } from './accessibility.js';
+import { fetchHealth, request } from './api.js';
 import { setupAppearance } from './appearance.js';
-import { request, handleUnauthorized } from './api.js';
-import { describeSyncError } from './sync-errors.js';
-import { setupCoverage } from './coverage.js';
-import { setupWebhookStatus } from './webhook-status.js';
-import { setupDevices } from './devices.js';
-import './styles/apple-import.css';
 import { setupBodyLoader } from './body-loader.js';
-import { createDisplayPreferences } from './display-preferences.js';
+import { setupCalendar } from './calendar.js';
+import { setupChat } from './chat.js';
+import { paintHealth, paintHealthFailed } from './connection-panel.js';
+import { createDashboardData } from './dashboard-data.js';
+import { clockTime, fullDate, todayKey } from './dates.js';
+import { setupDisplaySettings } from './display-settings.js';
+import { $ } from './dom.js';
+import { duration, escape, num } from './format.js';
+import { setupHistoryPanel } from './history-panel.js';
+import { paintHistory, paintHistoryFailed, setupHistoryRows } from './history-table.js';
+import { languageFallback, t } from './i18n/index.js';
+import { iconMarkup, renderIcons } from './icons.js';
+import { setupLanguageSelect } from './language-select.js';
+import { setupMeasurementFlags } from './measurement-flags.js';
+import { setupMeasurementList } from './measurement-list.js';
+import { setupMeasurements } from './measurements.js';
+import { setupMetricHistory } from './metric-history.js';
+import { createNotice } from './notice.js';
+import { paintCards, paintCardsFailed } from './overview-cards.js';
+import { setupOverviewTabs } from './overview-tabs.js';
+import { setupPages } from './pages.js';
+import { setPageStatus } from './page-status.js';
+import { createPolling } from './polling.js';
+import { setupProfileValues } from './profile-values.js';
+import { state } from './state.js';
+import { setupScrollFocus } from './scroll-focus.js';
+import { setupSyncAction } from './sync-action.js';
+import { setupSystemPage } from './system-page.js';
+import { setupWorkouts } from './workouts.js';
 
 renderIcons();
+setupScrollFocus();
 setupAppearance();
+setupOverviewTabs(/** @type {HTMLElement} */ (document.querySelector('.overview-grid')));
+setupLanguageSelect();
 
-const $ = id => document.getElementById(id);
-const escape = value =>
-  String(value ?? '').replace(
-    /[&<>"']/g,
-    c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c],
-  );
-const num = (value, digits = 0) =>
-  value == null ? '—' : Number(value).toLocaleString('tr-TR', { maximumFractionDigits: digits });
-// "45 dk", not "0 sa 45 dk": the hour part is shown only when there is one.
-const duration = (seconds) => {
-  if (seconds == null) return '—';
-  const minutes = Math.round(seconds / 60);
-  return minutes < 60 ? `${minutes} dk` : `${Math.floor(minutes / 60)} sa ${minutes % 60} dk`;
-};
-const metrics = {
-  height: ['Boy', 'cm'],
-  weight: ['Kilo', 'kg'],
-  body_fat: ['Yağ oranı', '%'],
-  muscle: ['Kas oranı', '%'],
-};
-const states = { empty: 'Kayıt yok', partial: 'Devam ediyor', complete: 'Kayıt var', missing: 'Eksik ölçüm' };
-const validZone = value => {
-  if (!value) return false;
-  try {
-    new Intl.DateTimeFormat('en-US', { timeZone: value });
-    return true;
-  } catch {
-    return false;
-  }
-};
-const deviceZone = (() => {
-  try {
-    const value = Intl.DateTimeFormat().resolvedOptions().timeZone;
-    return validZone(value) ? value : 'UTC';
-  } catch {
-    return 'UTC';
-  }
-})();
-const resolveZone = choice => (choice === 'auto' ? deviceZone : choice);
-const displayNote = $('display-preferences-note');
-const displayText = {
-  saved: displayNote.textContent,
-  saving: 'Tercih kaydediliyor…',
-  offline: 'Sunucuya ulaşılamadı; tercih bu tarayıcıda saklandı, bağlantı gelince gönderilecek.',
-};
-const display = createDisplayPreferences({
-  validZone,
-  onStatus: status => (displayNote.textContent = displayText[status]),
+const notices = createNotice({
+  box: $('notice'),
+  text: $('notice-text'),
+  close: $('notice-close'),
+  // Built here so a retry control needs no markup of its own; it sits before the close button.
+  action: Object.assign(document.createElement('button'), { type: 'button', className: 'button outline notice-action', hidden: true }),
+  onClosed: () => focusVisible(document.querySelector('[data-page][aria-current="page"]')),
 });
-const stored = display.read();
-let zoneChoice = stored.timezone ?? 'auto';
-let zone = resolveZone(zoneChoice);
-let data = null,
-  health = null,
-  busy = false,
-  pendingRefresh = false,
-  activePage = 'overview',
-  poll = null;
-let selectedDate = null;
-$('timezone').querySelector('option[value="auto"]').textContent = `Cihaz saati (${deviceZone})`;
-function showZoneChoice() {
-  if (![...$('timezone').options].some(option => option.value === zoneChoice))
-    $('timezone').add(new Option(zoneChoice, zoneChoice));
-  $('timezone').value = zoneChoice;
-}
-showZoneChoice();
-$('model-motion').checked = stored.motion ?? true;
-const body = setupBodyLoader($('body-model'), { getMotion: () => $('model-motion').checked });
-const shortDate = value =>
-  new Intl.DateTimeFormat('tr-TR', { timeZone: zone, day: 'numeric', month: 'short' }).format(new Date(value));
-const fullDate = value =>
-  new Intl.DateTimeFormat('tr-TR', { timeZone: zone, day: 'numeric', month: 'long', year: 'numeric' }).format(
-    new Date(value),
-  );
-const timeOf = value =>
-  new Intl.DateTimeFormat('tr-TR', { timeZone: zone, hour: '2-digit', minute: '2-digit' }).format(new Date(value));
-function today() {
-  const parts = new Intl.DateTimeFormat('en-CA', {
-    timeZone: zone,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-  }).formatToParts(new Date());
-  const get = type => parts.find(x => x.type === type).value;
-  return `${get('year')}-${get('month')}-${get('day')}`;
-}
-function civilDate(value) {
-  return new Date(`${value}T12:00:00Z`);
-}
-// `detail` (raw error codes) goes into the tooltip for debugging; the text stays readable.
-function notice(message, error = false, source = 'general', detail = '') {
-  $('notice').hidden = false;
-  $('notice').textContent = message;
-  $('notice').title = detail;
-  $('notice').classList.toggle('error', error);
-  $('notice').dataset.source = source;
-}
-function clearSyncNotice(includeStart = false) {
-  if (
-    $('notice').dataset.source === 'sync' ||
-    (includeStart && ['sync-start', 'sync-result'].includes($('notice').dataset.source))
-  ) {
-    $('notice').hidden = true;
-    $('notice').textContent = '';
-    $('notice').title = '';
-  }
-}
-function rawErrors(pairs) {
-  return pairs
-    .filter(([, code]) => code)
-    .map(([type, code]) => `${type}: ${code}`)
-    .join('\n');
-}
-function query() {
-  return new URLSearchParams({ days: 7, timezone: zone, ...(selectedDate ? { end_date: selectedDate } : {}) });
-}
-function timeHtml(value) {
-  return value ? `${escape(timeOf(value))}<small>${escape(fullDate(value))}</small>` : '—';
-}
-function setState(id, text, good) {
-  $(id).textContent = text;
-  $(id).className = good ? 'good' : 'warning';
-}
-function paintHealth() {
-  if (!health) return;
-  const status = health.status;
-  $('service-status').textContent =
-    status === 'healthy' ? 'Servis çalışıyor' : status === 'failed' ? 'Servis hatası' : 'Kontrol gerekiyor';
-  $('service-status').className =
-    `status-text ${status === 'healthy' ? 'good' : status === 'failed' ? 'bad' : 'warning'}`;
-  $('last-sync').innerHTML = timeHtml(health.last_sync_success);
-  $('last-heart').innerHTML = timeHtml(health.data_freshness?.heart_rate);
-  $('last-steps').innerHTML = timeHtml(health.data_freshness?.steps);
-  setState(
-    'database-state',
-    health.database === 'healthy' ? 'Çalışıyor' : 'Ulaşılamıyor',
-    health.database === 'healthy',
-  );
-  setState(
-    'scheduler-state',
-    health.scheduler === 'running' ? 'Çalışıyor' : health.scheduler === 'disabled' ? 'Kapalı' : 'Durdu',
-    health.scheduler === 'running',
-  );
-  $('webhook-info').innerHTML = health.latest_health_write
-    ? `Son veri güncellemesi: ${escape(fullDate(health.latest_health_write))} · ${escape(timeOf(health.latest_health_write))}<small>Google’dan gelen verilerin en son kaydedildiği zaman.</small>`
-    : 'Henüz veri kaydedilmedi.<small>Verileri almak için “Şimdi eşitle” düğmesine bas.</small>';
-  $('queue-state').textContent =
-    `${num(health.pending_notifications ?? 0)} bekleyen · ${num((health.failed_notifications ?? 0) + (health.failed_syncs ?? 0))} hata`;
-  const details = [
-    ['Servis', status === 'healthy' ? 'Çalışıyor' : status === 'failed' ? 'Hata' : 'Kontrol gerekiyor'],
-    ['Google yapılandırması', health.configuration === 'healthy' ? 'Hazır' : 'Eksik'],
-    ['Son kontrol', health.checked_at ? `${shortDate(health.checked_at)} ${timeOf(health.checked_at)}` : '—'],
-    [
-      'Son veri kaydı',
-      health.latest_health_write
-        ? `${shortDate(health.latest_health_write)} ${timeOf(health.latest_health_write)}`
-        : '—',
-    ],
-    ['Bildirim hataları', num(health.failed_notifications ?? 0)],
-    ['Eşitleme hataları', num(health.failed_syncs ?? 0)],
-    ['Geciken veri türleri', num(health.stale_streams?.length ?? 0)],
-  ];
-  $('google-empty').hidden = health.configuration === 'healthy';
-  $('system-details').innerHTML = details
-    .map(([label, value]) => `<div><dt>${escape(label)}</dt><dd>${escape(value)}</dd></div>`)
-    .join('');
-}
-// Card sparklines: gradient bars with rounded tops and a smooth line with a soft area.
-// preserveAspectRatio="none" stretches x, so strokes and dots use non-scaling-stroke.
-const smooth = p =>
-  p
-    .map((pt, i) => {
-      if (!i) return `M${pt[0]},${pt[1]}`;
-      const a = p[i - 2] || p[i - 1],
-        b = p[i - 1],
-        d = p[i + 1] || pt;
-      return `C${b[0] + (pt[0] - a[0]) / 6},${b[1] + (pt[1] - a[1]) / 6} ${pt[0] - (d[0] - b[0]) / 6},${pt[1] - (d[1] - b[1]) / 6} ${pt[0]},${pt[1]}`;
-    })
-    .join('');
-function bars(values, color, alternate = color) {
-  if (!values.some(v => v != null)) return '<p class="empty-chart">Bu dönemde veri yok</p>';
-  const max = Math.max(...values.filter(v => v != null), 1),
-    width = 240 / values.length,
-    id = `bar-${color.replace(/\W/g, '')}`;
-  const fill = (c, key) =>
-    `<linearGradient id="${id}-${key}" gradientUnits="userSpaceOnUse" x1="0" y1="4" x2="0" y2="41"><stop offset="0" style="stop-color:${c}"/><stop offset="1" style="stop-color:${c};stop-opacity:.38"/></linearGradient>`;
-  const bar = (v, i) => {
-    const w = Math.max(width * (values.length > 12 ? 0.62 : 0.7), 1),
-      x = i * width + (width - w) / 2,
-      h = Math.max((v / max) * 35, 0),
-      y = 41 - h,
-      r = Math.min(1.6, w / 2, h);
-    if (h < 1)
-      return `<rect x="${x}" y="40" width="${w}" height="1" fill="${i % 2 ? alternate : color}" opacity=".35"><title>${i}: ${num(v, 1)}</title></rect>`;
-    return `<path d="M${x},41V${y + r}Q${x},${y} ${x + r},${y}H${x + w - r}Q${x + w},${y} ${x + w},${y + r}V41Z" fill="url(#${id}-${i % 2 ? 'b' : 'a'})"><title>${i}: ${num(v, 1)}</title></path>`;
-  };
-  return `<svg viewBox="0 0 240 42" preserveAspectRatio="none" aria-hidden="true"><defs>${fill(color, 'a')}${fill(alternate, 'b')}</defs><path d="M0,41.5H240" stroke="var(--line)" vector-effect="non-scaling-stroke"/>${values.map((v, i) => (v == null ? '' : bar(v, i))).join('')}</svg>`;
-}
-function line(values) {
-  const present = values.filter(v => v != null);
-  if (!present.length) return '<p class="empty-chart">Bu dönemde veri yok</p>';
-  const min = Math.min(...present) - 3,
-    max = Math.max(...present) + 3;
-  let paths = [],
-    points = [];
-  values.forEach((v, i) => {
-    if (v == null) {
-      if (points.length) paths.push(points);
-      points = [];
-    } else points.push([(i / 23) * 240, 38 - ((v - min) / (max - min)) * 32]);
-  });
-  if (points.length) paths.push(points);
-  const last = paths.at(-1).at(-1),
-    stroke = 'stroke="var(--heart-chart)" vector-effect="non-scaling-stroke" stroke-linecap="round"';
-  return `<svg viewBox="0 0 240 42" preserveAspectRatio="none" aria-hidden="true"><defs><linearGradient id="line-heart-area" x1="0" y1="0" x2="0" y2="1"><stop offset="0" style="stop-color:var(--heart-chart);stop-opacity:.26"/><stop offset="1" style="stop-color:var(--heart-chart);stop-opacity:0"/></linearGradient></defs><path d="M0,41.5H240" stroke="var(--line)" vector-effect="non-scaling-stroke"/>${paths.map(p => (p.length === 1 ? '' : `<path d="${smooth(p)}V42H${p[0][0]}Z" fill="url(#line-heart-area)"/><path d="${smooth(p)}" fill="none" ${stroke} stroke-linejoin="round" stroke-width="2"/>`)).join('')}${paths
-    .filter(p => p.length === 1)
-    .map(p => `<path d="M${p[0][0]},${p[0][1]}h0" ${stroke} stroke-width="4"/>`)
-    .join(
-      '',
-    )}<path d="M${last[0]},${last[1]}h0" ${stroke} stroke-width="11" opacity=".22"/><path d="M${last[0]},${last[1]}h0" ${stroke} stroke-width="5.5"/></svg>`;
-}
-const profileValues = setupProfileValues({ metrics, iconMarkup, num, shortDate });
-function paintData() {
-  const first = data.days[0];
-  profileValues.update(data.profile);
-  // Drive the 3D body's morphs from the latest profile measurements (missing values keep the basis).
-  body.setBodyMetrics({
-    heightCm: data.profile.height?.value,
-    weightKg: data.profile.weight?.value,
-    bodyFatPct: data.profile.body_fat?.value,
-    musclePct: data.profile.muscle?.value,
-  });
-  $('steps-label').textContent = first.partial ? 'Bugünkü adım' : 'O günkü adım';
-  $('sleep-label').textContent = first.partial ? 'Dün geceki uyku' : 'O geceki uyku';
-  $('steps-value').textContent = num(first.steps);
-  $('sleep-value').textContent = duration(first.sleep_seconds);
-  $('heart-value').textContent = first.resting_bpm == null ? '—' : `${num(first.resting_bpm)} bpm`;
-  $('steps-note').textContent =
-    first.steps == null ? 'Adım kaydı yok' : first.partial ? 'Gün devam ediyor' : shortDate(civilDate(first.date));
-  $('steps-note').classList.toggle('ongoing-badge', first.partial && first.steps != null);
-  $('sleep-note').textContent = first.sleep_seconds == null ? 'Uyku kaydı yok' : shortDate(civilDate(first.date));
-  $('heart-note').textContent = first.resting_bpm == null ? 'Günlük özet yok' : shortDate(civilDate(first.date));
-  $('steps-chart').innerHTML = bars(data.charts.steps, 'var(--step-chart)');
-  $('sleep-chart').innerHTML = bars(
-    [...data.days].reverse().map(r => r.sleep_seconds),
-    'var(--sleep-light)',
-    'var(--sleep-dark)',
-  );
-  $('sleep-axis').textContent = `${data.days.length} gün`;
-  $('heart-chart').innerHTML = line(data.charts.heart_rate);
-  $('steps-chart').setAttribute(
-    'aria-label',
-    `Seçilen günün saatlik adımları: ${data.charts.steps.map((v, i) => `${i}:00 ${num(v)}`).join(', ')}`,
-  );
-  $('heart-chart').setAttribute(
-    'aria-label',
-    `Seçilen günün saatlik ortalama nabzı: ${data.charts.heart_rate.map((v, i) => `${i}:00 ${num(v, 1)}`).join(', ')}`,
-  );
-  $('sleep-chart').setAttribute('aria-label', data.days.map(r => `${r.date}: ${duration(r.sleep_seconds)}`).join(', '));
-  historyPanel.update(data);
-}
-// Per-metric formatters shared by the day table and its "other sources" sub-row. Precedence
-// only picks which source is shown in the cell; every alternative stays visible as text.
-const sourceMetrics = {
-  steps: ['Adım', value => num(value)],
-  sleep_seconds: ['Uyku', duration],
-  resting_bpm: ['Dinlenme nabzı', value => `${num(value)} bpm`],
-  hrv_ms: ['HRV', value => `${num(value, 1)} ms`],
-  spo2: ['SpO₂', value => `%${num(value, 1)}`],
-};
-const alternativesOf = (row, metric) => row.sources?.[metric]?.alternatives ?? [];
-// A text badge (never colour alone) naming the shown source, only when another source disagrees.
-function sourceBadge(row, metric) {
-  if (!alternativesOf(row, metric).length) return '';
-  return ` <span class="source-badge">${escape(row.sources[metric].label ?? row.sources[metric].source)}</span>`;
-}
-function alternativesText(row) {
-  return Object.entries(sourceMetrics)
-    .flatMap(([metric, [label, format]]) =>
-      alternativesOf(row, metric).map(alt => `${label}: ${escape(alt.label ?? alt.source)} ${format(alt.value)}`),
-    )
-    .join(' · ');
-}
-function paintHistory(data) {
-  $('history-title').textContent = 'Son 7 gün';
-  $('range-caption').textContent = `${shortDate(civilDate(data.start_date))} – ${fullDate(civilDate(data.end_date))}`;
-  $('export-button').href =
-    `/api/dashboard/export.csv?${new URLSearchParams({ days: data.days.length, end_date: data.end_date, timezone: data.timezone })}`;
-  $('history-rows').innerHTML = data.days
-    .map(row => {
-      const others = alternativesText(row);
-      const subId = `source-alternatives-${row.date}`;
-      const toggle = others
-        ? `<button type="button" class="source-toggle" aria-expanded="false" aria-controls="${subId}">Diğer kaynaklar</button>`
-        : '';
-      const subRow = others
-        ? `<tr class="source-alternatives" id="${subId}" hidden><td colspan="7">${others}</td></tr>`
-        : '';
-      return `<tr class="${row.partial ? 'today-row' : ''}"><td>${escape(shortDate(civilDate(row.date)))}</td><td>${num(row.steps)}${sourceBadge(row, 'steps')}</td><td>${duration(row.sleep_seconds)}${sourceBadge(row, 'sleep_seconds')}</td><td>${row.resting_bpm == null ? '—' : `${num(row.resting_bpm)} bpm`}${sourceBadge(row, 'resting_bpm')}</td><td>${row.hrv_ms == null ? '—' : `${num(row.hrv_ms, 1)} ms`}${sourceBadge(row, 'hrv_ms')}</td><td>${row.spo2 == null ? '—' : `%${num(row.spo2, 1)}`}${sourceBadge(row, 'spo2')}</td><td><span class="dot ${row.status === 'complete' || row.status === 'partial' ? 'good' : 'warning'}">${states[row.status]}</span>${toggle}</td></tr>${subRow}`;
-    })
-    .join('');
-}
-$('history-rows').addEventListener('click', event => {
-  const button = event.target.closest('.source-toggle');
-  if (!button) return;
-  const open = button.getAttribute('aria-expanded') !== 'true';
-  button.setAttribute('aria-expanded', String(open));
-  const subRow = document.getElementById(button.getAttribute('aria-controls'));
-  if (subRow) subRow.hidden = !open;
+// `source` names the request that raised the notice; its next success clears an error from it.
+/** @type {(message: string, error?: boolean, source?: string, detail?: string, action?: import('./notice.js').NoticeAction | null) => void} */
+const notice = (message, error = false, source = 'general', detail = '', action = null) =>
+  notices.show(message, { error, source, detail, action });
+const clearNotice = (/** @type {string[]} */ ...sources) => notices.clear(...sources);
+
+const getZone = () => state.zone;
+const getToday = () => todayKey(state.zone);
+
+const settings = setupDisplaySettings({
+  onZoneChanged: async () => {
+    await refreshPage();
+  },
+  onMotionChanged: () => body.updateMotion(),
 });
-async function refresh() {
-  if (busy) {
-    pendingRefresh = true;
-    return;
-  }
-  busy = true;
-  try {
-    const results = await Promise.allSettled([
-      request(`/api/dashboard?${query()}`),
-      fetch('/health', { cache: 'no-store', signal: AbortSignal.timeout(15000) }).then(r => {
-        if (handleUnauthorized(r)) throw new Error('unauthorized');
-        return r.json();
-      }),
-    ]);
-    if (results[0].status === 'fulfilled') {
-      data = results[0].value;
-      paintData();
-    } else notice('Veriler alınamadı. Bağlantını kontrol edip tekrar dene.', true);
-    if (results[1].status === 'fulfilled') {
-      health = results[1].value;
-      paintHealth();
-    } else {
-      health = null;
-      $('service-status').textContent = 'Servise ulaşılamıyor';
-      $('service-status').className = 'status-text bad';
-      $('system-details').textContent = 'Servise ulaşılamıyor. Durumu yenilemeyi dene.';
-    }
-    if (health) {
-      if (health.failed_syncs > 0) {
-        try {
-          const rows = await request('/sync/status');
-          const failed = rows.filter(row => row.status === 'failed' || row.last_error);
-          if (failed.length)
-            notice(
-              `Eşitleme hatası: ${failed.map(row => `${row.data_type}: ${describeSyncError(row.last_error)}`).join(' · ')}`,
-              true,
-              'sync',
-              rawErrors(failed.map(row => [row.data_type, row.last_error])),
-            );
-        } catch {
-          notice('Eşitlemede hata oluştu. Hata ayrıntıları alınamadı; Sistem bölümünü kontrol et.', true, 'sync');
-        }
-      } else clearSyncNotice();
-    }
-    calendar.update();
-  } finally {
-    busy = false;
-    if (pendingRefresh) {
-      pendingRefresh = false;
-      refresh();
-    }
-  }
-}
-async function loadMeasurements() {
-  try {
-    const rows = await request('/api/dashboard/measurements');
-    const container = $('measurement-rows');
-    replaceWithFocus(container, () => {
-      container.innerHTML = rows.length
-        ? rows.map(row => {
-            const [label, unit] = metrics[row.metric] ?? [row.metric ?? '?', ''];
-            const when = `${fullDate(row.measured_at)} ${timeOf(row.measured_at)}`;
-            return `<tr${isTest(row) ? ' class="flagged-row"' : ''}><td>${escape(when)}</td><td><span class="cell-icon">${iconMarkup(row.metric)}</span>${escape(label)}</td><td>${num(row.value, 2)} ${escape(unit)}</td>${flagCells(row, label, when, escape)}</tr>`;
-          }).join('')
-        : '<tr><td colspan="5">Henüz elle girilmiş ölçüm yok. “Ölçüm ekle” ile başlayabilirsin.</td></tr>';
-    }, old => container.querySelector(`[data-flag-id="${CSS.escape(old.dataset.flagId)}"]`), $('measurements-add'));
-  } catch {
-    notice('Ölçüm geçmişi alınamadı. Tekrar dene.', true);
-  }
-}
-setupMeasurementFlags({ request, notice, reload: () => refresh().then(loadMeasurements) });
-async function loadSystem() {
-  coveragePanel.refresh();
-  webhookPanel.refresh();
-  devicesPanel.refresh();
-  appleRefresh();
-  try {
-    const rows = await request('/sync/status');
-    $('sync-rows').innerHTML = rows.length
-      ? rows
-          .map(
-            row =>
-              `<tr><td>${escape(row.data_type)}</td><td>${row.last_successful_sync ? `${escape(shortDate(row.last_successful_sync))} ${escape(timeOf(row.last_successful_sync))}` : '—'}</td><td>${escape({ completed: 'Tamamlandı', running: 'Çalışıyor', pending: 'Bekliyor', failed: 'Başarısız', abandoned: 'Vazgeçildi' }[row.status] ?? row.status)}</td><td>${num(row.records_downloaded)}</td></tr>`,
-          )
-          .join('')
-      : '<tr><td colspan="4">Henüz eşitleme yapılmadı.</td></tr>';
-  } catch {
-    notice('Eşitleme durumu alınamadı. Tekrar dene.', true);
-  }
-}
-function setPage(page) {
-  $('date-calendar').hidePopover();
-  activePage = page;
-  document.querySelectorAll('.page').forEach(el => (el.hidden = el.id !== page));
-  body.updateMotion();
-  document.querySelectorAll('[data-page]').forEach(el => {
-    el.classList.toggle('active', el.dataset.page === page);
-    if (el.dataset.page === page) el.setAttribute('aria-current', 'page');
-    else el.removeAttribute('aria-current');
-  });
-  focusVisible(document.querySelector(`[data-page="${page}"]`));
-  if (page === 'measurements') loadMeasurements();
-  if (page === 'system') loadSystem();
-  if (page === 'sports') workouts.update();
-}
-document.querySelectorAll('[data-page]').forEach(el => el.addEventListener('click', () => setPage(el.dataset.page)));
-setupMeasurements({ request, getProfile: () => data?.profile, notice,
-  onSaved: async () => { await refresh(); if (activePage === 'measurements') await loadMeasurements(); },
-});
-let syncing = false;
-const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
-function syncBusy(on) {
-  syncing = on;
-  const button = $('sync-button');
-  button.setAttribute('aria-disabled', String(on));
-  button.classList.toggle('syncing', on);
-  button.setAttribute('aria-busy', String(on));
-  button.lastElementChild.textContent = on ? 'Eşitleniyor…' : 'Şimdi eşitle';
-}
-async function watchSync() {
-  try {
-    const times = (await request('/google-health/devices')).devices
-      .map(device => device.last_sync_time)
-      .filter(Boolean)
-      .sort((a, b) => new Date(b) - new Date(a));
-    if (!times[0]) return '';
-    const day = fullDate(times[0]) === fullDate(new Date()) ? '' : `${shortDate(times[0])} `;
-    return ` Saatinin son eşitlemesi: ${day}${timeOf(times[0])}`;
-  } catch {
-    return '';
-  }
-}
-async function waitForSync({ data_types: types, sequence }) {
-  // A run counts once its in-memory outcome has a sequence above the baseline returned by POST /sync/all.
-  for (const deadline = Date.now() + 90000; Date.now() < deadline;) {
-    await wait(2000);
-    try {
-      const rows = await request('/sync/status');
-      const runs = types.map(type => {
-        const row = rows.find(item => item.data_type === type);
-        return { type, error: row?.last_error, ...row?.last_run };
-      });
-      if (runs.every(run => run.sequence > sequence)) return runs;
-    } catch {
-      /* Keep polling until the deadline. */
-    }
-  }
-  return null;
-}
-$('sync-button').addEventListener('click', async () => {
-  if (syncing) return;
-  syncBusy(true);
-  clearSyncNotice(true);
-  try {
-    const runs = await waitForSync(
-      await request('/sync/all', { method: 'POST', headers: { 'X-HealthOS-Request': '1' } }),
-    );
-    const added = runs?.reduce((sum, run) => sum + run.inserted, 0),
-      changed = runs?.reduce((sum, run) => sum + run.updated, 0),
-      failed = runs?.filter(run => run.failed).length,
-      counts = [added && `${num(added)} yeni kayıt`, changed && `${num(changed)} kayıt güncellendi`]
-        .filter(Boolean)
-        .join(' · ');
-    const message = !runs
-      ? 'Eşitleme arka planda sürüyor; tamamlanınca panel kendiliğinden güncellenecek.'
-      : failed
-        ? `Eşitleme ${num(failed)}/${num(runs.length)} veri türünde başarısız oldu · ${runs
-            .filter(run => run.failed)
-            .map(run => `${run.type}: ${describeSyncError(run.error)}`)
-            .join(' · ')}${counts ? ` · ${counts}` : ''}`
-        : `Eşitleme tamamlandı · ${counts || `Google’da yeni veri yok.${await watchSync()}`}`;
-    await refresh();
-    notice(
-      message,
-      Boolean(failed),
-      failed ? 'sync' : 'sync-result',
-      rawErrors((runs ?? []).filter(run => run.failed).map(run => [run.type, run.error])),
-    );
-    if (!failed)
-      setTimeout(() => {
-        if ($('notice').textContent === message) clearSyncNotice(true);
-      }, 20000);
-  } catch (error) {
-    notice(`Eşitleme başlatılamadı: ${error.message}`, true, 'sync-start');
-  } finally {
-    syncBusy(false);
-  }
-});
-$('refresh-system').addEventListener('click', async () => {
-  await refresh();
-  await loadSystem();
-});
-const saveDisplay = () => display.write({ timezone: zoneChoice, motion: $('model-motion').checked });
-async function zoneChanged() {
-  zone = resolveZone(zoneChoice);
-  await refresh();
-  if (activePage === 'system') await loadSystem();
-  if (activePage === 'sports') await workouts.update();
-}
-// Preferences saved on another device; null leaves this browser's choice in place.
-async function applyDisplay(preferences) {
-  if (!preferences) return;
-  const motion = preferences.motion ?? true;
-  if ($('model-motion').checked !== motion) {
-    $('model-motion').checked = motion;
-    body.updateMotion();
-  }
-  if ((preferences.timezone ?? 'auto') === zoneChoice) return;
-  zoneChoice = preferences.timezone ?? 'auto';
-  showZoneChoice();
-  await zoneChanged();
-}
-$('timezone').addEventListener('change', async () => {
-  zoneChoice = $('timezone').value;
-  saveDisplay();
-  await zoneChanged();
-});
-$('model-motion').addEventListener('change', () => {
-  saveDisplay();
-  body.updateMotion();
-});
-setupChat(() => zone);
-setupMetricHistory(() => zone);
+const body = setupBodyLoader($('body-model'), { getMotion: () => state.motion });
+const profileValues = setupProfileValues({ iconMarkup, getZone });
+setupChat(getZone);
+setupMetricHistory(getZone);
+setupHistoryRows();
 const calendar = setupCalendar({
-  getToday: today,
-  getSelected: () => selectedDate,
+  getToday,
+  getSelected: () => state.selectedDate,
   onSelect: date => {
-    selectedDate = date === today() ? null : date;
-    refresh();
+    state.selectedDate = date === getToday() ? null : date;
+    dashboard.refresh();
   },
 });
-const historyPanel = setupHistoryPanel({ request, getZone: () => zone, getToday: today, paint: paintHistory });
+const historyPanel = setupHistoryPanel({ request, getZone, getToday, paint: paintHistory });
 const workouts = setupWorkouts({
-  request,
-  getZone: () => zone,
-  getToday: today,
-  escape,
-  num,
-  duration,
-  fullDate,
-  timeOf,
+  request, getZone, getToday, escape, num, duration,
+  fullDate: value => fullDate(value, state.zone),
+  timeOf: value => clockTime(value, state.zone),
 });
-const coveragePanel = setupCoverage({ request, getZone: () => zone, getToday: today, escape });
-const webhookPanel = setupWebhookStatus({ request, getZone: () => zone });
-const devicesPanel = setupDevices({ request, getZone: () => zone, escape });
-// The Apple Health import panel is loaded on the first visit to the System page, outside the
-// initial bundle (docs/PERFORMANCE_BUDGET.md).
-let applePanel = null;
-function appleRefresh() {
-  applePanel ??= import('./apple-import.js').then(module => module.setupAppleImport({ request, getZone: () => zone }));
-  applePanel.then(panel => panel.refresh()).catch(() => { applePanel = null; });
+const measurements = setupMeasurementList({ request, notice, clearNotice });
+
+// Until the first answer (data or failure) the overview's figures pulse, so a slow load does not
+// look like an archive of dashes (styles/overview-metrics.css).
+$('overview').setAttribute('aria-busy', 'true');
+const firstAnswer = () => $('overview').setAttribute('aria-busy', 'false');
+const dashboard = createDashboardData({
+  request,
+  fetchHealth,
+  query() {
+    const params = new URLSearchParams({ days: '7', timezone: state.zone });
+    if (state.selectedDate) params.set('end_date', state.selectedDate);
+    return params;
+  },
+  paint: {
+    data(data) {
+      paintCards(data, { profileValues, body });
+      // Only today's dashboard can describe the archive; a selected week/month cannot.
+      // Publish here even while the monthly table is open and paints a different response.
+      if (data.end_date === getToday()) {
+        setPageStatus('overview', {
+          rows: data.days.length,
+          hasValues: data.days.some(row =>
+            [row.steps, row.sleep_seconds, row.resting_bpm, row.hrv_ms, row.spo2].some(value => value != null)),
+        });
+      }
+      historyPanel.update(data);
+      firstAnswer();
+    },
+    dataFailed() {
+      paintCardsFailed();
+      paintHistoryFailed();
+      firstAnswer();
+    },
+    health: paintHealth,
+    healthFailed: paintHealthFailed,
+  },
+  notice,
+  clearNotice,
+  onHealthFirstKnown() {
+    if (state.activePage === 'system') system.load();
+  },
+  afterRefresh: () => calendar.update(),
+  retry: () => refreshPage(),
+});
+const system = setupSystemPage({ request, notice, clearNotice, refresh: dashboard.refresh });
+async function refreshPage() {
+  await dashboard.refresh();
+  if (state.activePage === 'system') await system.load();
+  if (state.activePage === 'sports') await workouts.update();
 }
+
+const pageLoaders = { measurements: measurements.load, system: system.load, sports: workouts.update };
+setupPages({
+  onChange: () => body.updateMotion(),
+  loaders: pageLoaders,
+  // The system page waits for /health on a load: onHealthFirstKnown, or the check after the first refresh.
+  firstLoaders: { measurements: measurements.load, sports: workouts.update },
+});
+setupMeasurementFlags({ request, notice, reload: () => dashboard.refresh().then(measurements.load) });
+setupMeasurements({
+  request, notice,
+  getProfile: () => state.data?.profile,
+  onSaved: async () => {
+    await dashboard.refresh();
+    if (state.activePage === 'measurements') await measurements.load();
+  },
+});
+setupSyncAction({ request, notice, clearNotice, refresh: dashboard.refresh });
+$('refresh-system').addEventListener('click', refreshPage);
+// "Yeniden dene" of an empty or failed page (page-states.js): the same fetch as the notice's retry.
+document.addEventListener('healthos:retry', () => {
+  refreshPage();
+  if (state.activePage === 'measurements') measurements.load();
+});
+
+// Polling starts before the first load: a failed first load still has its retries.
+const polling = createPolling(
+  async () => {
+    await settings.applyRemote(await settings.sync());
+    await refreshPage();
+  },
+  { paused: () => document.hidden || $('measurement-dialog').open },
+);
+polling.start();
+// Back on a tab that was hidden past a tick: the cards and today's date catch up at once.
+document.addEventListener('visibilitychange', () => { if (!document.hidden) polling.catchUp(); });
+window.addEventListener('pagehide', () => polling.stop());
+// Back/forward cache: the page returns frozen as it was left, so polling restarts and the data,
+// possibly hours old, is fetched again at once.
+window.addEventListener('pageshow', event => {
+  if (!event.persisted) return;
+  polling.start();
+  refreshPage();
+});
+
+// Every part of the page is wired: from here a failed request or chunk is reported on the page,
+// so boot-guard.js stops watching (a failure before this point shows its full-screen message).
+document.documentElement.dataset.booted = 'true';
+
+const reloadPage = { label: t.common.reload, run: () => location.reload() };
+if (languageFallback) notice(t.common.languageUnavailable, true, 'language', '', reloadPage);
+// A chunk that cannot be fetched after the start, typically a tab left open across an update.
+window.addEventListener('vite:preloadError', () => notice(t.common.pageOutdated, true, 'chunk', '', reloadPage));
+
 // Asked in parallel with the first refresh, so the first paint never waits for it.
-const firstDisplaySync = display.sync();
-await refresh();
-await applyDisplay(await firstDisplaySync);
-poll = setInterval(async () => {
-  if (!document.hidden && !$('measurement-dialog').open) {
-    await applyDisplay(await display.sync());
-    await refresh();
-    if (activePage === 'system') await loadSystem();
-    if (activePage === 'sports') await workouts.update();
-  }
-}, 60000);
-window.addEventListener('pagehide', () => clearInterval(poll));
+const firstDisplaySync = settings.sync();
+await dashboard.refresh();
+// Opened at #/system with the service down: onHealthFirstKnown never fired.
+if (state.activePage === 'system' && !state.health) system.load();
+await settings.applyRemote(await firstDisplaySync);

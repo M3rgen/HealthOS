@@ -3,7 +3,7 @@
 // fixtures only; no live account records.
 const assert = require('node:assert/strict');
 const path = require('node:path');
-const { BASE, launch, run, until, shot } = require('./lib.cjs');
+const { BASE, launch, run, until, shot, showSystemGroup } = require('./lib.cjs');
 const fx = require(path.join(__dirname, '../../frontend/preview/fixtures.cjs'));
 
 const sizes = [{width:1440,height:900}, {width:1280,height:720},
@@ -49,6 +49,7 @@ run(async () => {
       await page.getByRole('button', {name:'Sistem', exact:true}).click();
       await until(() => state.requests === 1, 'device request starts with the System page');
       await page.waitForFunction(() => document.querySelectorAll('#devices-list .device-row').length === 4);
+      await showSystemGroup(page, 'devices');
 
       // One row per device, the renamed watch merged; status text next to its colour.
       const rows = page.locator('#devices-list .device-row');
@@ -80,7 +81,7 @@ run(async () => {
       assert.equal(await page.locator('#devices-dialog-title').textContent(), 'Fitbit Air');
       const details = await page.locator('#devices-details').textContent();
       assert.match(details, /Eski adlar.*Google Fitbit Air/);
-      assert.match(details, /daily-resting-heart-rate.*heart-rate.*oxygen-saturation.*sleep.*steps/);
+      assert.match(details, /Günlük dinlenme nabzı.*Nabız.*Oksijen doygunluğu.*Uyku.*Adım/);
       assert.match(details, /İlk görülme.*2 Kasım 2025/);
       assert.match(details, /Son görülme.*16 Ekim 2026 16:15/);
       assert.match(details, /Son veri.*16 Ekim 2026 16:05 · 25 dk önce/);

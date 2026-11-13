@@ -2,96 +2,40 @@ import asyncio
 import hashlib
 import json
 from datetime import UTC, datetime, timedelta
-from types import SimpleNamespace
 
-import httpx
 import pytest
-from fastapi import FastAPI
+from cryptography.fernet import Fernet
 from sqlalchemy import func, select
+from support.waits import until
+from support.webhooks import Incremental, finish, make_client, notification
 
-from app.api import webhooks
 from app.core.config import Settings
-from app.core.request_limits import WriteLimits
 from app.google_health.data_types import REGISTRY
 from app.models.state import OAuthToken, WebhookBatchItem, WebhookEvent, WebhookNotification
 from app.parsers.common import payload_hash
-from app.services.webhook_processing import WebhookBatchProcessor
-from app.services.webhook_status import WebhookStatusService
+from app.services.providers.credentials import CredentialStore
 
 
-class Verifier:
-    def __init__(self):
-        self.bodies = []
-
-    async def verify(self, body, signature):
-        assert signature == "signed"
-        self.bodies.append(body)
-
-
-class Incremental:
-    specs = {"steps": REGISTRY["steps"], "heart-rate": REGISTRY["heart-rate"]}
-
-    def __init__(self, fail_once=()):
-        self.calls = []
-        self.fail_once = set(fail_once)
-
-    async def run(self, data_type, start=None, end=None, *, check_owner=None):
-        self.calls.append((data_type, start, end))
-        if data_type in self.fail_once:
-            self.fail_once.remove(data_type)
-            raise RuntimeError(f"temporary {data_type} failure")
-
-
-def notification(data_type="steps", user="user-1", minute=0):
-    return {
-        "data": {
-            "dataType": data_type,
-            "healthUserId": user,
-            "operation": "UPSERT",
-            "intervals": [
-                {
-                    "physicalTimeInterval": {
-                        "startTime": f"2026-08-17T10:{minute:02d}:00Z",
-                        "endTime": f"2026-08-17T10:{minute + 1:02d}:00Z",
-                    }
-                }
-            ],
-        }
-    }
-
-
-async def make_client(sessions, incremental=None):
-    async with sessions.begin() as session:
-        session.add(
-            OAuthToken(
-                subject="me",
-                encrypted_refresh_token="encrypted",
-                health_user_id="user-1",
-            )
+async def test_webhook_uses_latest_versioned_identity_instead_of_legacy_row(sessions):
+    client, _, _, processor, _ = await make_client(sessions)
+    try:
+        settings = Settings(
+            _env_file=None, google_token_encryption_key=Fernet.generate_key().decode()
         )
-    verifier = Verifier()
-    incremental = incremental or Incremental()
-    processor = WebhookBatchProcessor(sessions, incremental, set(incremental.specs))
-    tasks = []
-
-    def spawn(coroutine):
-        task = asyncio.create_task(coroutine)
-        tasks.append(task)
-        return task
-
-    application = FastAPI()
-    application.state.settings = Settings(google_health_webhook_authorization="Bearer local-test")
-    application.state.runtime = SimpleNamespace(
-        webhook_verifier=verifier,
-        webhook_processor=processor,
-        spawn=spawn,
-        webhook_status=WebhookStatusService(application.state.settings, sessions),
-    )
-    application.state.write_limits = WriteLimits(application.state.settings)
-    application.include_router(webhooks.router)
-    transport = httpx.ASGITransport(app=application)
-    client = httpx.AsyncClient(transport=transport, base_url="http://test")
-    return client, verifier, incremental, processor, tasks
+        await CredentialStore(settings, sessions).rebind_connection(
+            "synthetic-refresh", "scope", "synthetic-new-account", None
+        )
+        payload = [notification(user="user-1"), notification(user="synthetic-new-account")]
+        await processor.ingest_verified(json.dumps(payload).encode(), payload)
+        async with sessions() as session:
+            rows = (await session.scalars(select(WebhookNotification))).all()
+            assert {row.health_user_id: row.is_valid for row in rows} == {
+                "user-1": False,
+                "synthetic-new-account": True,
+            }
+            assert (await session.get(OAuthToken, "me")).health_user_id == "user-1"
+    finally:
+        await client.aclose()
 
 
 async def post_signed(client, payload):
@@ -106,11 +50,6 @@ async def post_signed(client, payload):
         },
     )
     return response, body
-
-
-async def finish(tasks):
-    await asyncio.gather(*tasks)
-    tasks.clear()
 
 
 async def test_single_object_payload_and_exact_raw_body(sessions):
@@ -322,10 +261,9 @@ async def test_element_locks_serialize_work_and_are_dropped_when_idle(sessions):
         element_hash = (await session.scalar(select(WebhookNotification))).element_hash
 
     holder = asyncio.create_task(processor.process_batch(batch.batch_hash))
-    await asyncio.wait_for(incremental.entered.wait(), 2)
+    await asyncio.wait_for(incremental.entered.wait(), 30)
     waiters = [asyncio.create_task(processor.process_batch(batch.batch_hash)) for _ in range(2)]
-    await asyncio.sleep(0.01)
-    assert processor._element_locks[element_hash].users == 3
+    await until(lambda: processor._element_locks[element_hash].users == 3, "both waiters to queue")
     # A waiter cancelled while queued must not drop the lock the holder still owns.
     waiters[0].cancel()
     await asyncio.gather(waiters[0], return_exceptions=True)
@@ -333,8 +271,8 @@ async def test_element_locks_serialize_work_and_are_dropped_when_idle(sessions):
     assert processor._element_locks[element_hash].lock.locked()
 
     incremental.gate.set()
-    first = await asyncio.wait_for(holder, 2)
-    second = await asyncio.wait_for(waiters[1], 2)
+    first = await asyncio.wait_for(holder, 30)
+    second = await asyncio.wait_for(waiters[1], 30)
     assert (first.completed_elements, second.completed_elements) == (1, 1)
     # The queued call saw the completed element instead of syncing it again.
     assert len(incremental.calls) == 1
@@ -449,3 +387,11 @@ async def test_metadata_column_boundaries_are_accepted(sessions):
             )
         assert row.is_valid and row.status == "completed"
     assert [call[0] for call in incremental.calls] == [data_type]
+
+
+async def test_missing_notification_raises_instead_of_returning_a_processing_status(sessions):
+    client, _, incremental, processor, _ = await make_client(sessions)
+    async with client:
+        with pytest.raises(RuntimeError, match="Webhook notification is missing"):
+            await processor._process_owned_element("synthetic-missing-element", sessions)
+    assert incremental.calls == []

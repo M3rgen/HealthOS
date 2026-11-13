@@ -47,9 +47,9 @@ function Get-HealthOSConfigFile {
 
 function Get-HealthOSBridgePython {
     # Python for the Umay bridge's .venv (uv sync --python): the newest Python a host offers can
-    # be newer than every wheel in uv.lock (psycopg-binary, websockets: cp312-cp314), so uv picks
-    # or downloads one in this range. Same value as BRIDGE_PYTHON in install.sh.
-    return '>=3.12,<3.15'
+    # be newer than pyproject.toml's requires-python (>=3.12,<3.14) and every wheel in uv.lock,
+    # so uv picks or downloads one in this range. Same value as BRIDGE_PYTHON in install.sh.
+    return '>=3.12,<3.14'
 }
 
 function Get-HealthOSLogDir {

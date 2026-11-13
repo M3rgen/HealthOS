@@ -5,12 +5,13 @@ import json
 
 import httpx
 from sqlalchemy import select
+from support.loop_clock import advance_loop_clock
 
 from app.core.config import Settings
 from app.google_health.client import GoogleHealthClient
 from app.google_health.data_types import REGISTRY
 from app.models.raw_versions import RawApiResponse
-from app.services.responses import DatabaseResponseArchive
+from app.services.archive.responses import DatabaseResponseArchive
 
 SPEC = REGISTRY["steps"]
 NAME = "users/me/dataTypes/steps/dataPoints/a"
@@ -71,6 +72,21 @@ def client(handler, sessions=None, **settings) -> GoogleHealthClient:
     )
 
 
+class WatchedArchive(DatabaseResponseArchive):
+    """``done`` is set once ``expected`` responses have reached the database."""
+
+    def __init__(self, sessions, expected=1):
+        super().__init__(sessions)
+        self.expected, self.count = expected, 0
+        self.done = asyncio.Event()
+
+    async def keep(self, responses):
+        await super().keep(responses)
+        self.count += len(responses)
+        if self.count >= self.expected:
+            self.done.set()
+
+
 async def stored(sessions) -> list[RawApiResponse]:
     async with sessions() as session:
         return list(
@@ -84,6 +100,14 @@ def no_secret(response: RawApiResponse) -> None:
 
 
 class PausedBody(httpx.AsyncByteStream):
+    # Set by the expiring_streams fixture: stalling is what runs a budget out. Elsewhere the
+    # budgets stay unexpired however slow the machine is.
+    expire_budgets = False
+
+    def _stall(self):
+        if self.expire_budgets:
+            advance_loop_clock()
+
     def __init__(
         self, wire: bytes, phase: str, *, read_error=None, close_error=None, fragment_size=1
     ):
@@ -121,6 +145,7 @@ class PausedBody(httpx.AsyncByteStream):
         self.close_calls += 1
         self.closing.set()
         try:
+            self._stall()
             await self.release.wait()
             if self.close_error:
                 raise self.close_error("private-body secret-access-token HTTP 503")
@@ -131,20 +156,25 @@ class PausedBody(httpx.AsyncByteStream):
 class FlowingBody(PausedBody):
     """Keep sending after a valid JSON prefix, recording every delivered byte."""
 
-    def __init__(self, payload: bytes, *, buffered=False, finish=False, fragment_size=None):
+    def __init__(
+        self, payload: bytes, *, buffered=False, finish=False, fragment_size=None, stalls=True
+    ):
         super().__init__(b"", "close", fragment_size=fragment_size)
         self.payload, self.buffered, self.finish = payload, buffered, finish
+        self.stalls = stalls  # False: only the byte budget may stop this stream
 
     async def __aiter__(self):
         for chunk in self.chunks(self.payload):
             if not self.buffered:
-                await asyncio.sleep(0.001)
+                await asyncio.sleep(0.001)  # a body trickling in: the reader's clock runs on
             self.wire += chunk
             yield chunk
         self.reading.set()
         while not self.finish:
             if not self.buffered:
-                await asyncio.sleep(0.001)
+                await asyncio.sleep(0.001)  # a body trickling in: the reader's clock runs on
             chunk = b"" if self.buffered == "empty" else b" "
             self.wire += chunk
             yield chunk
+            if self.stalls:
+                self._stall()

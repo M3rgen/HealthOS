@@ -14,10 +14,10 @@ from sqlalchemy import func, select
 
 from app.google_health.data_types import REGISTRY
 from app.models.state import RawHealthData
-from app.parsers import normalize
 from app.parsers.common import payload_hash, source_id, temporal
-from app.services.storage import store_records
-from app.sync.deletions import mark_source_deletions
+from app.services.archive.normalization import normalize
+from app.services.archive.source_deletions import mark_source_deletions
+from app.services.archive.storage import store_records
 
 HEART = REGISTRY["heart-rate"]
 STEPS = REGISTRY["steps"]
@@ -136,7 +136,7 @@ async def raw_rows(sessions, spec) -> list[RawHealthData]:
 
 async def counted_rows(sessions, spec=HEART) -> list[RawHealthData]:
     """The rows readers count: live, and not superseded by a live row (held_elsewhere)."""
-    from app.models.identity import held_elsewhere
+    from app.models.identity_queries import held_elsewhere
 
     async with sessions() as session:
         query = select(RawHealthData).where(
@@ -167,7 +167,7 @@ async def versions_of(sessions, raw_id) -> list[dict]:
 
 async def chains(sessions) -> list[tuple[str, str, str]]:
     """(from label, to label, decided by) of every recorded source chain link."""
-    from app.models.identity import RawSourceChain
+    from app.models.identity_tables import RawSourceChain
 
     async with sessions() as session:
         rows = (await session.scalars(select(RawSourceChain))).all()

@@ -10,18 +10,17 @@ from zoneinfo import ZoneInfo
 
 import pytest
 from retrieval_records import Runner, point
-from test_coverage import archive as archive
-from test_coverage import coverage_of, query
-from test_retrieval_coverage_api import PATH, QUERY
-from test_retrieval_coverage_api import api as api
+from support.coverage_fixtures import PATH, QUERY, coverage_of, query
+from support.coverage_fixtures import api as api
+from support.coverage_fixtures import archive as archive
 
 from app.google_health.client import Page
 from app.models.retrieval import RetrievalReceipt as Receipt
-from app.services import retrieval_coverage
-from app.services.codex_health import read_health
-from app.services.coverage import Window
-from app.services.coverage_retrieval import gap_periods
-from app.services.retrieval_coverage import unattempted
+from app.services.synchronization import retrieval_coverage
+from app.services.synchronization.coverage import Window
+from app.services.synchronization.coverage_retrieval import gap_periods
+from app.services.synchronization.retrieval_coverage import unattempted
+from app.services.umay.codex_health import read_health
 
 HORIZON = datetime(2026, 8, 31, tzinfo=UTC)
 
@@ -79,7 +78,7 @@ async def steps_week(sessions):
 
 async def test_card_separates_value_empty_answer_and_never_asked(archive, sessions):
     await steps_week(sessions)
-    card = await read_health(query("2026-09-01", "2026-09-05", data_type="steps"))
+    card = await read_health(sessions, query("2026-09-01", "2026-09-05", data_type="steps"))
     assert card["schema_version"] == "2"
     assert "retrieval_receipts_unavailable" not in card["reason_codes"]
     steps = coverage_of(card, "steps")
@@ -118,7 +117,7 @@ async def test_card_separates_value_empty_answer_and_never_asked(archive, sessio
 
 async def test_full_card_counts_states_without_gap_lists(archive, sessions):
     await steps_week(sessions)
-    card = await read_health(query("2026-09-01", "2026-09-05"))
+    card = await read_health(sessions, query("2026-09-01", "2026-09-05"))
     assert "retrieval_gaps_need_data_type" in card["reason_codes"]
     steps = coverage_of(card, "steps")["retrieval"]
     assert "gaps" not in steps and steps["without_value"]["empty_response"] == 1
@@ -134,7 +133,7 @@ async def test_full_card_counts_states_without_gap_lists(archive, sessions):
 
 async def test_days_before_receipts_began_stay_unknown(archive, sessions):
     await receipts_began(sessions, at=day(3))
-    card = await read_health(query("2026-09-01", "2026-09-05", data_type="steps"))
+    card = await read_health(sessions, query("2026-09-01", "2026-09-05", data_type="steps"))
     retrieval = coverage_of(card, "steps")["retrieval"]
     # 09-03 starts at the horizon itself but within the civil envelope; 09-04 is after it.
     assert (retrieval["unknown_days"], retrieval["not_attempted_days"]) == (3, 2)
@@ -143,7 +142,7 @@ async def test_days_before_receipts_began_stay_unknown(archive, sessions):
 
 
 async def test_no_receipts_at_all_keeps_retrieval_unknown(archive, sessions):
-    card = await read_health(query("2026-09-01", "2026-09-02", data_type="steps"))
+    card = await read_health(sessions, query("2026-09-01", "2026-09-02", data_type="steps"))
     assert "retrieval_receipts_unavailable" in card["reason_codes"]
     assert card["retrieval_receipts_since"] is None
     retrieval = coverage_of(card, "steps")["retrieval"]
@@ -163,7 +162,7 @@ async def test_evidence_budget_is_read_in_pieces_not_refused(archive, sessions, 
     await fetch(sessions, day(1), day(2))
     await fetch(sessions, day(20), day(21))
     monkeypatch.setattr(retrieval_coverage, "MAX_RECEIPTS", 1)
-    card = await read_health(query("2026-09-01", "2026-09-20", data_type="steps"))
+    card = await read_health(sessions, query("2026-09-01", "2026-09-20", data_type="steps"))
     steps = coverage_of(card, "steps")
     assert steps["retrieval"]["completed_empty_days"] == 2
     assert steps["retrieval"]["not_attempted_days"] == 18
@@ -174,7 +173,7 @@ async def test_day_over_the_budget_is_unknown_and_flagged(archive, sessions, mon
     await receipts_began(sessions)
     await fetch(sessions, day(1), day(2))
     monkeypatch.setattr(retrieval_coverage, "MAX_RECEIPTS", 0)
-    card = await read_health(query("2026-09-01", "2026-09-01", data_type="steps"))
+    card = await read_health(sessions, query("2026-09-01", "2026-09-01", data_type="steps"))
     steps = coverage_of(card, "steps")
     assert "error" not in card
     assert steps["retrieval"]["unknown_days"] == 1
@@ -186,7 +185,7 @@ async def test_records_without_a_value_are_not_an_empty_answer(archive, sessions
     await receipts_began(sessions)
     bad = point("2026-09-01T12:00:00Z", "weight", weightGrams=None)
     await fetch(sessions, day(1), day(2), kind="weight", points=[bad])
-    card = await read_health(query("2026-09-01", "2026-09-01", data_type="weight"))
+    card = await read_health(sessions, query("2026-09-01", "2026-09-01", data_type="weight"))
     retrieval = coverage_of(card, "weight")["retrieval"]
     assert retrieval["without_value"]["returned_without_value"] == 1
     assert retrieval["gaps"][0]["state"] == "returned_without_value"
@@ -250,7 +249,7 @@ def test_gap_periods_join_only_consecutive_days_of_one_state():
 
 
 def test_gap_dates_sent_to_the_model_are_counted_as_metadata():
-    from app.services.health_transfer import describe_result
+    from app.services.umay.health_transfer import describe_result
 
     arguments = query("2026-09-01", "2026-09-05", data_type="steps")
     card = {

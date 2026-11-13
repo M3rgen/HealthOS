@@ -11,18 +11,26 @@ from app.api.deps import runtime as runtime_dep
 from app.api.deps import settings as settings_dep
 from app.core.config import Settings
 from app.core.logging import event
-from app.google_health.webhook import WebhookVerificationError
-from app.services.runtime import Runtime
-from app.services.webhook_metadata import UNPARSED_BODY, parse_webhook_body
+from app.google_health.webhook import ReplayWindow, WebhookVerificationError
+from app.runtime import Runtime
+from app.schemas.status import WebhookStatus
+from app.services.synchronization.webhook_metadata import UNPARSED_BODY, parse_webhook_body
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["webhooks"])
 
 
-@router.get("/api/webhooks/status")
+def _replays(request: Request) -> ReplayWindow:
+    replays = getattr(request.app.state, "webhook_replays", None)
+    if replays is None:
+        replays = request.app.state.webhook_replays = ReplayWindow()
+    return replays
+
+
+@router.get("/api/webhooks/status", response_model=WebhookStatus)
 async def webhook_status(
     request: Request, response: Response, runtime: Runtime = Depends(runtime_dep)
-) -> dict:
+) -> WebhookStatus:
     response.headers["Cache-Control"] = "no-store"
     try:
         status = await runtime.webhook_status.snapshot()
@@ -87,6 +95,10 @@ async def google_health_webhook(
             raise HTTPException(503, "Webhook verification temporarily unavailable") from exc
         event(logger, "WEBHOOK_SIGNATURE_INVALID", reason="cryptographic_verification")
         raise HTTPException(401, str(exc)) from exc
+    if _replays(request).seen(signature, raw):
+        # A copy of a delivery accepted moments ago: nothing to store or process again.
+        event(logger, "WEBHOOK_REPLAY_SUPPRESSED")
+        return Response(status_code=204)
     await runtime.webhook_status.record("signature_valid")
     try:
         result = await runtime.webhook_processor.ingest_verified(raw, payload)
@@ -101,8 +113,18 @@ async def google_health_webhook(
         inserted=result.inserted,
     )
     if result.should_process:
-        runtime.spawn(runtime.webhook_processor.process_batch(result.batch_hash))
+        runtime.spawn(_process(runtime, result.batch_hash, _replays(request), signature, raw))
     if payload is UNPARSED_BODY:
         await runtime.webhook_status.record("invalid_json")
         raise HTTPException(400, "Invalid JSON payload")
     return Response(status_code=204)
+
+
+async def _process(
+    runtime: Runtime, batch_hash: str, replays: ReplayWindow, signature: str, raw: bytes
+) -> None:
+    stats = await runtime.webhook_processor.process_batch(batch_hash)
+    # A re-delivery restarts failed elements (SIGNED_REPLAY_MAX_AGE), so only a batch that
+    # finished without failures makes its copies redundant.
+    if not stats.failed_elements:
+        replays.remember(signature, raw)

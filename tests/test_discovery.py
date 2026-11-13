@@ -1,8 +1,10 @@
 from datetime import UTC, datetime, timedelta
 
+import pytest
+
 from app.google_health.client import Page
 from app.google_health.data_types import REGISTRY
-from app.services.discovery import DiscoveryService
+from app.services.providers.discovery import DiscoveryService
 
 
 class Tokens:
@@ -69,7 +71,8 @@ async def test_probe_returns_schema_metadata_without_health_values():
     assert "sample" not in steps
     assert 1234 not in steps.values()
     assert results[1]["accessible"] is False
-    assert results[1]["error"] == "scope unavailable"
+    assert results[1]["error_code"] == "discovery_probe_failed"
+    assert results[1]["error"] == "Veri türüne erişim denetlenemedi. Daha sonra yeniden deneyin."
 
 
 async def test_device_discovery_excludes_hardware_identifiers():
@@ -100,3 +103,27 @@ async def test_probe_honors_rollup_window_limit():
     await DiscoveryService(client, {"total-calories": REGISTRY["total-calories"]}).probe(30)
 
     assert client.range[1] - client.range[0] <= timedelta(days=14)
+
+
+@pytest.mark.parametrize("failure_point", ["fetch", "archive"])
+async def test_probe_failure_response_never_contains_exception_details(failure_point):
+    marker = "synthetic-private-health-value"
+
+    class FailingClient(Client):
+        async def list_data_points(self, *args, **kwargs):
+            if failure_point == "fetch":
+                raise RuntimeError(f"SELECT raw_json={marker}; file=/private/health-store.sqlite")
+            return await super().list_data_points(*args, **kwargs)
+
+        async def keep(self, responses):
+            raise ValueError(f"refresh_token={marker}")
+
+    (result,) = await DiscoveryService(FailingClient(), {"steps": REGISTRY["steps"]}).probe()
+    assert result == {
+        "data_type": "steps",
+        "access_method": REGISTRY["steps"].access_method,
+        "accessible": False,
+        "has_recent_data": False,
+        "error_code": "discovery_probe_failed",
+        "error": "Veri türüne erişim denetlenemedi. Daha sonra yeniden deneyin.",
+    }

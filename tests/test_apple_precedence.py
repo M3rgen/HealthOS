@@ -17,9 +17,16 @@ from identity_records import STEPS, fitbit, iso, phone, steps, store
 from app.api.dashboard import place_workouts, workouts
 from app.core.providers import APPLE, GARMIN, GOOGLE
 from app.google_health.data_types import REGISTRY
-from app.services.apple_normalize import normalize_records
-from app.services.dashboard import dashboard_data
-from app.services.source_precedence import PRIMARY, SECONDARY, Observation, Policy, resolve
+from app.services.dashboard_views.dashboard import dashboard_data
+from app.services.identities.source_precedence import (
+    PRIMARY,
+    SECONDARY,
+    Observation,
+    Policy,
+    resolve,
+)
+from app.services.providers.apple_normalize import normalize_records
+from app.services.readers.dashboard_queries import DashboardQuery
 
 DAY = date(2026, 11, 6)
 NOW = datetime(2026, 11, 7, 12, 0, tzinfo=UTC)
@@ -37,7 +44,9 @@ async def normalize(sessions, *records):
 
 async def day_of(sessions, policy: Policy | None = None) -> dict:
     async with sessions() as session:
-        data = await dashboard_data(session, DAY, 1, "UTC", policy=policy)
+        data = await dashboard_data(
+            session, query=DashboardQuery(end_date=DAY, days=1, timezone="UTC"), policy=policy
+        )
     return data
 
 

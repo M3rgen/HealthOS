@@ -1,0 +1,324 @@
+.connection {
+  padding: 18px 20px 14px;
+  flex: 1;
+  container-type: inline-size;
+}
+.connection-times {
+  margin: 13px 0 0;
+}
+.connection-times > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 15px;
+  padding: 9px 4px;
+  border-top: 1px solid var(--line-soft);
+  font-size: 0.875rem;
+}
+.connection-times dt {
+  color: var(--muted);
+  font-weight: 500;
+}
+.connection-times dd {
+  margin: 0;
+  font-size: 1.0625rem;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  font-weight: 640;
+  letter-spacing: -0.03em;
+}
+.connection-times small {
+  font-size: 0.75rem;
+  margin-left: 10px;
+  color: var(--muted);
+  font-weight: 450;
+  letter-spacing: 0;
+}
+.connection-times > div:first-child dd {
+  font-size: 1.375rem;
+}
+.service-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 0.8125rem;
+  padding: 14px 4px;
+  color: var(--muted);
+}
+.service-row b {
+  margin-left: 8px;
+  font-weight: 550;
+}
+.webhook-note {
+  padding: 10px 14px;
+  font-size: 0.8125rem;
+  line-height: 1.65;
+  background: linear-gradient(
+    90deg,
+    var(--amber-soft),
+    color-mix(in srgb, var(--amber) 5%, transparent)
+  );
+  border: 1px solid color-mix(in srgb, var(--amber) 22%, transparent);
+  border-radius: var(--radius-control);
+  color: color-mix(in srgb, var(--amber) 88%, var(--text));
+}
+.webhook-note small {
+  display: block;
+  font-size: 0.75rem;
+}
+.connection-footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 12px;
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+#overview .panel-heading {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+}
+#overview .panel-heading h2 {
+  grid-column: 2;
+  text-align: center;
+}
+#overview .panel-heading .status-text {
+  grid-column: 3;
+  justify-self: end;
+}
+#overview .connection-times dt,
+#overview .connection-times dd {
+  text-align: center;
+}
+@media (min-width: bp(w1400)) {
+  .connection {
+    padding: 20px 24px;
+  }
+  .connection-times > div {
+    padding: 10px 4px;
+  }
+}
+@media (max-width: bp(w1150)) {
+  .service-row b {
+    margin-left: 3px;
+  }
+  .connection-times small {
+    display: block;
+    margin: 3px 0 0;
+  }
+}
+@media (max-width: bp(w900)), (max-height: 30em) {
+  .connection-times small {
+    display: inline;
+    margin-left: 10px;
+  }
+}
+@media (max-width: bp(w540)) {
+  .connection {
+    padding: 17px 14px;
+  }
+  .connection-times dt {
+    font-size: 0.75rem;
+  }
+  .connection-times dd {
+    font-size: 0.9375rem;
+  }
+  .connection-times > div:first-child dd {
+    font-size: 1.1875rem;
+  }
+  .connection-times small {
+    display: block;
+    font-size: 0.75rem;
+    margin: 3px 0 0;
+  }
+  .service-row,
+  .connection-footer {
+    font-size: 0.75rem;
+  }
+  #overview .panel-heading {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+  #overview .panel-heading h2 {
+    grid-column: 1;
+    text-align: left;
+  }
+  #overview .panel-heading .status-text {
+    grid-column: 2;
+  }
+}
+@media (min-width: bp(w901)) and (min-height: 30.0625em) {
+  .connection {
+    overflow: auto;
+    overscroll-behavior: contain;
+    min-height: 0;
+    padding: 12px 16px;
+    line-height: 1.25;
+    flex: initial;
+  }
+  .connection-times {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 10px;
+    margin: 10px 0 0;
+    margin-top: 8px;
+  }
+  .connection-times > div {
+    display: block;
+    font-size: 0.75rem;
+    min-width: 0;
+    padding: 6px 0;
+  }
+  .connection-times dd {
+    font-size: 1.125rem;
+    text-align: left;
+    margin-top: 5px;
+    line-height: 1.25;
+  }
+  .connection-times > div:first-child dd {
+    font-size: 1.125rem;
+    text-align: left;
+    margin-top: 5px;
+  }
+  .connection-times small {
+    display: block;
+    margin: 2px 0 0;
+    font-size: 0.75rem;
+    line-height: 1.25;
+  }
+  .service-row {
+    padding: 6px 0;
+    font-size: 0.75rem;
+  }
+  .webhook-note {
+    padding: 6px 9px;
+    font-size: 0.75rem;
+    line-height: 1.4;
+  }
+  .webhook-note small {
+    display: none;
+  }
+  /* The panel scrolls inside itself when it is short of room; its action stays on the panel. */
+  .connection-footer {
+    position: sticky;
+    bottom: 0;
+    background: var(--surface);
+    /* Covers the panel's bottom padding, where scrolled text would show below the footer. */
+    box-shadow: 0 12px 0 var(--surface);
+    margin-top: 8px;
+    font-size: 0.75rem;
+  }
+  .connection-footer .button {
+    padding: 6px 12px;
+    min-height: 34px;
+    font-size: 0.75rem;
+  }
+}
+/* Up to 820 px tall: a tighter panel keeps every chart at 40 px or more. */
+@media (min-width: bp(w901)) and (min-height: 30.0625em) and (max-height: 51.25em) {
+  .connection {
+    padding: 8px 14px;
+  }
+  .connection-times > div {
+    padding: 4px 0;
+  }
+}
+@media (min-width: bp(w901)) and (min-height: 30.0625em) and (max-height: 46.25em) {
+  .connection {
+    padding: 6px 12px;
+  }
+  .connection-times {
+    margin-top: 4px;
+  }
+  .connection-times > div {
+    padding: 2px 0;
+  }
+  .connection-times dd,
+  .connection-times > div:first-child dd {
+    font-size: 1rem;
+    margin-top: 3px;
+  }
+  .service-row {
+    padding: 4px 0;
+  }
+  .connection-footer {
+    margin-top: 5px;
+  }
+}
+@media (min-width: bp(w901)) and (min-height: 51.3125em) {
+  .connection {
+    padding: 14px 18px 8px;
+  }
+  .connection-times {
+    gap: 14px;
+    margin-top: 8px;
+  }
+  .connection-times > div {
+    font-size: 0.8125rem;
+    padding: 6px 0;
+  }
+  .connection-times dd,
+  .connection-times > div:first-child dd {
+    font-size: 1.625rem;
+    margin-top: 6px;
+  }
+  .connection-times small {
+    font-size: 0.75rem;
+    margin-top: 4px;
+  }
+  .service-row {
+    font-size: 0.8125rem;
+    padding: 9px 0;
+  }
+  .webhook-note {
+    font-size: 0.75rem;
+    padding: 8px 10px;
+  }
+  .connection-footer {
+    font-size: 0.75rem;
+    margin-top: 10px;
+  }
+  .connection-footer .button {
+    font-size: 0.8125rem;
+    min-height: 38px;
+  }
+}
+/* Laptops with browser chrome: the panel gives way before the metric cards do. */
+@media (min-width: bp(w901)) and (min-height: 30.0625em) and (max-height: 40.5625em) {
+  .connection {
+    padding: 6px 10px;
+  }
+  .connection-times > div {
+    padding: 2px 0;
+  }
+  .service-row {
+    padding: 2px 0;
+  }
+  .connection-footer {
+    margin-top: 2px;
+  }
+}
+/* The same notice is on Sistem › Bildirimler; on short laptops the height goes to the charts,
+   and the first-run screen (page-states.js) needs the room for its next step. */
+@media (min-width: bp(w901)) and (min-height: 30.0625em) and (max-height: 46.25em) {
+  .webhook-note {
+    display: none;
+  }
+}
+main:has(#overview-state:not([hidden])) .webhook-note {
+  display: none;
+}
+/* A narrow panel (phone, or a large browser font on any screen) lays the heading out by its own
+   width: the title and the status pill wrap instead of colliding. */
+@container (max-width: 30rem) {
+  #overview .panel-heading {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    gap: 2px 12px;
+  }
+  #overview .panel-heading h2 {
+    text-align: left;
+  }
+}

@@ -1,11 +1,12 @@
 // Use the production cascade and the actual painted backdrop, not palette constants.
 const assert = require('node:assert/strict');
-const { BASE, launch, run } = require('./lib.cjs');
-const { mock, tabTo, contained, scrollKey } = require('./helpers/accessibility.cjs');
+const { BASE, launch, run, showSystemGroup } = require('./lib.cjs');
+const { mock, tabTo, contained, scrollKey, showCard } = require('./helpers/accessibility.cjs');
 const { auditText, auditFocus, auditBorders } = require('./helpers/contrast.cjs');
+const { auditTokens } = require('./helpers/contrast-tokens.cjs');
 
 async function activate(page, selector) { await tabTo(page, selector); await page.keyboard.press('Enter'); }
-async function check(page, label) { await contained(page); await auditText(page, label); }
+async function check(page, label, options) { await contained(page); await auditText(page, label, options); }
 async function close(page, id) {
   await page.keyboard.press('Escape');
   await page.waitForFunction(id => !document.getElementById(id).open, id);
@@ -21,12 +22,14 @@ run(async () => {
       await page.waitForFunction(() => document.querySelectorAll('#history-rows tr').length === 7 && 'appearanceSynced' in document.documentElement.dataset);
       const name = `${viewport.width}×${viewport.height}`;
       await check(page, `${name} overview`);
+      await auditTokens(page, `${name} colour tokens`);
       // Worst-case user background: a completely white image behind the interface.
       await page.evaluate(() => {
         const style = document.documentElement.style;
         style.setProperty('--bg-tile', 'url("data:image/svg+xml,%3Csvg xmlns=\'http://www.w3.org/2000/svg\' width=\'8\' height=\'8\'%3E%3Cpath fill=\'white\' d=\'M0 0h8v8H0z\'/%3E%3C/svg%3E")');
         style.setProperty('--bg-vignette', 'none'); style.setProperty('--bg-dim', 'transparent');
       });
+      await showCard(page, 'profile');
       await tabTo(page, '#profile-weight');
       await auditFocus(page, `${name} profile`);
       await check(page, `${name} image behind overview`);
@@ -40,17 +43,25 @@ run(async () => {
       await auditFocus(page, `${name} primary action`);
       await check(page, `${name} measurement API error`);
       await close(page, 'measurement-dialog');
+      await showCard(page, 'connection');
       await tabTo(page, '#sync-button');
       await auditFocus(page, `${name} outline action`);
       await auditBorders(page, '#sync-button');
       await check(page, `${name} connection and metric cards`);
+      await showCard(page, 'steps', true);
       await activate(page, '[data-history-metric="steps"]');
       await page.waitForFunction(() => !document.querySelector('#metric-history-content').hidden);
       await check(page, `${name} metric history`);
-      await tabTo(page, '#metric-history-content');
-      await auditFocus(page, `${name} scrollport`);
-      await scrollKey(page, '#metric-history-content', 'End');
-      await check(page, `${name} metric history end`);
+      // UX-18: the history is a Tab stop only while it scrolls (scroll-focus.js); where it fits, skip it.
+      const historyScrolls = await page.locator('#metric-history-content').evaluate(el =>
+        el.scrollHeight > el.clientHeight || el.scrollWidth > el.clientWidth);
+      await page.waitForFunction(over => document.querySelector('#metric-history-content').getAttribute('tabindex') === (over ? '0' : null), historyScrolls);
+      if (historyScrolls) {
+        await tabTo(page, '#metric-history-content');
+        await auditFocus(page, `${name} scrollport`);
+        await scrollKey(page, '#metric-history-content', 'End');
+        await check(page, `${name} metric history end`);
+      }
       await close(page, 'metric-history-dialog');
       await activate(page, '[data-page="measurements"]');
       await page.waitForFunction(() => document.querySelectorAll('#measurement-rows tr').length === 45);
@@ -80,6 +91,7 @@ run(async () => {
       await scrollKey(page, '.webhook-status-body', 'End');
       await check(page, `${name} webhook end`);
       await close(page, 'webhook-status-dialog');
+      await showSystemGroup(page, 'settings');
       await activate(page, '#appearance-open');
       await auditFocus(page, `${name} preset radio`);
       await auditBorders(page, '.preset-tile:has(input:focus-visible)');
@@ -94,7 +106,9 @@ run(async () => {
       await activate(page, '#assistant-open');
       assert.equal(await page.locator('#assistant-input').isDisabled(), true);
       await auditFocus(page, `${name} offline Umay close`);
-      await check(page, `${name} Umay`);
+      // A phone shows Umay as a modal full-screen sheet and the page behind it is inert, so only
+      // the sheet's own text is left to audit: exactly these five nodes in this offline state.
+      await check(page, `${name} Umay`, viewport.width <= 540 ? {minimumSamples: 5} : undefined);
       await page.keyboard.press('Escape');
       await contained(page);
       await page.close();

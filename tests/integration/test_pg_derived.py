@@ -24,15 +24,16 @@ from derived_records import (
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+from app.db.guards import definitions
 from app.google_health.data_types import REGISTRY
-from app.models import apple, garmin, raw_rejections
+from app.models import apple, derived_invalidation, garmin, oauth_credentials, raw_rejections
 from app.models.derived_invalidation import BUILD_LOCK
 from app.models.state import WebhookEvent
 from app.models.webhook_status import WebhookStatusEvent
-from app.services import derived
-from app.services.manual_flags import record_flag
-from app.services.raw_history import verify_guards
-from app.services.storage import store_records
+from app.services.archive.manual_flags import record_flag
+from app.services.archive.raw_history_verification import verify_guards
+from app.services.archive.storage import store_records
+from app.services.interpretation import derived
 
 pytestmark = pytest.mark.integration
 
@@ -71,23 +72,30 @@ async def test_0018_preserves_archive_history_manual_rows_and_guard_definitions(
             )
             session.add(WebhookStatusEvent(reason="signature_valid", occurred_at=T0))
         command.downgrade(alembic_config, "20261025_0017")
-        # Tables of later migrations (0022, 0023, 0024) do not exist at the 0017 target; 0025
-        # adds only columns (provider, source_record_id) to the normalized tables.
+        # Tables of later migrations (0022, 0023, 0024, a001, 0026, 0027) do not exist at 0017;
+        # 0025 adds only columns (provider, source_record_id) to the normalized tables.
         newer = {
+            "derived_day_pending",
             "display_preferences",
             garmin.STATE,
+            garmin.NORMALIZATION_STATE,
+            *oauth_credentials.TABLES,
             *raw_rejections.TABLES,
             *garmin.TABLES,
             *apple.TABLES,
             apple.IMPORTS,
             apple.SOURCES,
         }
-        # 0023's and 0024's guards on their own new tables exist at head only.
+        # Later tables' guards on their own new tables exist at head only.
         later = (
-            set(raw_rejections.PG_TRIGGER_SQL)
-            | set(garmin.PG_TRIGGER_SQL)
-            | set(apple.PG_TRIGGER_SQL)
+            set(definitions(raw_rejections.GUARDS)[0])
+            | set(definitions(garmin.GUARDS)[0])
+            | set(definitions(oauth_credentials.GUARDS)[0])
+            | set(definitions(apple.GUARDS)[0])
+            | {derived_invalidation.DRAIN_TRIGGER}
         )
+        # 0020 narrowed four of them and 0028 replaced every body (verify_guards pins both).
+        invalidating = set(definitions(derived_invalidation.GUARDS)[0]) - later
         async with sessions() as session:
             before = await snapshot(session, newer)
             before_guards = (await session.execute(guards)).all()
@@ -106,15 +114,12 @@ async def test_0018_preserves_archive_history_manual_rows_and_guard_definitions(
             assert {row[0] for row in current_guards} >= later
             existing_guards = [row for row in current_guards if row[0] not in later]
             changed = [row[0] for row in existing_guards if row not in legacy_guards]
-            assert set(changed) == {
-                "derived_raw_health_data_insert",
-                "derived_raw_health_data_update",
-                "derived_raw_health_data_supersessions_insert",
-                "derived_raw_source_devices_insert",
-            }
-            assert [(row[0], *row[2:]) for row in existing_guards] == [
-                (row[0], *row[2:]) for row in legacy_guards
-            ]  # no function or ALWAYS status changes
+            assert set(changed) == invalidating
+            assert [row for row in existing_guards if row[0] not in invalidating] == [
+                row for row in legacy_guards if row[0] not in invalidating
+            ]  # every other guard is unchanged, byte for byte
+            assert [row[0] for row in existing_guards] == [row[0] for row in legacy_guards]
+            assert {row[3] for row in existing_guards} == {b"A"}  # still ALWAYS
             assert {row[3] for row in current_guards if row[0] in later} == {b"A"}  # ALWAYS
         command.downgrade(alembic_config, "20261025_0019")
         async with sessions() as session:
@@ -147,12 +152,12 @@ async def test_concurrent_source_write_cannot_be_lost_during_first_or_later_buil
     async def pause_after_inputs(session, day, timezone):
         result = await original(session, day, timezone)
         calculated.set()
-        await asyncio.wait_for(release.wait(), 10)
+        await asyncio.wait_for(release.wait(), 30)
         return result
 
     monkeypatch.setattr(derived, "canonical_day", pause_after_inputs)
     builder = asyncio.create_task(read(pg_sessions))
-    await asyncio.wait_for(calculated.wait(), 10)
+    await asyncio.wait_for(calculated.wait(), 30)
     writer = asyncio.create_task(store(pg_sessions, "steps", steps(count=999)))
     try:
         async with pg_sessions() as session:
@@ -160,15 +165,17 @@ async def test_concurrent_source_write_cannot_be_lost_during_first_or_later_buil
                 while not await session.scalar(  # noqa: ASYNC110 - PostgreSQL lock observation
                     text(
                         "SELECT EXISTS (SELECT 1 FROM pg_locks "
-                        "WHERE locktype='advisory' AND NOT granted AND objid=:key)"
+                        "WHERE locktype='advisory' AND NOT granted AND objid=:key "
+                        "AND database = (SELECT oid FROM pg_database "
+                        "WHERE datname = current_database()))"
                     ),
                     {"key": BUILD_LOCK},
                 ):  # noqa: ASYNC110 - observing a PostgreSQL lock, not a local event
-                    await asyncio.sleep(0.01)
+                    await asyncio.sleep(0.01)  # poll interval of the bounded pg_locks wait
         assert not writer.done()
         release.set()
-        built = await asyncio.wait_for(builder, 10)
-        await asyncio.wait_for(writer, 10)
+        built = await asyncio.wait_for(builder, 30)
+        await asyncio.wait_for(writer, 30)
         assert streams(built)[0]["value"] == (121 if existing_cache else 120)
         row = await cache(pg_sessions)
         assert row.revision > row.built_revision
@@ -190,6 +197,8 @@ async def test_source_and_flag_rollback_reverts_dirty_revisions_atomically(pg_se
         async with pg_sessions() as session, session.begin():
             await store_records(session, REGISTRY["steps"], [steps(count=999)])
             await record_flag(session, identifier, "test", True)
+            # Days are bumped at commit (0028); run that step here to observe it before rollback.
+            await session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
             assert (
                 await session.scalar(text("SELECT revision > built_revision FROM derived_days"))
             ) is True
@@ -203,11 +212,13 @@ async def _until_writer_waits(sessions):
             while not await session.scalar(  # noqa: ASYNC110 - PostgreSQL lock observation
                 text(
                     "SELECT EXISTS (SELECT 1 FROM pg_locks "
-                    "WHERE locktype='advisory' AND NOT granted AND objid=:key)"
+                    "WHERE locktype='advisory' AND NOT granted AND objid=:key "
+                    "AND database = (SELECT oid FROM pg_database "
+                    "WHERE datname = current_database()))"
                 ),
                 {"key": BUILD_LOCK},
             ):  # noqa: ASYNC110 - observing a PostgreSQL lock, not a local event
-                await asyncio.sleep(0.01)
+                await asyncio.sleep(0.01)  # poll interval of the bounded pg_locks wait
 
 
 async def test_range_build_releases_the_lock_between_days(pg_sessions, monkeypatch):
@@ -222,12 +233,12 @@ async def test_range_build_releases_the_lock_between_days(pg_sessions, monkeypat
     async def pause(session, day, timezone):
         result = await original(session, day, timezone)
         entered[day].set()
-        await asyncio.wait_for(release[day].wait(), 10)
+        await asyncio.wait_for(release[day].wait(), 30)
         return result
 
     monkeypatch.setattr(derived, "canonical_day", pause)
     builder = asyncio.create_task(derived.build_range(pg_sessions, first, DAY, "UTC"))
-    await asyncio.wait_for(entered[first].wait(), 10)
+    await asyncio.wait_for(entered[first].wait(), 30)
     writer = asyncio.create_task(
         store(pg_sessions, "steps", steps("late", 5, T0 + timedelta(hours=2)))
     )
@@ -236,10 +247,10 @@ async def test_range_build_releases_the_lock_between_days(pg_sessions, monkeypat
         assert not writer.done()
         release[first].set()
         # Ingestion waits for one day's build only, not for the rest of the range (#39).
-        await asyncio.wait_for(writer, 10)
+        await asyncio.wait_for(writer, 30)
         assert not builder.done()
         release[DAY].set()
-        assert await asyncio.wait_for(builder, 10) == 2
+        assert await asyncio.wait_for(builder, 30) == 2
         monkeypatch.setattr(derived, "canonical_day", original)
         row = await cache(pg_sessions)
         assert row.revision == row.built_revision
@@ -268,12 +279,11 @@ async def test_repeatable_read_snapshot_never_builds_a_cold_day(pg_sessions):
 
 
 async def test_interpretation_builds_before_its_snapshot(pg_sessions, monkeypatch):
-    from app.services import codex_health
+    from app.services.umay import codex_health
 
-    monkeypatch.setattr(codex_health, "SessionLocal", pg_sessions)
     await store(pg_sessions, "sleep", sleep())
     args = {"action": "sleep", "start_date": str(DAY), "end_date": str(DAY), "timezone": "UTC"}
-    result = await codex_health.read_health(args)
+    result = await codex_health.read_health(pg_sessions, args)
     assert "code" not in result and result["summaries"]
     row = await cache(pg_sessions)
     assert row.revision == row.built_revision and row.result is not None
@@ -299,7 +309,7 @@ async def test_retry_rechecks_candidate_after_waiting_for_successful_builder(
             await _until_writer_waits(pg_sessions)
             await derived.rebuild_day(winner, DAY, "UTC")
             await winner.commit()
-            report = await asyncio.wait_for(retry, 10)
+            report = await asyncio.wait_for(retry, 30)
             assert report == dict(
                 candidates=1, processed=0, succeeded=0, failed=0, stale=0, skipped=1
             )
@@ -318,7 +328,7 @@ async def test_retry_reads_source_committed_while_waiting_for_build_lock(pg_sess
         try:
             await _until_writer_waits(pg_sessions)
             await writer.commit()
-            assert (await asyncio.wait_for(retry, 10))["succeeded"] == 1
+            assert (await asyncio.wait_for(retry, 30))["succeeded"] == 1
             row = await cache(pg_sessions)
             assert row.revision == row.built_revision
             assert streams(await read(pg_sessions))[0]["value"] == 999
@@ -340,24 +350,24 @@ async def test_retry_releases_lock_between_days_and_preserves_later_invalidation
     async def pause(session, day, timezone):
         result = await original(session, day, timezone)
         entered[day].set()
-        await asyncio.wait_for(release[day].wait(), 10)
+        await asyncio.wait_for(release[day].wait(), 30)
         return result
 
     monkeypatch.setattr(derived, "canonical_day", pause)
     retry = asyncio.create_task(derived.retry_failed_range(pg_sessions, first, DAY, "UTC"))
-    await asyncio.wait_for(entered[first].wait(), 10)
+    await asyncio.wait_for(entered[first].wait(), 30)
     writer = asyncio.create_task(store(pg_sessions, "steps", steps(count=999)))
     late = None
     try:
         await _until_writer_waits(pg_sessions)
         release[first].set()
-        await asyncio.wait_for(writer, 10)  # cannot wait for the entire range
-        await asyncio.wait_for(entered[DAY].wait(), 10)
+        await asyncio.wait_for(writer, 30)  # cannot wait for the entire range
+        await asyncio.wait_for(entered[DAY].wait(), 30)
         late = asyncio.create_task(store(pg_sessions, "steps", steps(count=1000)))
         await _until_writer_waits(pg_sessions)
         release[DAY].set()
-        assert (await asyncio.wait_for(retry, 10))["succeeded"] == 2
-        await asyncio.wait_for(late, 10)
+        assert (await asyncio.wait_for(retry, 30))["succeeded"] == 2
+        await asyncio.wait_for(late, 30)
         row = await cache(pg_sessions)
         assert row.revision > row.built_revision
         monkeypatch.setattr(derived, "canonical_day", original)
@@ -456,8 +466,8 @@ async def test_build_lock_only_fences_changed_adapter_inputs(fence_setup, kind, 
                 assert not writer.done()
                 assert [(await cache(sessions, day)).revision for day in (DAY, last)] == before
             else:
-                await asyncio.wait_for(writer, 5)  # finishes while BUILD_LOCK is still held
-        await asyncio.wait_for(writer, 10)
+                await asyncio.wait_for(writer, 30)  # finishes while BUILD_LOCK is still held
+        await asyncio.wait_for(writer, 30)
         after = [(await cache(sessions, day)).revision for day in (DAY, last)]
         affected = [0] if supported else []
         if supported and operation in ("move", "supersession"):
@@ -482,9 +492,9 @@ async def test_build_lock_only_fences_changed_adapter_inputs(fence_setup, kind, 
     ],
 )
 async def test_verify_detects_changed_daily_type_conditions(pg_sessions, trigger):
-    from app.models.derived_invalidation import PG_TRIGGER_SQL
+    pg, _, _ = definitions()
 
-    table, sql = PG_TRIGGER_SQL[trigger]
+    table, sql = pg[trigger]
     async with pg_sessions.begin() as session:
         assert await verify_guards(session) == []
         # Keep timing, function and ALWAYS intact; only remove one supported type.
@@ -517,5 +527,5 @@ async def test_manual_writes_still_wait_for_daily_build(pg_sessions, operation):
             assert not writer.done()
         finally:
             await builder.rollback()
-            await asyncio.wait_for(writer, 10)
+            await asyncio.wait_for(writer, 30)
     assert (await cache(pg_sessions)).revision > before.revision

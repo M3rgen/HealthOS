@@ -1,7 +1,7 @@
 // Catch missing or reordered stylesheet imports in the production build.
 // Synthetic dashboard data; fonts and artwork must load from the real local assets.
 const assert = require('node:assert/strict');
-const { BASE, launch, run } = require('./lib.cjs');
+const { BASE, launch, run, showSystemGroup } = require('./lib.cjs');
 const fx = require('../../frontend/preview/fixtures.cjs');
 
 run(async () => {
@@ -73,6 +73,7 @@ run(async () => {
       assert.equal(state.brandStroke, 'none', 'appearance must preserve the full-colour header artwork');
       assert.equal(state.overflow, false);
       await page.locator('[data-page="system"]').click();
+      await showSystemGroup(page, 'settings');
       await page.locator('#appearance-open').click();
       const label = page.locator('#appearance-dialog .preset-label').first();
       await label.waitFor();

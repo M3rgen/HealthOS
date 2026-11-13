@@ -1,142 +1,30 @@
 """Real synthetic Tink/ECDSA signatures through HTTP, archive and diagnostics."""
 
-import asyncio
 import base64
 import hashlib
 import json
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, timedelta
 from operator import attrgetter
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
 import httpx
 import pytest
-from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.primitives.asymmetric import ec
-from fastapi import FastAPI
 from pythonjsonlogger.json import JsonFormatter
 from raw_response_records import body as google_body
 from raw_response_records import client as google_client
 from raw_response_records import steps, stored
 from sqlalchemy import func, select
 from sqlalchemy.exc import OperationalError, SQLAlchemyError
+from support.webhooks import START, notification
+from support.webhooks import receiver as receiver
 from sync_ownership_records import service, snapshot
-from test_webhook_route import Incremental, notification
-from test_webhook_status import START, configured
 
 from app.api import webhooks
-from app.core.auth import SessionStore, UITokenMiddleware
-from app.core.host_validation import HostValidationMiddleware
-from app.core.request_limits import WriteLimits
 from app.google_health.client import GoogleHealthError
-from app.google_health.webhook import WebhookSignatureVerifier
-from app.models.state import OAuthToken, WebhookEvent, WebhookNotification
+from app.models.state import WebhookEvent, WebhookNotification
 from app.models.webhook_status import WebhookStatusEvent
-from app.services import webhook_processing
-from app.services.webhook_processing import SIGNED_REPLAY_MAX_AGE, WebhookBatchProcessor
-from app.services.webhook_status import WebhookStatusService
-
-
-@pytest.fixture
-async def receiver(sessions, monkeypatch):
-    current = SimpleNamespace(now=START, key_requests=0, key_response="ok")
-
-    class Frozen(datetime):
-        @classmethod
-        def now(cls, tz=None):  # noqa: ARG003
-            return current.now
-
-    monkeypatch.setattr(webhook_processing, "datetime", Frozen)
-    settings = configured()
-    status = WebhookStatusService(settings, sessions, lambda: current.now)
-    await status.start()
-    key = ec.generate_private_key(ec.SECP256R1())
-    numbers = key.public_key().public_numbers()
-    serialized = b"\x08\x00\x1a\x20" + numbers.x.to_bytes(32) + b"\x22\x20" + numbers.y.to_bytes(32)
-    keyset = {
-        "key": [
-            {
-                "keyId": 42,
-                "status": "ENABLED",
-                "keyData": {"value": base64.b64encode(serialized).decode()},
-            }
-        ]
-    }
-
-    def key_server(request):
-        current.key_requests += 1
-        if current.key_response == "timeout":
-            raise httpx.ReadTimeout("synthetic private upstream error", request=request)
-        if current.key_response == "503":
-            return httpx.Response(503, text="synthetic private upstream error")
-        if current.key_response == "malformed":
-            return httpx.Response(200, json={"key": ["bad"]})
-        if current.key_response == "json":
-            return httpx.Response(200, text="not json")
-        return httpx.Response(200, json=keyset)
-
-    key_http = httpx.AsyncClient(transport=httpx.MockTransport(key_server))
-    verifier = WebhookSignatureVerifier(settings.google_health_webhook_public_key_url, key_http)
-    incremental = Incremental()
-    processor = WebhookBatchProcessor(sessions, incremental, set(incremental.specs), status)
-    async with sessions.begin() as session:
-        session.add(
-            OAuthToken(subject="me", encrypted_refresh_token="synthetic", health_user_id="user-1")
-        )
-    tasks = []
-
-    def spawn(coroutine):
-        tasks.append(asyncio.create_task(coroutine))
-
-    async def finish():
-        try:
-            await asyncio.gather(*tasks)
-        finally:
-            tasks.clear()
-
-    def sign(body):
-        signed = b"\x01\x00\x00\x00\x2a" + key.sign(body, ec.ECDSA(hashes.SHA256()))
-        return base64.b64encode(signed).decode()
-
-    app = FastAPI()
-    app.state.settings = settings
-    app.state.runtime = SimpleNamespace(
-        webhook_verifier=verifier, webhook_processor=processor, webhook_status=status, spawn=spawn
-    )
-    app.add_middleware(UITokenMiddleware, token="synthetic-ui", sessions=SessionStore())
-    app.add_middleware(
-        HostValidationMiddleware, webhook_endpoint_uri=settings.google_health_webhook_endpoint_uri
-    )
-    app.state.write_limits = WriteLimits(app.state.settings)
-    app.include_router(webhooks.router)
-    async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app), base_url="http://localhost"
-    ) as client:
-
-        async def post(body=None, signature=True, authorization="Bearer synthetic-test"):
-            body = body if body is not None else json.dumps(notification()).encode()
-            headers = {}
-            if authorization is not None:
-                headers["Authorization"] = authorization
-            if signature is not None:
-                headers["GOOGLE-HEALTH-API-SIGNATURE"] = (
-                    sign(body) if signature is True else signature
-                )
-            return await client.post("/webhooks/google-health", content=body, headers=headers)
-
-        yield SimpleNamespace(
-            client=client,
-            post=post,
-            sign=sign,
-            status=status,
-            current=current,
-            processor=processor,
-            finish=finish,
-            incremental=incremental,
-            app=app,
-        )
-        await finish()
-    await key_http.aclose()
+from app.sync.webhook_processing import SIGNED_REPLAY_MAX_AGE
 
 
 async def test_status_requires_ui_auth_and_public_host_has_only_post(receiver, sessions):
@@ -288,7 +176,7 @@ async def test_processing_errors_are_private_and_retry_preserves_archive(
             {"raw_json": record},
             RuntimeError("synthetic database failure"),
         ),
-        "google": GoogleHealthError(f"HTTP 503 {marker}"),
+        "google": GoogleHealthError(f"HTTP 503 {marker}", http_status=503),
     }[kind]
     summary = type(failure).__name__ + (" (http_503)" if kind == "google" else "")
     wire = google_body(steps(41, name=record["name"]), record, token="resume")

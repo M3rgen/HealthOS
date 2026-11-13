@@ -2,7 +2,9 @@
 // round stroke, currentColor. Inlined so CSS colours them and no request is
 // needed. CSS sizes the wrapper (`.button-icon`, `.metric-icon`, …); the SVG
 // fills it. An entry may also be a complete "<svg …>" string, inserted as-is.
+/** @param {number} cx @param {number} cy */
 const dot = (cx, cy) => `<circle cx="${cx}" cy="${cy}" r=".6" fill="currentColor" stroke="none"/>`;
+/** @type {Record<string, string>} */
 const icons = {
   steps: '<path d="m3 14.5 2-8L9 9l2.5-1.5 3 5 5 1.5c1 .5 1.5 1 1.5 2.5v2H5a2 2 0 0 1-2-2z"/><path d="M3.5 15.5H20M10 11l2-1.5"/>',
   sleep: '<path d="M20.5 13.5a8.5 8.5 0 1 1-10-10 6.5 6.5 0 0 0 10 10Z"/>',
@@ -31,8 +33,10 @@ const icons = {
   umay: '<path d="m10.6 8.7-3.3-1-4.2.3 1.3 3.2 2-.6.3 2.4 2-.8.7 1.6 1.3-.6.3 1.9-2.1 2.5Q12 19.3 15.1 17.6L13 15.1l.3-1.9 1.3.6.7-1.6 2 .8.3-2.4 2 .6 1.3-3.2-4.2-.3-3.3 1V6.6Q12 3.3 10.6 6.6Z"/>',
 };
 // Data keys and earlier names that map onto the set.
+/** @type {Record<string, string>} */
 const aliases = {shoe: 'steps', moon: 'sleep', body_fat: 'body-fat', asclepius: 'umay'};
 
+/** @param {string} name */
 export function iconMarkup(name) {
   const icon = icons[aliases[name] || name] || '';
   if (icon.trimStart().startsWith('<svg')) return icon;
@@ -41,6 +45,6 @@ export function iconMarkup(name) {
 
 export function renderIcons(root = document) {
   root.querySelectorAll('[data-icon]').forEach((element) => {
-    element.innerHTML = iconMarkup(element.dataset.icon);
+    element.innerHTML = iconMarkup(/** @type {string} */ (/** @type {HTMLElement} */ (element).dataset.icon));
   });
 }

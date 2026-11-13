@@ -13,6 +13,7 @@ class Control {
   contains(element) { return this === element || this.children.some(child => child.contains(element)); }
   focus() { document.activeElement = this; }
   setAttribute(key, value) { this.attrs[key] = value; }
+  getAttribute(key) { return this.attrs[key] ?? null; }
   append(child) { this.children.push(child); }
   set innerHTML(value) { this.markup = value; this.children = [new Control(), new Control()]; }
   querySelector(selector) { return this.children[selector === 'button' ? 0 : 1]; }
@@ -58,8 +59,7 @@ test('DOM replacement keeps owned focus but never takes it from a user who left'
 
 test('profile refresh and save preserve all four measurement controls and their visible names', () => {
   const {container, doc} = environment();
-  const metrics = {height: ['Boy', 'cm'], weight: ['Kilo', 'kg'], body_fat: ['Yağ oranı', '%'], muscle: ['Kas oranı', '%']};
-  const profile = setupProfileValues({metrics, iconMarkup: () => '', num: value => String(value), shortDate: value => value});
+  const profile = setupProfileValues({iconMarkup: () => '', getZone: () => 'UTC'});
   profile.update({weight: {value: 70, measured_at: '2026-10-01'}});
   const controls = container.children.map(row => row.querySelector('button'));
   controls[1].focus();

@@ -1,9 +1,15 @@
-import * as THREE from 'three';
+// The 3D body viewer: owns the WebGL renderer and its loop, loads the model and animates morphs,
+// camera fit and rotation. A lost GL context shows the silhouette until the browser restores it.
+import { NeutralToneMapping, SRGBColorSpace, VSMShadowMap, WebGLRenderer } from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
-import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
-import { metricsToMorphs, DEFAULT_NORMAL_RELIEF, normalReliefScale, parseHealthos, reliefParams } from './body-metrics.js';
-import { SKIN_DETAIL, createSkinUniforms, makeSkinMaterial } from './body-skin.js';
+import { createSkinDetail } from './body-detail.js';
+import { metricsToMorphs, DEFAULT_NORMAL_RELIEF } from './body-metrics.js';
+import { MORPHS, prepareModel } from './body-model.js';
+import { createMorphAnimator } from './body-morphs.js';
+import { createStage } from './body-scene.js';
+import { createShape } from './body-shape.js';
+import { createSkinUniforms } from './body-skin.js';
 import './body.css';
 
 // Preserve the public viewer API while keeping profile calculations independent of three.js.
@@ -14,431 +20,245 @@ export { metricsToMorphs, DEFAULT_NORMAL_RELIEF, normalReliefScale } from './bod
 // Meshopt-compressed (EXT_meshopt_compression + KHR_mesh_quantization, WebP normal map); the file
 // name carries a content hash so /models can be cached as immutable. Rename it when the model changes.
 const MODEL_URL = '/models/body.d736859b.glb';
-const PEDESTAL_URL = '/assets/3d/pedestal-glow.webp';
-const MORPHS = ['fat_high', 'fat_low', 'muscle_high', 'muscle_low'];
-
-const TWEEN_MS = 600;
-const BASE_HEIGHT_M = 1.75;
-// Height cue: the frame always spans at least a 182 cm figure, so shorter people read shorter
-// inside the same frame; beyond that the frame follows the figure so nothing is cropped.
-const FRAME_MIN_SCALE = 1.04;
-const MARGIN_Y = .07; // fraction of the canvas kept free above the head and below the feet
-const MARGIN_X = .03;
-const FOV = 20;
-const ELEVATION = THREE.MathUtils.degToRad(4); // camera looks very slightly down
 const START_TURN = .35; // front three-quarter view (radians)
-const SHAPE_BINS = 48;
-const SHAPE_SPAN_M = 2.4; // normalised-model height covered by the silhouette bins
 
-const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
-const ease = (t) => (t < .5 ? 4 * t * t * t : 1 - (-2 * t + 2) ** 3 / 2);
+const SILHOUETTE = 'M60 6c-10 0-17 8-17 20 0 10 4 18 8 22l-2 10c-14 3-23 11-26 26l-9 58-1 29c0 7 5 9 7 3l4-26 10-40 5 43-6 76-1 34-7 8c-3 4 0 7 7 7h10'
+  + 'l8-9 3-38 7-45 7 45 3 38 8 9h10c7 0 10-3 7-7l-7-8-1-34-6-76 5-43 10 40 4 26c2 6 7 4 7-3l-1-29-9-58c-3-15-12-23-26-26l-2-10c4-4 8-12 8-22 0-12-7-20-17-20Z';
 
-function radialTexture(stops) {
-  const canvas = document.createElement('canvas');
-  canvas.width = canvas.height = 128;
-  const ctx = canvas.getContext('2d');
-  const gradient = ctx.createRadialGradient(64, 64, 0, 64, 64, 64);
-  for (const [offset, color] of stops) gradient.addColorStop(offset, color);
-  ctx.fillStyle = gradient;
-  ctx.fillRect(0, 0, 128, 128);
-  const texture = new THREE.CanvasTexture(canvas);
-  texture.colorSpace = THREE.SRGBColorSpace;
-  return texture;
-}
+/** @typedef {import('./body-metrics.js').BodyMetrics} BodyMetrics */
+/** @typedef {{setMotion: (value: boolean) => void, setBodyMetrics: (metrics: BodyMetrics) => void, dispose: () => void}} BodyViewer */
+/** @typedef {{disposed: boolean, loaded: boolean, contextLost: boolean, dirty: boolean}} ViewerFlags */
+/** @typedef {ReturnType<typeof createStage>} Stage */
+/** @typedef {ReturnType<typeof createMorphAnimator>} MorphAnimator */
 
-function groundDecal(texture, opacity, blending) {
-  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.MeshBasicMaterial({
-    map: texture, transparent: true, opacity, depthWrite: false, blending, toneMapped: false,
-  }));
-  mesh.rotation.x = -Math.PI / 2;
-  mesh.renderOrder = 1;
-  return mesh;
-}
-
+/** @param {HTMLElement} container @returns {BodyViewer} */
 function staticFallback(container) {
-  container.innerHTML = '<div class="model-fallback"><svg viewBox="0 0 120 280" aria-hidden="true"><path fill="#8d8b85" d="M60 6c-10 0-17 8-17 20 0 10 4 18 8 22l-2 10c-14 3-23 11-26 26l-9 58-1 29c0 7 5 9 7 3l4-26 10-40 5 43-6 76-1 34-7 8c-3 4 0 7 7 7h10l8-9 3-38 7-45 7 45 3 38 8 9h10c7 0 10-3 7-7l-7-8-1-34-6-76 5-43 10 40 4 26c2 6 7 4 7-3l-1-29-9-58c-3-15-12-23-26-26l-2-10c4-4 8-12 8-22 0-12-7-20-17-20Z"/></svg></div>';
+  const fallback = document.createElement('div');
+  fallback.className = 'model-fallback';
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('viewBox', '0 0 120 280');
+  svg.setAttribute('aria-hidden', 'true');
+  const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+  path.setAttribute('fill', '#8d8b85');
+  path.setAttribute('d', SILHOUETTE);
+  svg.append(path);
+  fallback.append(svg);
+  container.replaceChildren(fallback);
   return { setMotion() {}, setBodyMetrics() {}, dispose() {} };
 }
 
-export function createBody(container, motionEnabled) {
-  let renderer;
-  try { renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, powerPreference: 'low-power' }); }
-  catch { return staticFallback(container); }
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.75));
+/** @param {import('./body-types').Object3D} root a three.js object */
+function disposeTree(root) {
+  root.traverse((/** @type {import('./body-types').ModelNode} */ node) => {
+    if (!node.isMesh) return;
+    node.geometry.dispose();
+    for (const material of [node.material].flat()) {
+      for (const value of Object.values(material))
+        if ((/** @type {Partial<import('./body-types').Texture> | null} */ (value))?.isTexture) /** @type {import('./body-types').Texture} */ (value).dispose();
+      material.dispose();
+    }
+  });
+}
+
+const pixelRatio = () => Math.min(window.devicePixelRatio || 1, 1.75);
+
+/** @param {import('./body-types').Renderer} renderer three.js WebGLRenderer */
+function configureRenderer(renderer) {
+  renderer.setPixelRatio(pixelRatio());
   renderer.setClearColor(0x000000, 0);
-  renderer.outputColorSpace = THREE.SRGBColorSpace;
+  renderer.outputColorSpace = SRGBColorSpace;
   // Khronos PBR Neutral keeps the painted skin hue (ACES pushed it orange); exposure keeps forehead and
   // shoulder highlights below clipping while the shadow side stays lifted off the #181814 page.
-  renderer.toneMapping = THREE.NeutralToneMapping;
+  renderer.toneMapping = NeutralToneMapping;
   renderer.toneMappingExposure = .88;
   renderer.shadowMap.enabled = true;
-  renderer.shadowMap.type = THREE.VSMShadowMap; // smooth penumbrae; jittered PCF combed grazing skin
-  container.append(renderer.domElement);
+  renderer.shadowMap.type = VSMShadowMap; // smooth penumbrae; jittered PCF combed grazing skin
+}
 
-  const scene = new THREE.Scene();
-  const pmrem = new THREE.PMREMGenerator(renderer);
-  const room = new RoomEnvironment();
-  const envMap = pmrem.fromScene(room, .04).texture;
-  room.dispose(); pmrem.dispose();
-  scene.environment = envMap;
-  scene.environmentIntensity = .14;
-
-  // Lights are fixed in world space; the figure turns beneath them.
-  const camera = new THREE.PerspectiveCamera(FOV, 1, .1, 60);
-  scene.add(new THREE.HemisphereLight(0xeee9df, 0x221f1a, .12));
-  const key = new THREE.DirectionalLight(0xfff5ea, 2.9);
-  key.position.set(-2.6, 4.4, 3.2);
-  key.castShadow = true;
-  key.shadow.mapSize.set(1024, 1024);
-  Object.assign(key.shadow.camera, { left: -1.4, right: 1.4, top: 1.6, bottom: -1.6, near: .5, far: 12 });
-  // VSM radius 5: a wider blur bleeds light into blocky steps on the shoulders.
-  key.shadow.radius = 5; key.shadow.blurSamples = 12; key.shadow.bias = -.0005; key.shadow.normalBias = .03;
-  key.target.position.set(0, .9, 0);
-  scene.add(key, key.target);
-  const fill = new THREE.DirectionalLight(0xd9e0ea, .32);
-  fill.position.set(3, 1.4, 2.6);
-  // Rim lights are warm but desaturated so skin never turns orange; the UI amber (#f0c478) is
-  // carried only by the thin Fresnel accent in the skin shader.
-  const rim = new THREE.DirectionalLight(0xf4dcba, 3.6);
-  rim.position.set(2.8, 2.6, -3.2);
-  const rimLeft = new THREE.DirectionalLight(0xf4dcba, 1.6);
-  rimLeft.position.set(-3.2, 2, -2.4);
-  scene.add(fill, rim, rimLeft);
-
-  // Ground: the amber pedestal glow and the key light's cast shadow stay put; one soft contact
-  // shadow per foot turns with the figure (placed from the model's foot vertices in prepare()).
-  const ground = new THREE.Group();
-  const contactTexture = radialTexture([[0, 'rgba(0,0,0,.7)'], [.5, 'rgba(0,0,0,.32)'], [1, 'rgba(0,0,0,0)']]);
-  const contacts = [0, 1].map(() => {
-    const decal = groundDecal(contactTexture, 1, THREE.NormalBlending);
-    decal.position.y = .002;
-    decal.visible = false;
-    return decal;
-  });
-  // The pedestal image is already drawn as a screen-space ellipse (2:1 canvas), so its ground depth
-  // is stretched in fitCamera() to cancel the camera's foreshortening and keep that 2:1 on screen.
-  const pedestalTexture = new THREE.TextureLoader().load(PEDESTAL_URL, () => { dirty = true; });
-  pedestalTexture.colorSpace = THREE.SRGBColorSpace;
-  const pedestal = groundDecal(pedestalTexture, .6, THREE.AdditiveBlending);
-  pedestal.position.y = .001;
-  const PEDESTAL_WIDTH = 1.6;
-  const castShadow = new THREE.Mesh(new THREE.CircleGeometry(1.1, 48), new THREE.ShadowMaterial({ opacity: .24, depthWrite: false }));
-  castShadow.rotation.x = -Math.PI / 2;
-  castShadow.position.y = .003;
-  castShadow.receiveShadow = true;
-  ground.add(pedestal, castShadow);
-  scene.add(ground);
-
-  // turntable (rotation) → figure (height scale) → normalizer (fit source to contract) → model
-  const turntable = new THREE.Group();
-  const figure = new THREE.Group();
-  const normalizer = new THREE.Group();
-  figure.add(normalizer, ...contacts); turntable.add(figure); scene.add(turntable);
-
-  // Shared skin shader uniforms (see makeSkinMaterial); detail maps arrive asynchronously.
-  const skinUniforms = createSkinUniforms();
-  const skinMaterials = [];
-  const detailTextures = [];
-  function loadDetail(url, uniform, define) {
-    new THREE.TextureLoader().load(url, (texture) => {
-      if (disposed) { texture.dispose(); return; }
-      texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
-      texture.colorSpace = THREE.NoColorSpace;
-      texture.anisotropy = Math.min(8, renderer.capabilities.getMaxAnisotropy());
-      skinUniforms[uniform].value = texture;
-      detailTextures.push(texture);
-      for (const material of skinMaterials) { material.defines[define] = ''; material.needsUpdate = true; }
-      container.dataset.skinDetail = [container.dataset.skinDetail, define].filter(Boolean).join(',');
-      dirty = true;
-    }, undefined, () => { /* optional asset: render without micro-detail */ });
-  }
-  loadDetail(SKIN_DETAIL.normalUrl, 'skinDetailNormal', 'SKIN_DETAIL_NORMAL');
-  loadDetail(SKIN_DETAIL.roughnessUrl, 'skinDetailRoughness', 'SKIN_DETAIL_ROUGHNESS');
-
-  const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
-  const bindings = [];
-  const reliefMaterials = []; // [material, base normalScale]
-  let relief = DEFAULT_NORMAL_RELIEF;
-  // Normalised-space vertex data used to measure the silhouette of the current morph state.
-  const shapeMeshes = []; // { base: Float32Array, deltas: [[morphName, Float32Array]] }
-  const shape = { rho: new Float32Array(SHAPE_BINS), lo: new Float32Array(SHAPE_BINS), hi: new Float32Array(SHAPE_BINS), top: BASE_HEIGHT_M };
-  let shapeKey = '';
-  let disposed = false, loaded = false, dirty = true;
-  let enabled = motionEnabled, elapsed = 0, last = 0;
-  const current = { fat: 0, muscle: 0, scale: 1 };
-  let from = { ...current }, to = { ...current }, tweenStart = -1;
-
-  const influences = () => ({
-    fat_high: Math.max(current.fat, 0), fat_low: Math.max(-current.fat, 0),
-    muscle_high: Math.max(current.muscle, 0), muscle_low: Math.max(-current.muscle, 0),
-  });
-
-  // Per height band: the widest horizontal reach (radius from the turn axis) of the morphed mesh.
-  function measureShape(values) {
-    const key = `${values.fat_high},${values.fat_low},${values.muscle_high},${values.muscle_low}`;
-    if (key === shapeKey || !shapeMeshes.length) return;
-    shapeKey = key;
-    shape.rho.fill(-1); shape.lo.fill(Infinity); shape.hi.fill(-Infinity);
-    let top = 0;
-    const binHeight = SHAPE_SPAN_M / SHAPE_BINS;
-    for (const { base, deltas } of shapeMeshes) {
-      const active = deltas.filter(([name]) => values[name] > 0).map(([name, delta]) => [values[name], delta]);
-      for (let i = 0; i < base.length; i += 3) {
-        let x = base[i], y = base[i + 1], z = base[i + 2];
-        for (const [w, delta] of active) { x += w * delta[i]; y += w * delta[i + 1]; z += w * delta[i + 2]; }
-        const bin = clamp(Math.floor(y / binHeight), 0, SHAPE_BINS - 1);
-        const rho = Math.hypot(x, z);
-        if (rho > shape.rho[bin]) shape.rho[bin] = rho;
-        if (y < shape.lo[bin]) shape.lo[bin] = y;
-        if (y > shape.hi[bin]) shape.hi[bin] = y;
-        if (y > top) top = y;
-      }
-    }
-    shape.top = top;
-  }
-
-  function applyMorphs() {
-    const values = influences();
-    for (const { mesh, indices } of bindings) {
-      for (const [name, index] of indices) mesh.morphTargetInfluences[index] = values[name];
-    }
-    const strength = normalReliefScale(values.fat_high, values.fat_low, relief);
-    for (const [material, base] of reliefMaterials) material.normalScale.copy(base).multiplyScalar(strength);
-    measureShape(values);
-    const girth = Math.sqrt(current.scale);
-    figure.scale.set(girth, current.scale, girth);
-    ground.scale.setScalar(girth);
-    container.dataset.morphFat = current.fat.toFixed(3);
-    container.dataset.morphMuscle = current.muscle.toFixed(3);
-    container.dataset.heightScale = current.scale.toFixed(3);
-    container.dataset.normalScale = strength.toFixed(3);
-    dirty = true;
-  }
-
-  // Fit the camera to the current silhouette: every point of every height band, at any turn angle,
-  // must land inside the canvas minus the margins. Solved by bisection on camera distance.
-  const fitView = { forward: new THREE.Vector3(), up: new THREE.Vector3() };
-  function fitCamera() {
-    const w = container.clientWidth, h = container.clientHeight;
-    if (!w || !h) return;
-    const aspect = w / h;
-    const tanY = Math.tan(THREE.MathUtils.degToRad(FOV / 2)) * (1 - 2 * MARGIN_Y);
-    const tanX = Math.tan(THREE.MathUtils.degToRad(FOV / 2)) * aspect * (1 - 2 * MARGIN_X);
-    const s = current.scale, girth = Math.sqrt(s);
-    const figureTop = shape.top * s;
-    const frameTop = Math.max(figureTop, BASE_HEIGHT_M * FRAME_MIN_SCALE);
-    const centerY = frameTop / 2;
-    const points = [[0, 0], [0, frameTop]]; // [radius, height]; frame corners keep the height cue
-    for (let b = 0; b < SHAPE_BINS; b++) {
-      if (shape.rho[b] < 0) continue;
-      points.push([shape.rho[b] * girth, shape.lo[b] * s], [shape.rho[b] * girth, shape.hi[b] * s]);
-    }
-    const { forward, up } = fitView;
-    forward.set(0, -Math.sin(ELEVATION), -Math.cos(ELEVATION));
-    up.set(0, Math.cos(ELEVATION), -Math.sin(ELEVATION));
-    const fits = (distance) => {
-      const camY = centerY + distance * Math.sin(ELEVATION), camZ = distance * Math.cos(ELEVATION);
-      for (const [rho, y] of points) {
-        const dy = y - camY;
-        // Worst case over the turn: the point may sit anywhere on its circle of radius rho.
-        for (let k = 0; k < 16; k++) {
-          const angle = k / 16 * Math.PI * 2;
-          const px = rho * Math.cos(angle), pz = rho * Math.sin(angle) - camZ;
-          const depth = dy * forward.y + pz * forward.z;
-          if (depth <= .05) return false;
-          if (Math.abs(px) > tanX * depth || Math.abs(dy * up.y + pz * up.z) > tanY * depth) return false;
-        }
-      }
-      return true;
-    };
-    let near = .5, far = 40;
-    for (let i = 0; i < 28; i++) { const mid = (near + far) / 2; if (fits(mid)) far = mid; else near = mid; }
-    camera.aspect = aspect;
-    camera.position.set(0, centerY + far * Math.sin(ELEVATION), far * Math.cos(ELEVATION));
-    camera.lookAt(0, centerY, 0);
-    camera.updateProjectionMatrix();
-    // Keep the pedestal's 2:1 screen ellipse: depth on the ground = width / (2 · sin(view angle)).
-    const viewAngle = Math.max(Math.atan2(camera.position.y, camera.position.z), .05);
-    pedestal.scale.set(PEDESTAL_WIDTH, Math.min(PEDESTAL_WIDTH / (2 * Math.sin(viewAngle)), far * 1.2), 1);
-    dirty = true;
-  }
-
-  // Contact shadows from the lowest vertices, split at the stance midline. The standing foot (most
-  // vertices on the floor) gets the full shadow; a raised heel (contrapposto) only a faint one.
-  function placeContacts() {
-    const low = [];
-    for (const { base } of shapeMeshes) for (let i = 0; i < base.length; i += 3) if (base[i + 1] < .045) low.push(base[i], base[i + 2], base[i + 1]);
-    if (!low.length) return;
-    let minX = Infinity, maxX = -Infinity;
-    for (let i = 0; i < low.length; i += 3) { minX = Math.min(minX, low[i]); maxX = Math.max(maxX, low[i]); }
-    const mid = (minX + maxX) / 2;
-    const planted = [0, 0];
-    for (let i = 0; i < low.length; i += 3) if (low[i + 2] < .006) planted[low[i] < mid ? 0 : 1]++;
-    const standing = planted[0] >= planted[1] ? 0 : 1;
-    contacts.forEach((decal, side) => {
-      const box = [Infinity, -Infinity, Infinity, -Infinity];
-      for (let i = 0; i < low.length; i += 3) {
-        if ((low[i] < mid) !== (side === 0)) continue;
-        box[0] = Math.min(box[0], low[i]); box[1] = Math.max(box[1], low[i]);
-        box[2] = Math.min(box[2], low[i + 1]); box[3] = Math.max(box[3], low[i + 1]);
-      }
-      if (!Number.isFinite(box[0])) return;
-      decal.position.set((box[0] + box[1]) / 2, .002, (box[2] + box[3]) / 2);
-      decal.scale.set(box[1] - box[0] + .22, box[3] - box[2] + .22, 1);
-      decal.material.opacity = side === standing ? 1 : .45;
-      decal.visible = true;
-    });
-  }
-
-  function prepare(model) {
-    model.updateMatrixWorld(true);
-    const box = new THREE.Box3();
-    const point = new THREE.Vector3(), delta = new THREE.Vector3();
-    model.traverse(node => {
-      if (!node.isMesh) return;
-      const position = node.geometry.attributes.position;
-      for (let i = 0; i < position.count; i++) box.expandByPoint(point.fromBufferAttribute(position, i).applyMatrix4(node.matrixWorld));
-    });
-    const size = box.getSize(new THREE.Vector3());
-    // Contract says 1.75 m with feet at y=0; normalise anyway so any source unit still frames correctly.
-    const unit = size.y > 1.4 && size.y < 2.1 ? 1 : BASE_HEIGHT_M / size.y;
-    normalizer.scale.setScalar(unit);
-    // A compliant model (feet at y=0, centre of mass on the origin) turns about its own origin, which
-    // matters for asymmetric poses; only off-contract sources are re-centred on their bounding box.
-    const compliant = unit === 1 && Math.abs(box.min.y) < .05 && Math.hypot((box.min.x + box.max.x) / 2, (box.min.z + box.max.z) / 2) < .25;
-    if (compliant) normalizer.position.set(0, -box.min.y, 0);
-    else normalizer.position.set(-(box.min.x + box.max.x) / 2 * unit, -box.min.y * unit, -(box.min.z + box.max.z) / 2 * unit);
-    normalizer.updateMatrix();
-    const found = new Set();
-    const converted = new Map();
-    let skinTone = null;
-    model.traverse(node => {
-      if (node.userData?.healthos) {
-        const healthos = parseHealthos(node.userData.healthos);
-        if (relief === DEFAULT_NORMAL_RELIEF) relief = reliefParams(healthos);
-        if (/^#?[0-9a-f]{6}$/i.test(healthos?.skinToneHex ?? '')) skinTone = new THREE.Color(`#${healthos.skinToneHex.replace('#', '')}`);
-      }
-      if (!node.isMesh) return;
-      node.castShadow = true;
-      node.receiveShadow = true;
-      const swap = (source) => {
-        if (!converted.has(source)) {
-          const material = makeSkinMaterial(source, skinUniforms);
-          if (skinTone && !material.map) material.color.copy(skinTone);
-          for (const [define, uniform] of [['SKIN_DETAIL_NORMAL', 'skinDetailNormal'], ['SKIN_DETAIL_ROUGHNESS', 'skinDetailRoughness']]) {
-            if (skinUniforms[uniform].value) material.defines[define] = '';
-          }
-          if (material.normalMap) reliefMaterials.push([material, material.normalScale.clone()]);
-          skinMaterials.push(material);
-          converted.set(source, material);
-          source.dispose(); // textures are now owned by the physical material
-        }
-        return converted.get(source);
-      };
-      node.material = Array.isArray(node.material) ? node.material.map(swap) : swap(node.material);
-      const dict = node.morphTargetDictionary || {};
-      const indices = MORPHS.filter(name => name in dict).map(name => [name, dict[name]]);
-      indices.forEach(([name]) => found.add(name));
-      if (indices.length) bindings.push({ mesh: node, indices });
-      // Copy positions and morph deltas into normalised figure space for silhouette measurement.
-      const toFigure = new THREE.Matrix4().multiplyMatrices(normalizer.matrix, node.matrixWorld);
-      const linear = new THREE.Matrix3().setFromMatrix4(toFigure);
-      const position = node.geometry.attributes.position;
-      const targets = node.geometry.morphAttributes.position || [];
-      const base = new Float32Array(position.count * 3);
-      for (let i = 0; i < position.count; i++) point.fromBufferAttribute(position, i).applyMatrix4(toFigure).toArray(base, i * 3);
-      const deltas = indices.map(([name, index]) => {
-        const out = new Float32Array(position.count * 3);
-        for (let i = 0; i < position.count; i++) {
-          delta.fromBufferAttribute(targets[index], i);
-          if (!node.geometry.morphTargetsRelative) delta.sub(point.fromBufferAttribute(position, i));
-          delta.applyMatrix3(linear).toArray(out, i * 3);
-        }
-        return [name, out];
-      });
-      shapeMeshes.push({ base, deltas });
-    });
-    placeContacts();
+/**
+ * Fetches the figure. A missing or invalid model calls onFailed instead (the silhouette stays).
+ * @param {object} parts
+ * @param {HTMLElement} parts.container
+ * @param {Stage} parts.stage
+ * @param {import('./body-types').SkinUniforms} parts.skinUniforms
+ * @param {import('./body-model.js').Figure} parts.parts
+ * @param {ViewerFlags} parts.flags
+ * @param {MorphAnimator} parts.morphs
+ * @param {() => void} parts.onFailed
+ */
+function loadFigure({ container, stage, skinUniforms, parts, flags, morphs, onFailed }) {
+  const { contacts, normalizer } = stage;
+  // The meshopt decoder is bundled from three (WebAssembly, so the CSP needs 'wasm-unsafe-eval').
+  new GLTFLoader().setMeshoptDecoder(MeshoptDecoder).load(MODEL_URL, (/** @type {{scene: import('./body-types').Object3D}} */ { scene: model }) => {
+    if (flags.disposed) { disposeTree(model); return; }
+    const { relief, found } = prepareModel(model, { normalizer, contacts, skinUniforms, figure: parts });
+    morphs.setRelief(relief);
     container.dataset.model = 'body';
     container.dataset.morphTargets = [...found].join(',');
     if (found.size !== MORPHS.length) {
       console.warn(`body.glb is missing morph targets: ${MORPHS.filter(name => !found.has(name)).join(', ')}`);
     }
-  }
-
-  // The meshopt decoder is bundled from three (WebAssembly, so the CSP needs 'wasm-unsafe-eval').
-  new GLTFLoader().setMeshoptDecoder(MeshoptDecoder).load(MODEL_URL, ({ scene: model }) => {
-    if (disposed) { disposeTree(model); return; }
-    prepare(model);
     normalizer.add(model);
-    loaded = true;
-    applyMorphs();
-    fitCamera();
+    flags.loaded = true;
+    morphs.refresh();
     container.dataset.modelLoaded = 'true';
   }, undefined, () => {
-    // Missing or invalid model: show the static silhouette instead (morph updates become no-ops).
-    if (disposed) return;
-    dispose();
-    staticFallback(container);
+    if (!flags.disposed) onFailed();
   });
+}
 
+/**
+ * The canvas goes blank while the GPU context is gone; the HTML silhouette underneath stands in.
+ * @param {import('./body-types').Renderer} renderer three.js WebGLRenderer @param {HTMLElement} container @param {Stage} stage @param {ViewerFlags} flags
+ */
+function watchContext(renderer, container, stage, flags) {
+  /** @param {Event} event */
+  function onLost(event) {
+    event.preventDefault(); // Without this the browser never restores the context.
+    flags.contextLost = true;
+    flags.dirty = true;
+    delete container.dataset.modelLoaded;
+  }
+  function onRestored() {
+    flags.contextLost = false;
+    stage.renewEnvironment();
+    if (flags.loaded) container.dataset.modelLoaded = 'true';
+    flags.dirty = true;
+  }
+  renderer.domElement.addEventListener('webglcontextlost', onLost);
+  renderer.domElement.addEventListener('webglcontextrestored', onRestored);
+  return () => {
+    renderer.domElement.removeEventListener('webglcontextlost', onLost);
+    renderer.domElement.removeEventListener('webglcontextrestored', onRestored);
+  };
+}
+
+/** Thirty seconds per half turn from a front three-quarter view, easing before returning. @param {number} elapsed */
+const turnAngle = elapsed => START_TURN + Math.PI * (1 - Math.cos(elapsed / 60000 * Math.PI * 2)) / 2;
+
+/**
+ * Keeps the canvas at its container's size and the skin detail fitted to it.
+ * @param {HTMLElement} container @param {import('./body-types').Renderer} renderer three.js WebGLRenderer
+ * @param {MorphAnimator} morphs @param {ReturnType<typeof createSkinDetail>} skinDetail @param {ViewerFlags} flags
+ */
+function watchSize(container, renderer, morphs, skinDetail, flags) {
+  skinDetail.fit(container.clientHeight * pixelRatio());
   const resize = new ResizeObserver(() => {
     const w = container.clientWidth, h = container.clientHeight;
-    if (w && h) { renderer.setSize(w, h, false); fitCamera(); }
+    if (w && h) { renderer.setSize(w, h, false); morphs.fitView(); }
+    skinDetail.fit(h * pixelRatio());
+    flags.dirty = true; // Also stop/wake the loop when a tab hides/reveals the container.
   });
   resize.observe(container);
+  return resize;
+}
 
-  // Auto-rotation runs only when the System-page toggle is on and the OS does not ask for reduced
-  // motion; otherwise the figure rests in the front three-quarter view.
-  const rotates = () => loaded && enabled && !reducedMotion.matches;
-  function onReducedMotion() {
-    if (reducedMotion.matches) { elapsed = 0; turntable.rotation.y = START_TURN; container.dataset.rotationDegrees = '0.0'; }
-    dirty = true;
+/**
+ * The render loop and the figure's rotation. Auto-rotation runs only when the System-page toggle
+ * is on and the OS does not ask for reduced motion; otherwise the figure rests in the front
+ * three-quarter view.
+ * @param {object} parts
+ * @param {import('./body-types').Renderer} parts.renderer three.js WebGLRenderer
+ * @param {Stage} parts.stage
+ * @param {HTMLElement} parts.container
+ * @param {ViewerFlags} parts.flags
+ * @param {MorphAnimator} parts.morphs
+ * @param {MediaQueryList} parts.reducedMotion
+ * @param {boolean} parts.motionEnabled
+ */
+function startTurning({ renderer, stage, container, flags, morphs, reducedMotion, motionEnabled }) {
+  const { scene, camera, turntable } = stage;
+  let enabled = motionEnabled, elapsed = 0, last = 0, running = false, tweenUntil = 0, dirty = flags.dirty;
+  const rotates = () => flags.loaded && enabled && !reducedMotion.matches;
+  const visible = () => !flags.disposed && !flags.contextLost && !document.hidden && !!container.getClientRects().length;
+  function syncLoop() {
+    const next = visible() && (rotates() || dirty || tweenUntil !== 0);
+    if (next === running) return;
+    running = next; last = 0;
+    renderer.setAnimationLoop(next ? frame : null);
   }
-  reducedMotion.addEventListener('change', onReducedMotion);
-
-  renderer.setAnimationLoop(timestamp => {
+  /** @param {number} timestamp */
+  function frame(timestamp) {
+    if (!visible()) { syncLoop(); return; }
     const delta = last ? Math.min(timestamp - last, 100) : 0; last = timestamp;
-    if (document.hidden || !container.getClientRects().length) return;
-    if (tweenStart >= 0) {
-      const k = ease(Math.min(1, (timestamp - tweenStart) / TWEEN_MS));
-      for (const key of ['fat', 'muscle', 'scale']) current[key] = from[key] + (to[key] - from[key]) * k;
-      if (k >= 1) tweenStart = -1;
-      applyMorphs();
-      fitCamera();
-    } else if (tweenStart === -2) tweenStart = timestamp;
+    // A requested morph starts on its first frame and lasts 600 ms (body-morphs.js).
+    // Keep its clock alive through the final frame, then release the animation loop entirely.
+    if (tweenUntil === -1) tweenUntil = timestamp + 600;
+    morphs.step(timestamp);
     const turning = rotates();
     if (turning) {
       elapsed += delta;
-      // Thirty seconds per half turn from a front three-quarter view, easing before returning.
-      turntable.rotation.y = START_TURN + Math.PI * (1 - Math.cos(elapsed / 60000 * Math.PI * 2)) / 2;
+      turntable.rotation.y = turnAngle(elapsed);
       container.dataset.rotationDegrees = ((turntable.rotation.y - START_TURN) * 180 / Math.PI).toFixed(1);
     }
-    if (turning || dirty) { renderer.render(scene, camera); dirty = false; }
-  });
+    if (turning || dirty) { renderer.render(scene, camera); flags.dirty = false; }
+    if (timestamp >= tweenUntil) tweenUntil = 0;
+    syncLoop();
+  }
+  function onReducedMotion() {
+    if (reducedMotion.matches) { elapsed = 0; turntable.rotation.y = START_TURN; container.dataset.rotationDegrees = '0.0'; }
+    flags.dirty = true;
+  }
+  // Async model/texture loads, camera fits and metric changes already mark this shared flag.
+  // Turning it into an invalidation signal avoids an idle rAF polling that flag forever.
+  Object.defineProperty(flags, 'dirty', { get: () => dirty, set(value) { dirty = value; if (value) syncLoop(); } });
+  reducedMotion.addEventListener('change', onReducedMotion);
+  document.addEventListener('visibilitychange', syncLoop);
   turntable.rotation.y = START_TURN;
   container.dataset.rotationDegrees = '0.0';
+  syncLoop();
+  return {
+    /** @param {boolean} value */
+    setEnabled(value) { enabled = value; flags.dirty = true; },
+    animate() { tweenUntil = -1; syncLoop(); },
+    dispose() {
+      renderer.setAnimationLoop(null);
+      reducedMotion.removeEventListener('change', onReducedMotion);
+      document.removeEventListener('visibilitychange', syncLoop);
+    },
+  };
+}
 
-  function disposeTree(root) {
-    root.traverse(node => {
-      if (!node.isMesh) return;
-      node.geometry.dispose();
-      for (const material of [node.material].flat()) {
-        for (const value of Object.values(material)) if (value?.isTexture) value.dispose();
-        material.dispose();
-      }
-    });
-  }
+/** @param {HTMLElement} container @param {boolean} motionEnabled @returns {BodyViewer} */
+export function createBody(container, motionEnabled) {
+  /** @type {import('./body-types').Renderer} three.js WebGLRenderer */
+  let renderer;
+  try { renderer = new WebGLRenderer({ antialias: true, alpha: true, powerPreference: 'low-power' }); }
+  catch { return staticFallback(container); }
+  configureRenderer(renderer);
+  container.append(renderer.domElement);
+
+  const flags = { disposed: false, loaded: false, contextLost: false, dirty: true };
+  const stage = createStage(renderer, { onPedestalLoaded: () => { flags.dirty = true; } });
+  const { ground, turntable } = stage;
+
+  // Shared skin shader uniforms (see makeSkinMaterial); detail maps arrive asynchronously.
+  const skinUniforms = createSkinUniforms();
+  /** @type {import('./body-model.js').Figure} */
+  const parts = { skinMaterials: [], reliefMaterials: [], bindings: [], shape: createShape() }; // filled by prepareModel
+  const skinDetail = createSkinDetail({ renderer, container, skinUniforms, parts, flags });
+  const morphs = createMorphAnimator({ container, stage, parts, flags, defaultRelief: DEFAULT_NORMAL_RELIEF });
+  const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
+
+  loadFigure({ container, stage, skinUniforms, parts, flags, morphs, onFailed() { dispose(); staticFallback(container); } });
+  const stopWatchingContext = watchContext(renderer, container, stage, flags);
+  const resize = watchSize(container, renderer, morphs, skinDetail, flags);
+  const turning = startTurning({ renderer, stage, container, flags, morphs, reducedMotion, motionEnabled });
+
   function dispose() {
-    if (disposed) return;
-    disposed = true;
+    if (flags.disposed) return;
+    flags.disposed = true;
     renderer.setAnimationLoop(null);
     resize.disconnect();
-    reducedMotion.removeEventListener('change', onReducedMotion);
+    turning.dispose();
+    stopWatchingContext();
     disposeTree(turntable);
     disposeTree(ground);
-    envMap.dispose();
-    detailTextures.forEach(texture => texture.dispose());
+    stage.disposeEnvironment();
+    skinDetail.textures.forEach(texture => texture.dispose());
+    // dispose() alone leaves the WebGL context to the garbage collector, and a browser allows only
+    // about 16 at once: back/forward restores build a new one each time.
+    renderer.forceContextLoss();
     renderer.dispose();
     renderer.domElement.remove();
     window.removeEventListener('pagehide', dispose);
@@ -446,17 +266,13 @@ export function createBody(container, motionEnabled) {
   window.addEventListener('pagehide', dispose);
 
   return {
-    setMotion(value) { enabled = value; dirty = true; },
-    /** Accepts {heightCm, weightKg, bodyFatPct, musclePct}; missing values keep the basis. */
+    /** @param {boolean} value */
+    setMotion(value) { turning.setEnabled(value); flags.dirty = true; },
+    /** Accepts {heightCm, weightKg, bodyFatPct, musclePct}; missing values keep the basis. @param {BodyMetrics} metrics */
     setBodyMetrics(metrics) {
-      to = metricsToMorphs(metrics);
-      if (to.fat === current.fat && to.muscle === current.muscle && to.scale === current.scale) return;
-      if (!loaded || reducedMotion.matches) {
-        Object.assign(current, to); tweenStart = -1; applyMorphs(); fitCamera();
-        return;
-      }
-      from = { ...current };
-      tweenStart = -2; // starts on the next animation frame's timestamp
+      const animate = flags.loaded && !reducedMotion.matches;
+      morphs.moveTo(metricsToMorphs(metrics), animate);
+      if (animate) turning.animate();
     },
     dispose,
   };

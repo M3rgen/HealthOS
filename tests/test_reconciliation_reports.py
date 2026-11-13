@@ -12,6 +12,7 @@ from reconciliation_records import END, START, Client, Frozen, execute, point, r
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+from app.core.timeutil import as_utc
 from app.db.base import Base
 from app.google_health import pagination
 from app.google_health.capture import CapturedResponse
@@ -20,9 +21,9 @@ from app.google_health.data_types import REGISTRY
 from app.models.raw_versions import RawApiResponse, RawHealthDataVersion
 from app.models.retrieval import RetrievalCheckpoint, RetrievalEvent, RetrievalReceipt
 from app.models.state import RawHealthData, ReliabilityState, SyncState
-from app.services import reconciliation_reports as reports
-from app.services.retrieval import ReceiptWriter
-from app.services.storage import StoreStats, store_records
+from app.services.archive.storage import StoreStats, store_records
+from app.services.synchronization import reconciliation_reports as reports
+from app.services.synchronization.retrieval import ReceiptWriter
 from app.sync import incremental, reconciliation
 from app.sync.ownership import run_ownership
 
@@ -49,10 +50,7 @@ async def test_new_changed_unchanged_deleted_and_refetch_preserve_raw_history(se
     row, result, _ = await execute(sessions, Page([a, changed], "next"), Page([new], None))
 
     assert row["status"] == "completed" and row["finished_at"] is not None
-    assert (row["requested_from"], row["requested_to"]) == (
-        START.replace(tzinfo=None),
-        END.replace(tzinfo=None),
-    )
+    assert (as_utc(row["requested_from"]), as_utc(row["requested_to"])) == (START, END)
     assert counts(row["types"][0]) == (1, 1, 1, 1)
     assert counts(vars(result["heart-rate"])) == (1, 1, 1, 1)
     assert row["types"][0]["pages_committed"] == 2
@@ -91,7 +89,7 @@ async def test_failed_second_page_keeps_first_committed_counts_without_deletions
         assert state.last_page_token == "next"
     # Same requested range: only the newly committed continuation belongs to this run.
     resumed, _, runner = await execute(sessions, Page([point()], None))
-    assert runner.incremental.client.tokens == ["next"]
+    assert runner.incremental.source.client.tokens == ["next"]
     assert resumed["status"] == "completed"
     assert counts(resumed["types"][0]) == (1, 0, 0, 0)
 
@@ -179,7 +177,7 @@ async def test_many_windows_and_pages_aggregate_commits_and_keep_earlier_windows
         days=3,
         specs=specs,
     )
-    assert runner.incremental.client.tokens == ["failed-next", None, None, None]
+    assert runner.incremental.source.client.tokens == ["failed-next", None, None, None]
     assert resumed["status"] == "completed"
     assert counts(resumed["types"][0]) == (0, 0, 2, 2)
     assert (
@@ -200,7 +198,7 @@ async def test_unrelated_checkpoint_is_not_the_requested_ranges_result(sessions)
     row, results, runner = await execute(
         sessions, Page([point(at="2026-08-22T12:00:00Z")], None), Page([point()], None)
     )
-    assert runner.incremental.client.tokens == ["old", None]
+    assert runner.incremental.source.client.tokens == ["old", None]
     assert results["heart-rate"].inserted == 2
     assert counts(row["types"][0]) == (1, 0, 0, 0)
     async with sessions() as session:
@@ -253,7 +251,7 @@ async def test_token_reset_keeps_committed_changes_and_response_archive(sessions
     row, result, runner = await execute(
         sessions, pages[0], InvalidPageTokenError("expired"), pages[1]
     )
-    assert runner.incremental.client.tokens == [None, "expired", None]
+    assert runner.incremental.source.client.tokens == [None, "expired", None]
     expected = (1, 1, 2, 0) if returns else (1, 1, 0, 2)
     assert counts(row["types"][0]) == counts(vars(result["heart-rate"])) == expected
     assert row["types"][0]["pages_committed"] == 2
@@ -286,7 +284,7 @@ async def test_expired_saved_token_counts_only_committed_restart_differences(ses
     row, result, runner = await execute(
         sessions, InvalidPageTokenError("expired"), Page([changed, new] if returns else [], None)
     )
-    assert runner.incremental.client.tokens == ["expired", None]
+    assert runner.incremental.source.client.tokens == ["expired", None]
     assert row["status"] == "completed"
     expected = (0, 0, 2, 0) if returns else (0, 0, 0, 2)
     assert counts(row["types"][0]) == counts(vars(result["heart-rate"])) == expected
@@ -347,7 +345,7 @@ async def test_cancellation_and_process_loss_remain_durable_after_restart(
     )
     task = asyncio.create_task(runner.run(1, run_id=run_id))
     try:
-        await asyncio.wait_for(waiting.wait(), 5)
+        await asyncio.wait_for(waiting.wait(), 30)
         live = await report(sessions, run_id)
         assert live["status"] == "running" and live["finished_at"] is None
         assert counts(live["types"][0]) == (1, 0, 0, 0)
@@ -399,7 +397,7 @@ async def test_report_increment_itself_cannot_commit_when_enclosing_transaction_
 async def test_budget_pause_advances_types_without_retry_or_watchdog_success(
     sessions, monkeypatch, foreign
 ):
-    from test_watchdog import _watchdog
+    from support.watchdog import _watchdog
 
     monkeypatch.setattr(pagination, "MAX_PAGES_PER_CALL", 2)
     if foreign:

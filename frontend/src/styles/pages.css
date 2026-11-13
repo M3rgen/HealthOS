@@ -1,0 +1,480 @@
+.section-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  margin: 12px 0 26px;
+  gap: 18px;
+  justify-content: flex-start;
+}
+.section-title p {
+  margin-top: 8px;
+  font-size: 0.875rem;
+  color: var(--muted);
+  letter-spacing: 0.002em;
+}
+.settings-panel {
+  min-width: 0;
+  padding: 22px 24px;
+}
+.setting-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  margin: 0;
+  padding: 14px 0;
+  border-bottom: 1px solid var(--line-soft);
+  font-size: 0.875rem;
+}
+.setting-row input {
+  accent-color: var(--amber);
+  min-height: 0;
+}
+.system-details {
+  font-size: 0.875rem;
+  margin: 12px 0 18px;
+}
+.system-details > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 20px;
+  margin: 0;
+  padding: 9px 0;
+  border-bottom: 1px solid var(--line-soft);
+}
+.system-details dt {
+  color: var(--muted);
+}
+.system-details dd {
+  margin: 0;
+  text-align: right;
+  font-weight: 550;
+  font-variant-numeric: tabular-nums;
+}
+.sync-history {
+  padding: 22px 24px;
+}
+.sync-history p,
+#input-timezone {
+  margin-top: 8px;
+}
+.page:not(#overview) {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: auto;
+  overscroll-behavior: contain;
+  margin: 0 -4px;
+  padding: 0 4px 4px;
+}
+.page:not(#overview) > * {
+  flex-shrink: 0;
+}
+.page .section-title {
+  margin: 4px 0 18px;
+}
+/* Sistem: four groups under the title. Each group scrolls inside itself and nothing scrolls
+   inside a group, so there is one scroller per column and the page itself never moves. Short or
+   narrow screens show one group at a time behind tabs (system-page.js). */
+#system > .system-panels {
+  flex: 1 1 0;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-rows: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+.system-group {
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  border-radius: var(--radius-panel, 16px);
+}
+.system-group[hidden] {
+  display: none;
+}
+.system-group > .panel {
+  flex: none;
+  margin: 0;
+}
+.system-group[data-group="status"] {
+  grid-row: 1 / 3;
+}
+.system-group[data-group="devices"],
+.system-group[data-group="sync"] {
+  grid-column: 2;
+}
+.system-group[data-group="settings"] {
+  grid-column: 3;
+  grid-row: 1 / 3;
+}
+/* Side by side, the right column ends above the assistant launcher, so at rest it covers no text. */
+.system-panels:not([data-tabbed]) > .system-group[data-group="settings"] {
+  margin-bottom: 60px;
+}
+/* The tab row keeps its height and the open group takes the rest, scrolling inside itself. */
+#system > .system-panels[data-tabbed] {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: max-content minmax(0, 1fr);
+}
+/* The gutter on the right keeps the single group clear of the launcher (phones: below). */
+.system-panels[data-tabbed] > .system-group {
+  grid-column: 1;
+  grid-row: 2;
+  padding-right: 72px;
+}
+/* The last card can scroll clear of the assistant launcher. */
+.system-group::after {
+  content: "";
+  flex: 0 0 56px;
+}
+.sync-history .table-scroll {
+  overflow: auto hidden;
+}
+/* The column is narrow on laptops: names, dates and headings wrap so Durum and Kayıt stay in view. */
+.sync-history table {
+  white-space: normal;
+}
+.sync-history :is(th, td) {
+  padding: 8px 6px;
+}
+/* Content taller than its panel scrolls inside that panel, never past its edge. */
+#measurements > .panel {
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 6px 20px 8px;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+#measurements > .panel .table-scroll {
+  flex: 1 1 0;
+  min-height: 132px;
+  overflow: auto;
+}
+.page:not(#overview) th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--surface);
+}
+.page:not(#overview) table {
+  margin-top: 0;
+}
+.settings-panel h2,
+.sync-history h2,
+.about-panel h2 {
+  letter-spacing: -0.02em;
+  font-size: 1.125rem;
+  font-weight: 620;
+}
+.section-title h1 {
+  font-size: 1.75rem;
+  font-weight: 680;
+  letter-spacing: -0.03em;
+}
+/* Sistem › Hakkında: medical scope, where the data lives, what Umay sends
+  (docs/PRIVACY.md). */
+.about-panel {
+  padding: 22px 24px;
+  flex-shrink: 0;
+}
+.about-panel h3 {
+  margin: 14px 0 4px;
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+.about-panel p {
+  max-width: 78ch;
+  color: var(--muted);
+  font-size: 0.875rem;
+  line-height: 1.5;
+}
+.setting-row select {
+  min-width: 0;
+  max-width: 62%;
+  text-overflow: ellipsis;
+}
+.settings-panel h2 + .setting-row {
+  margin-top: 10px;
+}
+.settings-panel .fine-print {
+  margin-top: 14px;
+}
+.system-details > div:last-child {
+  border-bottom: 0;
+}
+.sync-history > .fine-print {
+  margin: 4px 0 10px;
+}
+.page td[colspan] {
+  color: var(--muted);
+  text-align: center;
+  padding: 28px 12px;
+  white-space: normal;
+}
+.page:not([hidden]) {
+  animation: page-in 260ms var(--ease-out);
+}
+.measure-icon > svg,
+.cell-icon > svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+.th-icon {
+  width: 14px;
+  height: 14px;
+  margin-right: 6px;
+  vertical-align: -2px;
+  color: var(--muted);
+  opacity: 0.9;
+}
+.th-icon.steps-icon {
+  color: var(--step-icon);
+}
+.th-icon.sleep-icon {
+  color: var(--sleep-icon);
+}
+.th-icon.heart-icon {
+  color: var(--heart-icon);
+}
+.measure-icon {
+  display: inline-flex;
+  width: 14px;
+  height: 14px;
+  margin-right: 6px;
+  vertical-align: -2px;
+  color: var(--amber);
+  opacity: 0.8;
+}
+.cell-icon {
+  display: inline-flex;
+  width: 16px;
+  height: 16px;
+  margin-right: 8px;
+  vertical-align: -3px;
+  color: var(--muted);
+}
+/* No min-width: 0 here: a title wider than its share ("Measurements") moves the page's button to
+   the next line instead of running under it. */
+.section-title > div {
+  flex: 1 1 7rem;
+}
+.section-icon {
+  width: 44px;
+  height: 44px;
+  padding: 10px;
+  border-radius: 13px;
+  color: var(--amber);
+  background: var(--amber-soft);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--amber) 24%, transparent);
+}
+.google-empty {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin: 2px 0 14px;
+  padding: 8px 12px;
+  border-radius: var(--radius-control);
+  background: color-mix(in srgb, var(--amber) 5%, transparent);
+  border: 1px dashed color-mix(in srgb, var(--amber) 26%, transparent);
+  color: var(--muted);
+  font-size: 0.8125rem;
+  line-height: 1.5;
+  --art: url(/assets/empty/empty-google-disconnected.svg);
+}
+.source-guide {
+  margin: 2px 0 12px;
+  color: var(--muted);
+  font-size: 0.8125rem;
+  line-height: 1.5;
+}
+.source-guide ol {
+  margin: 4px 0 0;
+  padding-left: 18px;
+}
+.source-guide li + li {
+  margin-top: 6px;
+}
+.source-guide strong {
+  color: var(--text);
+}
+.google-empty .empty-illustration {
+  width: 72px;
+  height: 54px;
+}
+.google-empty[hidden] {
+  display: none;
+}
+@media (max-width: bp(w540)) {
+  .section-title {
+    align-items: flex-start;
+    gap: 12px;
+  }
+  .section-title p {
+    font-size: 0.75rem;
+  }
+  .section-title .button {
+    font-size: 0.75rem;
+    padding: 8px 10px;
+  }
+  .section-icon {
+    width: 36px;
+    height: 36px;
+    padding: 8px;
+    border-radius: 11px;
+    margin-top: 2px;
+  }
+}
+@media (max-width: bp(w360)) {
+  .section-icon {
+    display: none;
+  }
+}
+#measurement-dialog .dialog-heading h2 {
+  font-size: 1.25rem;
+}
+#measurement-dialog .icon-button {
+  width: 36px;
+  height: 36px;
+}
+/* Short screens: the title row stays and the helper text gives way to the content. */
+@media (max-height: 35em) {
+  .page .section-title {
+    margin: 0 0 6px;
+  }
+  .page:not(#overview) > .section-title p {
+    display: none;
+  }
+  .section-icon {
+    width: 32px;
+    height: 32px;
+    padding: 6px;
+  }
+  #measurements > .panel {
+    min-height: 0;
+  }
+  #measurements > .panel .table-scroll {
+    min-height: 4.5rem;
+  }
+}
+/* Empty and error states (page-states.js): a next step instead of a bare table. */
+.page-state {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 14px;
+  flex-shrink: 0;
+  padding: 10px 14px;
+  border-radius: var(--radius-control);
+  background: color-mix(in srgb, var(--amber) 5%, var(--surface));
+  border: 1px dashed color-mix(in srgb, var(--amber) 26%, transparent);
+  color: var(--muted);
+  font-size: 0.8125rem;
+  line-height: 1.5;
+  --art: url(/assets/empty/empty-no-data.svg);
+}
+.page-state[data-state="error"] {
+  border-color: color-mix(in srgb, var(--heart-icon) 40%, transparent);
+  background: color-mix(in srgb, var(--heart-icon) 7%, var(--surface));
+  --art: url(/assets/empty/empty-google-disconnected.svg);
+}
+.page-state .empty-illustration {
+  width: 72px;
+  height: 54px;
+}
+.page-state-text {
+  flex: 1 1 12rem;
+  min-width: 0;
+  overflow-wrap: break-word;
+}
+.page-state strong {
+  display: block;
+  color: var(--text);
+  font-size: 0.9375rem;
+}
+.page-state .button {
+  flex: none;
+}
+main:has(#overview[hidden]) > #overview-state {
+  display: none;
+}
+#measurements[data-state-open] .table-scroll {
+  display: none;
+}
+#measurements-state {
+  margin: 10px 0;
+}
+/* One retry per failure: while the notice is up with its retry and its words, the state block
+   leaves out its own button, picture and explanation and stays one line, so the failure does not
+   take the height the page needs. */
+main:has(> #notice:not([hidden]) .notice-action:not([hidden]))
+  .page-state[data-state="error"]
+  :is(.button, .empty-illustration, p) {
+  display: none;
+}
+/* Phones: the assistant launcher floats over the page's bottom-right corner; on the measurement
+   table and the Sistem groups it gets a gutter of its own so it never sits on a value. */
+@media (max-width: bp(w760)) {
+  #measurements:not([hidden]),
+  #system:not([hidden]) {
+    padding-bottom: 68px;
+  }
+  .system-panels[data-tabbed] > .system-group {
+    padding-right: 0;
+  }
+}
+@media (max-width: bp(w540)) {
+  .page-state .empty-illustration {
+    display: none;
+  }
+}
+@media (max-height: 30em) {
+  .page-state p,
+  .page-state .empty-illustration {
+    display: none;
+  }
+  .page-state {
+    padding: 0 10px;
+    line-height: 1.25;
+  }
+  /* Too short for a heading row: the highlighted menu item names the page, the heading stays for
+     screen readers, and the page's button keeps its place. */
+  .page > .section-title > div {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+  }
+  .page > .section-title > .section-icon {
+    display: none;
+  }
+  .page > .section-title {
+    justify-content: flex-end;
+    padding: 0;
+  }
+  #measurements:not([hidden]),
+  #system:not([hidden]) {
+    padding-bottom: 0;
+  }
+}
+/* A notice (or a very large browser font on a very short screen) leaves no room for the state
+   line; the notice and the page below it still say what to do. */
+@media (max-height: 14em) {
+  #overview-state,
+  #history-panel .history-heading p {
+    display: none;
+  }
+}

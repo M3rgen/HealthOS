@@ -2,11 +2,13 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.api.sync import _serialize
 from app.core.config import Settings
 from app.google_health.client import GoogleHealthError, InvalidPageTokenError
 from app.google_health.data_types import REGISTRY
+from app.google_health.errors import GoogleHealthErrorCode
 from app.models.state import JobStatus, SyncState
+from app.services.providers.ingestion import GoogleSource
+from app.services.synchronization.sync_status import _serialize
 from app.sync.errors import error_summary
 from app.sync.incremental import IncrementalSync
 
@@ -15,15 +17,22 @@ from app.sync.incremental import IncrementalSync
     ("error", "summary"),
     [
         (
-            GoogleHealthError("Google Health API returned HTTP 403: PERMISSION_DENIED"),
+            GoogleHealthError(
+                "Google Health API returned HTTP 403: PERMISSION_DENIED", http_status=403
+            ),
             "GoogleHealthError (http_403)",
         ),
         (
-            GoogleHealthError("Google Health API request failed after retries (HTTP 503)"),
+            GoogleHealthError(
+                "Google Health API request failed after retries (HTTP 503)", http_status=503
+            ),
             "GoogleHealthError (http_503)",
         ),
         (
-            GoogleHealthError("Google Health API connection failed after retries"),
+            GoogleHealthError(
+                "Google Health API connection failed after retries",
+                code=GoogleHealthErrorCode.CONNECTION,
+            ),
             "GoogleHealthError (connection)",
         ),
         (
@@ -40,9 +49,13 @@ def test_error_summary_is_class_name_and_short_code(error, summary):
 async def test_sync_status_exposes_error_summary_not_exception_text(sessions):
     class RejectingClient:
         async def list_data_points(self, spec, start, end, page_token=None):
-            raise GoogleHealthError("Google Health API returned HTTP 403: detail from upstream")
+            raise GoogleHealthError(
+                "Google Health API returned HTTP 403: detail from upstream", http_status=403
+            )
 
-    service = IncrementalSync(Settings(), sessions, RejectingClient(), {"steps": REGISTRY["steps"]})
+    service = IncrementalSync(
+        Settings(), sessions, GoogleSource(RejectingClient()), {"steps": REGISTRY["steps"]}
+    )
     with pytest.raises(GoogleHealthError):
         await service.run("steps")
     async with sessions() as session:
@@ -74,7 +87,9 @@ async def test_receipt_start_failure_fails_the_sync_state(sessions, monkeypatch)
         AsyncMock(side_effect=OperationalError("INSERT", {}, Exception("synthetic"))),
     )
     monkeypatch.setattr(incremental.ReceiptWriter, "failure", failure)
-    service = IncrementalSync(Settings(), sessions, CountingClient(), {"steps": REGISTRY["steps"]})
+    service = IncrementalSync(
+        Settings(), sessions, GoogleSource(CountingClient()), {"steps": REGISTRY["steps"]}
+    )
 
     with pytest.raises(OperationalError):
         await service.run("steps")

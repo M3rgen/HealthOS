@@ -13,8 +13,9 @@ from sqlalchemy import text, update
 
 from app.google_health.data_types import REGISTRY
 from app.models.state import RawHealthData
-from app.services.dashboard import dashboard_data
-from app.services.storage import store_records
+from app.services.archive.storage import store_records
+from app.services.dashboard_views.dashboard import dashboard_data
+from app.services.readers.dashboard_queries import DashboardQuery
 
 pytestmark = pytest.mark.integration
 
@@ -80,17 +81,17 @@ async def test_local_midnight_and_source_deleted_exclusion(pg_sessions) -> None:
 
     async with pg_sessions() as session:
         assert await session.scalar(text("SHOW TimeZone")) == "America/Los_Angeles"
-        default = await dashboard_data(session, date(2026, 8, 2), 2, ZONE)
+        default = await dashboard_data(session, query=DashboardQuery(date(2026, 8, 2), 2, ZONE))
         with_deleted = await dashboard_data(
-            session, date(2026, 8, 2), 2, ZONE, include_source_deleted=True
+            session,
+            include_source_deleted=True,
+            query=DashboardQuery(date(2026, 8, 2), 2, ZONE),
         )
         valid_only = await dashboard_data(
             session,
-            date(2026, 8, 2),
-            2,
-            ZONE,
             valid_sources_only=True,
             include_source_deleted=True,
+            query=DashboardQuery(date(2026, 8, 2), 2, ZONE),
         )
 
     aug_2, aug_1 = default["days"]

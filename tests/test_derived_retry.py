@@ -11,11 +11,12 @@ from derived_records import DAY, cache, fail_derived_range, manual, read, snapsh
 from sqlalchemy import select, update
 from sqlalchemy.exc import DataError, OperationalError
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from support.invalidation import drain_invalidations
 
 from app.cli import derived_retry
 from app.db.base import Base
 from app.models.derived import DerivedDay
-from app.services import derived
+from app.services.interpretation import derived
 
 
 async def derived_snapshot(sessions):
@@ -38,7 +39,19 @@ async def test_real_module_recovers_once_and_preserves_all_source_tables(tmp_pat
         async with sessions() as session:
             before = await snapshot(session)
         env = os.environ | {"DATABASE_URL": url}
-        command = [sys.executable, "-m", "app.cli.derived_retry", str(DAY), str(DAY), "UTC"]
+        # A fresh interpreter opts in to SQLite just like conftest does in this process.
+        command = [
+            sys.executable,
+            "-c",
+            (
+                "import sys, runpy; sys.path.insert(0, 'tests'); "
+                "from support.sqlite_database import install; install(); "
+                "runpy.run_module('app.cli.derived_retry', run_name='__main__')"
+            ),
+            str(DAY),
+            str(DAY),
+            "UTC",
+        ]
         cached = await derived_snapshot(sessions)
         preview = await asyncio.to_thread(
             subprocess.run,
@@ -167,10 +180,11 @@ async def test_source_revision_changed_during_retry_stays_pending(sessions, monk
 
     async def mutate(session, day, timezone):
         from app.google_health.data_types import REGISTRY
-        from app.services.storage import store_records
+        from app.services.archive.storage import store_records
 
         result = await original(session, day, timezone)
         await store_records(session, REGISTRY["steps"], [steps(count=999)])
+        await drain_invalidations(session)
         return result
 
     with monkeypatch.context() as patch:

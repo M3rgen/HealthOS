@@ -3,16 +3,16 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "personal-health-mirror"
-version = "0.2.2"
-description = "Self-hosted, raw-first Google Health API archive"
+name = "healthos"
+version = "0.2.2.1"
+description = "Self-hosted, raw-first archive of your own health data"
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.12,<3.14"
 dependencies = [
   "alembic>=1.15,<2",
   "apscheduler>=3.11,<4",
   "asyncpg>=0.30,<1",
-  "cryptography>=44,<47",
+  "cryptography>=44,<51",
   "fastapi>=0.115,<1",
   "greenlet>=3.1,<4",
   "httpx>=0.28,<1",
@@ -29,14 +29,18 @@ dependencies = [
 dev = [
   "aiosqlite>=0.21,<1",
   "pytest>=8.3,<9",
+  "pytest-cov>=7,<8",
+  "pytest-timeout>=2.4,<3",
+  "pytest-xdist>=3.8,<4",
   "pyright[nodejs]>=1.1.414,<1.2",
   "pytest-asyncio>=0.25,<1",
   "respx>=0.22,<1",
   "ruff>=0.11,<1",
+  "time-machine==2.16.0",
 ]
 
 [project.scripts]
-health-mirror = "app.cli.main:app"
+healthos = "app.cli.main:app"
 
 [tool.hatch.build.targets.wheel]
 packages = ["app"]
@@ -45,24 +49,51 @@ packages = ["app"]
 asyncio_mode = "auto"
 testpaths = ["tests"]
 pythonpath = ["."]
+filterwarnings = ["error:app.services.*is deprecated:DeprecationWarning"]
+# A hang must fail fast rather than stall a run (one lost lock waited 15+ minutes). One per-test
+# budget, far above the slowest test on a loaded machine; "signal" so the worker stays up and the
+# rest of the run still reports.
+timeout = 60
+timeout_method = "signal"
 markers = [
   "integration: needs DATABASE_URL pointing at PostgreSQL; skipped otherwise (tests/integration)",
 ]
+
+[tool.coverage.run]
+source = ["app"]
+branch = true
+# One data file per xdist worker, combined by pytest-cov.
+parallel = true
+
+[tool.coverage.report]
+# Unit suite (make coverage): measured 93.7 % lines+branches on 7 Nov 2026; the floor is that
+# baseline minus one point (IP-6). Raise it step by step, never lower it.
+fail_under = 92.6
+show_missing = false
+skip_covered = true
 
 [tool.ruff]
 line-length = 100
 target-version = "py312"
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "UP", "B", "ASYNC"]
+select = ["E", "F", "I", "UP", "B", "ASYNC", "C901"]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 16
+
+[tool.ruff.lint.isort]
+known-first-party = ["app"]
 
 [tool.ruff.lint.flake8-bugbear]
 extend-immutable-calls = ["fastapi.Depends", "fastapi.Header", "fastapi.Query"]
 
 [tool.pyright]
+venvPath = "."
+venv = ".venv"
 include = ["app"]
 pythonVersion = "3.12"
-typeCheckingMode = "basic"
+typeCheckingMode = "standard"
 
 [tool.uv]
-required-version = ">=0.12.1,<0.13"
+required-version = ">=0.13.6,<0.14"

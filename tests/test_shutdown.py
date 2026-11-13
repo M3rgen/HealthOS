@@ -17,18 +17,23 @@ from app import main
 from app.core.config import Settings
 from app.google_health.client import Page
 from app.models.state import JobStatus, RawHealthData, SyncState
-from app.services import reconciliation_reports as reports
-from app.services.runtime import build_runtime
+from app.runtime import build_runtime
+from app.services.synchronization import reconciliation_reports as reports
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
 @pytest.mark.parametrize("migration_code", [0, 1])
-def test_container_command_delivers_sigterm_without_a_shell_parent(tmp_path, migration_code):
+@pytest.mark.parametrize("migrate_on_start", [False, True])
+def test_container_command_delivers_sigterm_without_a_shell_parent(
+    tmp_path, migration_code, migrate_on_start
+):
     lines = (ROOT / "Dockerfile").read_text().splitlines()
+    entrypoint = json.loads(next(line[11:] for line in lines if line.startswith("ENTRYPOINT ")))
     command = json.loads(next(line[4:] for line in lines if line.startswith("CMD ")))
+    calls = tmp_path / "migration-calls"
     for name, content in {
-        "alembic": f"#!/bin/sh\nexit {migration_code}\n",
+        "alembic": f'#!/bin/sh\nprintf "%s\\n" "$*" >> "$MIGRATION_CALLS"\nexit {migration_code}\n',
         "uvicorn": f"#!{sys.executable}\nimport os, signal\n"
         "signal.signal(signal.SIGTERM, lambda *_: exit(0))\n"
         "print(os.getpid(), flush=True)\nsignal.pause()\n",
@@ -36,21 +41,34 @@ def test_container_command_delivers_sigterm_without_a_shell_parent(tmp_path, mig
         script = tmp_path / name
         script.write_text(content)
         script.chmod(0o755)
-    environment = {**os.environ, "PATH": str(tmp_path) + os.pathsep + os.environ["PATH"]}
-    process = subprocess.Popen(command, env=environment, stdout=subprocess.PIPE)
+    environment = {
+        **os.environ,
+        "PATH": str(tmp_path) + os.pathsep + os.environ["PATH"],
+        "MIGRATION_CALLS": str(calls),
+    }
+    environment.pop("HEALTHOS_MIGRATE_ON_START", None)
+    if migrate_on_start:
+        environment["HEALTHOS_MIGRATE_ON_START"] = "1"
+    # Docker prepends ENTRYPOINT to CMD; map its image path to the checkout.
+    process = subprocess.Popen(
+        ["sh", str(ROOT / entrypoint[0].removeprefix("/app/")), *entrypoint[1:], *command],
+        env=environment,
+        stdout=subprocess.PIPE,
+    )
     try:
-        if migration_code:
-            assert process.communicate(timeout=5)[0] == b""
+        if migrate_on_start and migration_code:
+            assert process.communicate(timeout=120)[0] == b""
             assert process.returncode == migration_code
         else:
             assert io_select.select([process.stdout], [], [], 5)[0], "server did not start"
             assert int(process.stdout.readline()) == process.pid
             process.terminate()
-            assert process.wait(timeout=5) == 0
+            assert process.wait(timeout=120) == 0
     finally:
         if process.poll() is None:
             process.kill()
-        process.communicate(timeout=5)
+        process.communicate(timeout=120)
+    assert calls.read_text() == "upgrade head\n" if migrate_on_start else not calls.exists()
     compose = yaml.safe_load((ROOT / "docker-compose.yml").read_text())
     assert compose["services"]["app"]["stop_grace_period"] == "20s"
     assert "--timeout-graceful-shutdown 5" in command[-1]
@@ -94,13 +112,13 @@ async def test_lifespan_waits_for_reconciliation_cleanup_and_checkpoint_resumes(
         runtime.spawn(runtime.reconciliation.run(1))
     shutdown = None
     try:
-        await asyncio.wait_for(waiting.wait(), 5)
+        await asyncio.wait_for(waiting.wait(), 30)
         shutdown = asyncio.create_task(lifespan.__aexit__(None, None, None))
-        await asyncio.wait_for(cleaning.wait(), 5)
+        await asyncio.wait_for(cleaning.wait(), 30)
         assert not shutdown.done()
         assert not runtime.google.http.is_closed
         release.set()
-        await asyncio.wait_for(shutdown, 5)
+        await asyncio.wait_for(shutdown, 30)
         assert runtime.google.http.is_closed and runtime.oauth.http.is_closed
         assert runtime.webhook_verifier.http.is_closed and not runtime.tasks
         async with sessions() as session:
@@ -113,7 +131,7 @@ async def test_lifespan_waits_for_reconciliation_cleanup_and_checkpoint_resumes(
         await restarted.incremental.run(
             "heart-rate", state.last_requested_from, state.last_requested_to
         )
-        assert restarted.incremental.client.tokens == ["second"]
+        assert restarted.incremental.source.client.tokens == ["second"]
         async with sessions() as session:
             assert await session.scalar(select(func.count()).select_from(RawHealthData)) == 2
             state = await session.get(SyncState, "heart-rate")

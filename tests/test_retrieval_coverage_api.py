@@ -2,37 +2,26 @@
 
 import uuid
 from datetime import UTC, date, datetime, timedelta
-from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
-import httpx
 import pytest
 from coverage_records import assert_sources
 from coverage_records import source_archive as source_archive
 from retrieval_records import END, START, Client, Runner, point
 from sqlalchemy import Text, cast, func, insert, select
+from support.coverage_fixtures import PATH, QUERY, fetch
+from support.coverage_fixtures import api as api
 from weight_records import INVALID_FIELDS
 
-from app import main
-from app.core.config import Settings
-from app.db.session import get_session
 from app.google_health.client import Page
 from app.google_health.data_types import CIVIL_AFTER, CIVIL_BEFORE, REGISTRY
 from app.models.health import HeartRate
 from app.models.retrieval import RetrievalEvent as Event
 from app.models.retrieval import RetrievalReceipt as Receipt
 from app.models.state import BackfillJob, JobStatus, SyncState
-from app.services import retrieval_coverage
-from app.services.storage import store_records
-
-QUERY = {
-    "start_date": "2026-09-01",
-    "end_date": "2026-09-01",
-    "timezone": "UTC",
-    "data_type": "heart-rate",
-}
-PATH = "/api/sync/coverage"
-AUTH = {"Authorization": "Bearer synthetic-coverage-test-authentication"}
+from app.services.archive.storage import store_records
+from app.services.readers.dashboard_queries import DashboardQuery
+from app.services.synchronization import retrieval_coverage
 
 
 @pytest.mark.parametrize("kind", ["steps", "daily-resting-heart-rate", "heart-rate"])
@@ -45,33 +34,11 @@ async def test_source_labels_preserve_stored_measurements(api, source_archive, k
     assert_sources(report["source_regimes"], source_archive)
 
 
-@pytest.fixture
-async def api(sessions, monkeypatch):
-    settings = Settings(_env_file=None, app_env="test", app_ui_token=AUTH["Authorization"][7:])
-    monkeypatch.setattr(main, "get_settings", lambda: settings)
-    monkeypatch.setattr(main, "build_runtime", lambda *_: SimpleNamespace())
-    app = main.create_app()
-
-    async def session():
-        async with sessions() as session:
-            yield session
-
-    app.dependency_overrides[get_session] = session
-    async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app), base_url="http://localhost", headers=AUTH
-    ) as client:
-        yield client
-
-
 async def day(api, **overrides):
     response = await api.get(PATH, params=QUERY | overrides)
     assert response.status_code == 200, response.text
     assert len(response.content) <= 12 * 1024
     return response.json()["types"][0]["days"][0]
-
-
-async def fetch(sessions, start=START, end=END, kind="heart-rate", points=()):
-    await Runner(sessions, "sync", kind, start, end).run(Client(Page(list(points), None)))
 
 
 async def test_legacy_records_and_successful_job_state_are_not_retrieval_evidence(api, sessions):
@@ -151,7 +118,7 @@ async def test_local_day_uses_23_and_25_hour_bounds(api, sessions, date_string, 
 
     monkeypatch.setattr(retrieval_coverage, "datetime", Later)
     # Receipt timestamps must also be after the requested window, for the autumn day.
-    from app.services import retrieval
+    from app.services.synchronization import retrieval
 
     monkeypatch.setattr(retrieval, "datetime", Later)
     local = datetime.combine(
@@ -249,7 +216,7 @@ async def test_no_time_filter_reports_the_limit(api, sessions):
 
 
 async def test_today_and_future_range_never_turn_into_closed_day_proof(api, sessions, monkeypatch):
-    from app.services import retrieval
+    from app.services.synchronization import retrieval
 
     now = datetime(2026, 9, 1, 12, tzinfo=UTC)
 
@@ -330,10 +297,21 @@ async def test_read_and_response_budgets_refuse_without_truncating(
     api, sessions, monkeypatch, limit, code
 ):
     await fetch(sessions, points=[point()])
+    original = retrieval_coverage.evidence
+    reads = 0
+
+    async def tracked(*args):
+        nonlocal reads
+        reads += 1
+        return await original(*args)
+
+    monkeypatch.setattr(retrieval_coverage, "evidence", tracked)
     monkeypatch.setattr(retrieval_coverage, limit, 0)
-    response = await api.get(PATH, params=QUERY)
+    response = await api.get(PATH, params=QUERY | {"end_date": "2026-09-20"})
     assert response.status_code == 413
     assert response.json()["detail"]["code"] == code
+    # Presence/response limits never enter the evidence retry path.
+    assert reads == (1 if limit in {"MAX_RECORDS", "COVERAGE_BUDGET_BYTES"} else 6)
 
 
 @pytest.mark.parametrize("count", [2, 1100])
@@ -380,7 +358,7 @@ async def test_missing_receipt_migration_is_reported_by_archive_verification(tmp
     from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
     from app.core.config import get_settings
-    from app.services.raw_history import verify_guards
+    from app.services.archive.raw_history_verification import verify_guards
 
     database = tmp_path / "old-schema.db"
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{database}")
@@ -404,7 +382,7 @@ async def test_missing_receipt_migration_is_reported_by_archive_verification(tmp
 async def test_first_page_snapshot_cannot_cover_future_time_by_finishing_later(
     api, sessions, monkeypatch, kind, resume
 ):
-    from app.services import retrieval
+    from app.services.synchronization import retrieval
 
     now = START + timedelta(hours=12)
 
@@ -511,7 +489,7 @@ async def test_weight_exclusions_use_current_source_date(api, sessions, flag, lo
     from weight_records import correction, weight
 
     from app.models.health import Weight
-    from app.models.identity import RawHealthDataSupersession
+    from app.models.identity_tables import RawHealthDataSupersession
     from app.models.state import RawHealthData as Raw
 
     await store(sessions, "weight", weight(at=START))
@@ -568,9 +546,11 @@ async def test_weight_exclusions_use_current_source_date(api, sessions, flag, lo
         assert report["days"][0]["has_value"] == (flag == "superseded" and day_text == "2026-09-01")
     await store(sessions, "weight", weight(grams=74000, at=END))
     async with sessions() as session:
-        from app.services.dashboard import dashboard_data
+        from app.services.dashboard_views.dashboard import dashboard_data
 
-        profile = (await dashboard_data(session, END.date(), 1, "UTC"))["profile"]
+        profile = (await dashboard_data(session, query=DashboardQuery(END.date(), 1, "UTC")))[
+            "profile"
+        ]
     assert profile.get("weight", {}).get("value") == {
         "superseded": 70,
         "orphan": 74,

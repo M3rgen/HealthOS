@@ -25,16 +25,18 @@ from identity_records import (
 )
 from sqlalchemy import func, insert, select, text
 from sqlalchemy.exc import DBAPIError
+from support.waits import blocked_on_a_lock, blocked_or_done
 
-from app.models.identity import RawHealthDataIdentity
+from app.models.identity_tables import RawHealthDataIdentity
 from app.models.state import RawHealthData
 from app.parsers.common import payload_hash, source_id, temporal
-from app.services import identity_backfill as reconciler
-from app.services.identity import verify_identities
-from app.services.identity_backfill import identity_backfill
-from app.services.raw_history import verify_guards
-from app.services.source_chains import lock_data_type
-from app.services.storage import store_records
+from app.services.archive.raw_history_verification import verify_guards
+from app.services.archive.storage import store_records
+from app.services.identities import identity_backfill as reconciler
+from app.services.identities.identity_backfill import identity_backfill
+from app.services.identities.identity_options import BackfillOptions
+from app.services.identities.identity_verification import verify_identities
+from app.services.identities.source_chain_locks import lock_data_type
 
 pytestmark = pytest.mark.integration
 
@@ -61,8 +63,9 @@ async def test_concurrent_new_records_of_two_devices_never_share_a_row(pg_sessio
     async with pg_sessions.begin() as first:
         await store_records(first, HEART, [heart(60)])
         second = asyncio.create_task(store(pg_sessions, HEART, heart(90, name=WATCH)))
-        await asyncio.sleep(0.3)
-    await asyncio.wait_for(second, 10)
+        # It may wait for the first writer or go ahead (another device's row): both are fine.
+        await blocked_or_done(pg_sessions, second)
+    await asyncio.wait_for(second, 30)
     rows = await raw_rows(pg_sessions, HEART)
     assert sorted(name_of(row) for row in rows) == ["Example Band Pro", WATCH]
     assert all(row.google_data_point_id.startswith("synthetic:v2s:") for row in rows)
@@ -76,9 +79,9 @@ async def test_a_concurrent_writer_of_the_same_record_re_resolves(pg_sessions) -
     async with pg_sessions.begin() as first:
         await store_records(first, HEART, [heart(60)])
         second = asyncio.create_task(store(pg_sessions, HEART, heart(61)))
-        await asyncio.sleep(0.3)
-        assert not second.done()  # waits for the first writer's new row
-    stats = await asyncio.wait_for(second, 10)
+        await blocked_on_a_lock(pg_sessions, second)  # waits for the first writer's new row
+        assert not second.done()
+    stats = await asyncio.wait_for(second, 30)
     [row] = await raw_rows(pg_sessions, HEART)
     assert (stats.inserted, stats.updated, stats.versions_kept) == (0, 1, 1)
     assert [v["heartRate"]["beatsPerMinute"] for v in await versions_of(pg_sessions, row.id)] == [
@@ -91,7 +94,7 @@ async def test_a_row_changed_after_resolution_is_resolved_again(
 ) -> None:
     """The rows a page writes onto are locked and checked against what was resolved; one
     changed meanwhile makes the page resolve again (never a write on a stale decision)."""
-    from app.services import storage
+    from app.services.archive import storage
 
     await store(pg_sessions, HEART, heart(60))
     [row] = await raw_rows(pg_sessions, HEART)
@@ -112,8 +115,8 @@ async def test_a_row_changed_after_resolution_is_resolved_again(
 
     monkeypatch.setattr(storage, "_lock_rows", meanwhile)
     # The migration's fileConfig disables existing loggers while the database is set up.
-    monkeypatch.setattr(logging.getLogger("app.services.storage"), "disabled", False)
-    with caplog.at_level(logging.INFO, logger="app.services.storage"):
+    monkeypatch.setattr(logging.getLogger(storage.__name__), "disabled", False)
+    with caplog.at_level(logging.INFO, logger=storage.__name__):
         stats = await store(pg_sessions, HEART, heart(60))
     assert len(calls) == 2 and stats.updated == 1
     assert any(record.message == "RECORD_BATCH_RESOLVED_AGAIN" for record in caplog.records)
@@ -144,7 +147,7 @@ async def test_aliases_of_a_large_batch_stay_under_the_parameter_limit(pg_sessio
         )
     async with pg_sessions.begin() as session:
         await session.execute(insert(RawHealthData), rows)
-    report = await identity_backfill(pg_sessions, batch_size=10_000)
+    report = await identity_backfill(pg_sessions, options=BackfillOptions(batch_size=10000))
     assert report["steps"].aliases_added == 9_000
     async with pg_sessions() as session:
         aliases = await session.scalar(select(func.count()).select_from(RawHealthDataIdentity))
@@ -171,7 +174,7 @@ async def test_a_busy_lock_backs_off_and_gives_up_clearly(pg_sessions, monkeypat
         assert "could not get the identity lock" in (report["heart-rate"].error or "")
         assert report["steps"].error is None and report["steps"].rows == 1
         # The batch backed off: writers of the data type go ahead.
-        await asyncio.wait_for(store(pg_sessions, HEART, heart(61, at=T0 + HOUR)), 5)
+        await asyncio.wait_for(store(pg_sessions, HEART, heart(61, at=T0 + HOUR)), 30)
     assert pauses == [2, 4, 8]
     report = await identity_backfill(pg_sessions, data_types=["heart-rate"])
     assert report["heart-rate"].rows == 2

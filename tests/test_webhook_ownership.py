@@ -5,16 +5,16 @@ from contextlib import AsyncExitStack, asynccontextmanager
 from types import SimpleNamespace
 
 import pytest
-import test_sync_ownership as sqlite
 from retrieval_records import START, Client, point
+from support.ownership import contention as contention
+from support.ownership import independent as independent
+from support.ownership import sessions as sessions
 from sync_ownership_records import PausedClient
 from webhook_ownership_records import age, ingest, processor, snapshot
 
 from app.google_health.client import Page
-from app.services import webhook_processing
+from app.sync import webhook_processing
 from app.sync.ownership import NOTIFICATION_NAMESPACE, OwnershipLost, run_ownership
-
-sessions, independent, contention = sqlite.sessions, sqlite.independent, sqlite.contention
 
 
 @pytest.fixture(params=["google", "type", "gap"])
@@ -55,7 +55,7 @@ async def paused(request, sessions, independent, contention):
 
     task = asyncio.create_task(first.process_batch(batch))
     try:
-        await asyncio.wait_for(entered.wait(), 5)
+        await asyncio.wait_for(entered.wait(), 30)
         yield SimpleNamespace(
             second=second,
             task=task,
@@ -77,22 +77,22 @@ async def test_live_owner_survives_recovery_replay_and_redelivery(paused, sessio
     assert await p.second.recover_running() == 0
     assert (await p.second.process_pending()).completed_elements == 0
     assert await snapshot(sessions) == before
-    assert not p.second.incremental.client.tokens
+    assert not p.second.incremental.source.client.tokens
     # Another notification progresses even in the gap where it needs the SAME type.
     other = processor(p.second.sessions, Client(Page([], None)))
     batch, _ = await ingest(
         other, kind="heart-rate" if p.phase == "gap" else "steps", start=START.replace(day=3)
     )
-    assert (await asyncio.wait_for(other.process_batch(batch), 5)).completed_elements == 1
+    assert (await asyncio.wait_for(other.process_batch(batch), 30)).completed_elements == 1
     await p.release()
-    assert (await asyncio.wait_for(p.task, 10)).completed_elements == 1
+    assert (await asyncio.wait_for(p.task, 30)).completed_elements == 1
     final = await snapshot(sessions)
     row = next(r for r in final["webhook_notifications"] if r["element_hash"] == p.digest)
     windows = 2 if p.phase == "gap" else 1
     assert row["status"] == "completed" and row["attempt_count"] == 1
     assert (row["sync_attempt_count"], row["sync_success_count"]) == (windows, windows)
     await p.second.process_batch(p.batch)
-    assert not p.second.incremental.client.tokens
+    assert not p.second.incremental.source.client.tokens
     for table in ("webhook_batch_items", "raw_health_data_versions", "retrieval_events"):
         assert all(row in final[table] for row in before[table])
     raw_before = before["webhook_events"][0]
@@ -118,7 +118,7 @@ async def test_cancelled_owner_is_recovered_and_retried(paused, sessions):
     row = final["webhook_notifications"][0]
     assert row["status"] == "completed" and row["attempt_count"] == 2
     assert row["last_error"] is None and row["processed_at"] is not None
-    assert len(p.second.incremental.client.tokens) == (2 if p.phase == "gap" else 1)
+    assert len(p.second.incremental.source.client.tokens) == (2 if p.phase == "gap" else 1)
     for table in ("raw_health_data_versions", "retrieval_events", "webhook_status_events"):
         assert all(row in final[table] for row in before[table])
     assert [r["reason"] for r in final["webhook_status_events"]] == [
@@ -163,7 +163,7 @@ async def test_lost_owner_cannot_overwrite_replacement(sessions, independent, mo
     batch, _ = await ingest(first)
     task = asyncio.create_task(first.process_batch(batch))
     try:
-        await asyncio.wait_for(entered.wait(), 5)
+        await asyncio.wait_for(entered.wait(), 30)
         lost = True
         await age(sessions)
         assert await second.recover_running() == 1

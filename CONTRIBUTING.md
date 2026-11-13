@@ -16,8 +16,9 @@ Every change keeps these rules; a pull request that breaks one is not merged.
    passes only `POST /webhooks/google-health`.
 4. **No new external services.** No new SaaS, telemetry, or CDN. Umay, the assistant, sends the
    records it is asked to analyze to OpenAI and keeps no persistent memory; both stay documented.
-   The one other external endpoint is the optional, read-only Garmin Connect Personal API pull
-   (`GARMIN_ENABLED`, off by default; see [docs/REFERENCE.md](docs/REFERENCE.md#garmin-connect-personal-api)).
+   The one other external endpoint, approved by the maintainer (see the [changelog](CHANGELOG.md)), is the
+   optional, read-only Garmin Connect Personal API pull
+   (`HEALTHOS_SOURCES=garmin`, off until selected; see [docs/reference/garmin.md](docs/reference/garmin.md#garmin-connect-personal-api)).
 5. **No secrets or personal data** in commits, issues, or screenshots (see
    [Commit hygiene](#commit-hygiene) and [Use synthetic examples](#use-synthetic-examples)).
 6. **Natural Turkish interface text.** Write "Eşitleme", not "Senkronizasyon". The assistant is
@@ -27,7 +28,7 @@ Every change keeps these rules; a pull request that breaks one is not merged.
 
 ## Make a change
 
-1. Fork the repository and create a branch.
+1. Fork the repository and create a feature branch in your fork.
 2. Follow the [development setup](docs/DEVELOPMENT.md).
 3. Make the smallest change that solves the problem and add relevant verification.
 4. Run the checks below. Build the frontend for UI changes.
@@ -36,12 +37,14 @@ Every change keeps these rules; a pull request that breaks one is not merged.
 ## Checks
 
 ```sh
-make verify          # ruff check + format check, configuration and documentation-link verifier, pytest, pyright
-make test-browser    # browser checks: cd frontend && npm run test:browser
-cd frontend && npx vite build && cd ..   # frontend build check for interface changes
+make verify          # ruff check + format check, configuration and documentation-link verifier, pytest -n auto, pyright
+make test-browser    # type check, unit, build-budget and browser checks: cd frontend && npm run test:browser
+cd frontend && npm run lint && npx vite build && cd ..   # ESLint + checkJs, then the build, for interface changes
 ```
 
-`make verify` is what CI runs, using `uv run --frozen --extra dev`. It needs no database or network.
+`make verify` runs the lint, unit-test, configuration and type checks that CI also runs, with `uv run --frozen --extra dev`. It needs no database or network. Run `make test-postgres DATABASE_URL=postgresql+asyncpg://...` against a disposable server when you change SQL, migrations or locking; it fails, rather than skips, without one. [Development](docs/DEVELOPMENT.md#validation) lists every gate, including `make coverage-security`, `make test-clock` and what CI runs.
+
+Limits a change must stay within: every test finishes in 60 seconds (`pytest-timeout`); Pyright `standard` on `app/`; Ruff `C901` complexity at most 16; the function-length, import-cycle and private-import tests in `tests/`.
 The browser checks in `tests/browser` use Playwright with synthetic fixtures; install Chromium once
 with `cd frontend && npx playwright install chromium`. Run them for every interface change, at
 desktop and mobile sizes. `make compose-smoke` exercises the full Docker stack in an isolated
@@ -61,11 +64,14 @@ git diff --cached | grep -iE "192\.168|10\.[0-9]+\.[0-9]+\.[0-9]+|/Users/|/home/
 ```
 
 The command must print nothing. Add your own user name, hostnames, and e-mail address to the pattern.
-Use placeholders such as `<vm-host>`, `example.com`, and `/opt/healthos` in documentation.
+Use placeholders such as `<server-host>`, `example.com`, and `/opt/healthos` in documentation.
 
 ## Interface requirements
 
 The dashboard must fit the viewport without horizontal or vertical page scrolling. Check desktop and mobile layouts. Long content may scroll inside its panel; hiding inaccessible content is not a fix. The history panel must follow a drag and retain its released height.
+
+The minimums in `tests/browser/viewport-floors.json` must not be lowered to fit a measured result.
+Changing these requirements is the maintainer's decision.
 
 ## Use synthetic examples
 
@@ -75,4 +81,5 @@ Preserve original source payloads. Google health-data requests must remain read-
 
 ## Sensitive reports
 
-Do not post credentials or sensitive records publicly. Use GitHub private vulnerability reporting when available for security issues. Ordinary bugs can be reported publicly with synthetic reproduction steps.
+Follow the [security policy](SECURITY.md) for vulnerability reports. Open a repository issue with
+synthetic reproduction steps only; never post credentials or sensitive records.

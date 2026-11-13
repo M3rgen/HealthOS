@@ -82,7 +82,7 @@ def test_upgrade_adds_two_columns_per_table_and_keeps_rows_triggers_and_views(da
             text("SELECT google_data_point_id, count, provider, source_record_id FROM steps")
         ).one()
     assert row == ("synthetic:one", 1234, GOOGLE, None)  # backfilled by the default, unchanged
-    # The metadata matches the schema at head (later revisions only add their own tables).
+    # Drift checks target head; later revisions may add their own tables and guards.
     command.upgrade(config, "head")
     command.check(config)
 

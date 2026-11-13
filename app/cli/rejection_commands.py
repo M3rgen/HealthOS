@@ -11,19 +11,19 @@ from app.cli._context import context
 
 
 def rejections(
-    limit: int = typer.Option(20, min=1, max=10_000, help="En yeni kaç kayıt listelenir."),
+    limit: int = typer.Option(20, min=1, max=10_000, help="Number of most recent records to list."),
     ack: int | None = typer.Option(
         None,
         "--ack",
         min=1,
-        help="Bu numaraya kadar (dahil) reddedilenlere bakıldı; /health bunun için uyarmaz.",
+        help="Acknowledge rejections through this ID (inclusive); clear their /health warning.",
     ),
     element: int | None = typer.Option(
-        None, "--element", min=1, help="Bu numaralı kaydın kendisini standart çıktıya yaz."
+        None, "--element", min=1, help="Write the original record with this ID to standard output."
     ),
 ) -> None:
-    """Eşitlemede reddedilen Google kayıtlarını listele, onayla ya da dışa aktar."""
-    from app.services import raw_rejections as service
+    """List, acknowledge or export Google records rejected during synchronization."""
+    from app.services.archive import raw_rejections as service
 
     if ack is not None and element is not None:
         typer.echo("--ack ve --element birlikte kullanılamaz.", err=True)

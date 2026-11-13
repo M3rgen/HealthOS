@@ -1,18 +1,16 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator, Awaitable, Callable
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import datetime
 
+from app.core.fetch_window import FetchBudget
+from app.core.fetch_window import PaginationPaused as PaginationPaused
 from app.google_health.client import GoogleHealthClient, InvalidPageTokenError, Page
 from app.google_health.data_types import DataTypeSpec
 
 # A turn must release ownership even if Google always returns a new continuation.
 MAX_PAGES_PER_CALL = 1000
-
-
-class PaginationPaused(Exception):
-    """The committed continuation must be resumed by a later invocation, not retried."""
 
 
 class RepeatedPageTokenError(RuntimeError):
@@ -35,15 +33,23 @@ class PageBudget:
         self.remaining = MAX_PAGES_PER_CALL
 
 
+@dataclass(frozen=True)
+class PaginationOptions:
+    """A continuation and the shared accounting for the fetch that resumes it."""
+
+    page_token: str | None = None
+    budget: FetchBudget | None = None
+    on_request: Callable[[], None] | None = None
+
+
 async def iter_pages(
     client: GoogleHealthClient,
     spec: DataTypeSpec,
     start: datetime,
     end: datetime,
-    page_token: str | None = None,
+    page_token: str | PaginationOptions | None = None,
     *,
     on_reset: Callable[[], Awaitable[None]] | None = None,
-    budget: PageBudget | None = None,
 ) -> AsyncIterator[Page]:
     """Yield every page; a page whose continuation repeats ends the attempt.
 
@@ -54,13 +60,20 @@ async def iter_pages(
     and their responses in its page transaction, but never commits the repeated
     token as a checkpoint. The next request raises RepeatedPageTokenError instead.
     """
-    budget = budget if budget is not None else PageBudget()
+    # A bare token remains shorthand for callers that need no shared accounting.
+    options = (
+        page_token if isinstance(page_token, PaginationOptions) else PaginationOptions(page_token)
+    )
+    page_token = options.page_token
+    budget = options.budget if options.budget is not None else PageBudget()
     seen_tokens: set[str] = {page_token} if page_token else set()
     token = page_token
     token_reset = False
     while True:
         if budget.remaining <= 0:
             raise PaginationPaused("Google Health page budget exhausted")
+        if options.on_request is not None:
+            options.on_request()
         try:
             page = await client.list_data_points(spec, start, end, token)
         except InvalidPageTokenError:

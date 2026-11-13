@@ -4,12 +4,17 @@ const BASIS_BMI = BASIS.weightKg / (BASIS.heightCm / 100) ** 2; // 22.86
 const BASIS_FMI = BASIS_BMI * BASIS.bodyFatPct / 100; // fat mass index, 4.57 kg/m²
 const BASIS_FFMI = BASIS_BMI - BASIS_FMI; // fat-free mass index, 18.29 kg/m²
 
+/** @typedef {{heightCm?: number, weightKg?: number, bodyFatPct?: number, musclePct?: number}} BodyMetrics */
+
+/** @param {number} v @param {number} lo @param {number} hi */
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+/** @param {unknown} value @param {number} lo @param {number} hi */
 function plausible(value, lo, hi) {
   const n = value == null || value === '' ? NaN : Number(value);
   return Number.isFinite(n) && n >= lo && n <= hi ? n : null;
 }
 // Piecewise-linear signed axis: 0 at basis, ±1 at the chosen "full morph" points.
+/** @param {number} value @param {number} basis @param {number} upSpan @param {number} downSpan */
 const axis = (value, basis, upSpan, downSpan) => clamp((value - basis) / (value >= basis ? upSpan : downSpan), -1, 1);
 
 /**
@@ -30,6 +35,7 @@ const axis = (value, basis, upSpan, downSpan) => clamp((value - basis) / (value 
  *   constant BMI body volume ∝ h², so girth grows with √h while the morphs carry BMI.
  * Height (default 175 cm) is used for BMI so height and weight are always read together.
  */
+/** @param {BodyMetrics} [metrics] */
 export function metricsToMorphs({ heightCm, weightKg, bodyFatPct, musclePct } = {}) {
   const height = plausible(heightCm, 100, 250);
   const weight = plausible(weightKg, 25, 350);
@@ -62,21 +68,25 @@ export function metricsToMorphs({ heightCm, weightKg, bodyFatPct, musclePct } = 
  * this shape; the defaults below apply otherwise. The formula string is never evaluated.
  */
 export const DEFAULT_NORMAL_RELIEF = { max: 1.25, min: .05, exponent: 1.8, fatLowGain: .25 };
+/** @param {number} fatHigh @param {number} fatLow @param {typeof DEFAULT_NORMAL_RELIEF} [params] */
 export function normalReliefScale(fatHigh, fatLow, params = DEFAULT_NORMAL_RELIEF) {
   const { max, min, exponent, fatLowGain } = params;
   return Math.min(max, Math.max(min, Math.pow(Math.max(0, 1 - fatHigh), exponent)) * (1 + fatLowGain * fatLow));
 }
 const RELIEF_FORMULA = /min\(\s*([\d.]+)\s*,\s*max\(\s*([\d.]+)\s*,\s*pow\(\s*1\s*-\s*fat_high\s*,\s*([\d.]+)\s*\)\s*\)\s*\*\s*\(\s*1\s*\+\s*([\d.]+)\s*\*\s*fat_low\s*\)\s*\)/;
+/** @param {unknown} extras the model's unvalidated glTF extras, an object or JSON text @returns {import('./body-types').HealthosExtras | null} */
 export function parseHealthos(extras) {
-  if (typeof extras !== 'string') return extras && typeof extras === 'object' ? extras : null;
+  if (typeof extras !== 'string') return extras && typeof extras === 'object' ? /** @type {import('./body-types').HealthosExtras} */ (extras) : null;
   try { return JSON.parse(extras); } catch { return null; }
 }
+/** @param {unknown} extras */
 export function reliefParams(extras) {
   const healthos = parseHealthos(extras);
   const suggested = healthos?.suggestedNormalScale;
   if (!suggested || typeof suggested !== 'object') return DEFAULT_NORMAL_RELIEF;
   const parsed = typeof suggested.formula === 'string' ? RELIEF_FORMULA.exec(suggested.formula) : null;
   const fromFormula = parsed ? { max: parsed[1], min: parsed[2], exponent: parsed[3], fatLowGain: parsed[4] } : {};
+  /** @param {keyof typeof DEFAULT_NORMAL_RELIEF} key */
   const pick = (key) => {
     for (const value of [suggested[key], fromFormula[key]]) {
       const n = value == null || value === '' ? NaN : Number(value);

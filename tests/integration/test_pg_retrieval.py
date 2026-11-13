@@ -10,8 +10,9 @@ from app.google_health.client import Page
 from app.google_health.data_types import REGISTRY
 from app.models.retrieval import RECEIPT_TABLES, RetrievalEvent
 from app.parsers.common import payload_hash
-from app.services.raw_history import verify_guards
-from app.services.retrieval_coverage import coverage_report
+from app.services.archive.raw_history_verification import verify_guards
+from app.services.shared.query_ranges import CivilDateRange
+from app.services.synchronization.retrieval_coverage import coverage_report
 
 pytestmark = pytest.mark.integration
 
@@ -29,7 +30,10 @@ async def test_production_receipt_resume_is_durable_on_postgresql(pg_sessions, l
         assert [e.kind for e in events] == ["page", "failed", "page", "completed"]
         assert sum(e.returned_count for e in events) == 1
         report = await coverage_report(
-            session, REGISTRY, runner.start.date(), runner.start.date(), "UTC", "heart-rate"
+            session,
+            REGISTRY,
+            "heart-rate",
+            dates=CivilDateRange(runner.start.date(), runner.start.date(), "UTC"),
         )
         assert report["types"][0]["days"][0]["retrieval"] == "completed_with_records"
         assert await verify_guards(session) == []
@@ -41,7 +45,10 @@ async def test_presence_reads_only_the_source_member_with_json_types(pg_sessions
     await store(pg_sessions, "heart-rate", *({**point(), "dataSource": s} for s in sources))
     async with pg_sessions() as session:
         report = await coverage_report(
-            session, REGISTRY, START.date(), START.date(), "UTC", "heart-rate"
+            session,
+            REGISTRY,
+            "heart-rate",
+            dates=CivilDateRange(START.date(), START.date(), "UTC"),
         )
     regimes = {row["source"]: row["device"] for row in report["types"][0]["source_regimes"]}
     assert regimes == {

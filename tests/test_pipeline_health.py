@@ -2,8 +2,8 @@ from datetime import UTC, datetime, timedelta
 
 from app.core.config import Settings
 from app.models.state import JobStatus, RawHealthData, SyncState, WebhookNotification
-from app.services import pipeline_health
-from app.services.pipeline_health import PipelineHealthService, PipelineStatus
+from app.services.synchronization import pipeline_health
+from app.services.synchronization.pipeline_health import PipelineHealthService, PipelineStatus
 
 FREQUENT = {
     "heart-rate",

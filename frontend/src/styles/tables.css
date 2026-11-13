@@ -1,0 +1,24 @@
+.table-scroll {
+  overflow: auto;
+  border-radius: 8px;
+}
+th:first-child {
+  text-align: left;
+}
+td:first-child {
+  text-align: left;
+  font-weight: 520;
+}
+th:last-child,
+td:last-child {
+  text-align: left;
+}
+tbody tr:first-child td {
+  border-top: 0;
+}
+tbody tr {
+  transition: background var(--dur-fast);
+}
+tbody tr:hover {
+  background: rgb(255 255 255 / 0.022);
+}

@@ -8,15 +8,15 @@ from reconciliation_records import Client, service
 from app.core.config import Settings
 from app.google_health.client import Page
 from app.google_health.data_types import REGISTRY
-from app.services.reconciliation_reports import list_runs
-from app.services.scheduler import build_scheduler
-from app.services.storage import StoreStats
+from app.services.archive.storage import StoreStats
+from app.services.synchronization.reconciliation_reports import list_runs
+from app.services.synchronization.scheduler import build_scheduler
 from app.sync.reconciliation import ReconciliationService
 
 
 async def test_reconciliation_runs_every_configured_type_with_lookback():
     class Incremental:
-        client = SimpleNamespace(warm_up=AsyncMock())
+        source = SimpleNamespace(warm_up=AsyncMock())
         specs = {"steps": object(), "sleep": object()}
         calls = []
 
@@ -33,7 +33,7 @@ async def test_reconciliation_runs_every_configured_type_with_lookback():
 
 async def test_reconciliation_chunks_rollup_types_to_api_limit():
     class Incremental:
-        client = SimpleNamespace(warm_up=AsyncMock())
+        source = SimpleNamespace(warm_up=AsyncMock())
         specs = {"total-calories": REGISTRY["total-calories"]}
 
         def __init__(self):
@@ -112,7 +112,7 @@ def test_cli_reconcile_uses_persistent_service_without_new_options(tmp_path, mon
 def test_scheduler_is_needed_for_the_derived_refresh_even_with_every_flag_off(
     app_env, derived, needed
 ):
-    from app.services.runtime import Runtime
+    from app.runtime import Runtime
 
     settings = Settings(
         _env_file=None,

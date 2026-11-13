@@ -6,7 +6,7 @@
 // HEALTHOS_TEST_URL=http://127.0.0.1:5174 node tests/browser/appearance.cjs
 const assert = require('node:assert/strict');
 const path = require('node:path');
-const { BASE, launch } = require('./lib.cjs');
+const { BASE, launch, showSystemGroup } = require('./lib.cjs');
 const fx = require(path.join(__dirname, '../../frontend/preview/fixtures.cjs'));
 
 async function mock(page, problems) {
@@ -49,6 +49,7 @@ async function mock(page, problems) {
       }));
       const openDialog = async () => {
         await page.locator('[data-page="system"]').click();
+        await showSystemGroup(page, 'settings');
         await page.locator('#appearance-open').click();
         await page.locator('#appearance-dialog[open] .preset-tile').first().waitFor();
       };

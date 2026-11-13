@@ -1,4 +1,30 @@
 {
-  "js": 60000,
-  "css": 20000
+  "_note": "Target: ceil(measured * (1 + headroomPercent / 100)). Existing ceilings remain hard caps; css, deferredJs and figureAssets cannot currently fit the full 5% margin. Refresh measured from performance-budget-report.json after npm run build, review the diff; raising a ceiling needs maintainer approval.",
+  "budgets": {
+    "js": {
+      "measured": 48866,
+      "headroomPercent": 5,
+      "ceiling": 60000
+    },
+    "css": {
+      "measured": 19088,
+      "headroomPercent": 5,
+      "ceiling": 20000
+    },
+    "deferredJs": {
+      "measured": 166093,
+      "headroomPercent": 5,
+      "ceiling": 170000
+    },
+    "deferredCss": {
+      "measured": 130,
+      "headroomPercent": 5,
+      "ceiling": 500
+    },
+    "figureAssets": {
+      "measured": 1886128,
+      "headroomPercent": 5,
+      "ceiling": 1950000
+    }
+  }
 }

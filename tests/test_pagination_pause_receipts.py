@@ -8,14 +8,14 @@ import pytest
 from raw_response_records import body, client, stored
 from retrieval_records import END, START, Runner, point
 from sqlalchemy import select
-from test_retrieval_receipts import rows, status
+from support.retrieval import rows, status
 
 from app.core.timeutil import as_utc
 from app.google_health import pagination
 from app.google_health.data_types import REGISTRY
 from app.google_health.pagination import PaginationPaused
 from app.models.state import BackfillJob, FetchRound, JobStatus, RawHealthData, SyncState
-from app.services.storage import store_records
+from app.services.archive.storage import store_records
 from app.sync.backfill import ABANDON_AFTER_RETRIES
 from app.sync.ownership import run_ownership
 

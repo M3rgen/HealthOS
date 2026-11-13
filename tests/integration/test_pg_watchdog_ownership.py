@@ -8,17 +8,17 @@ import pytest
 from reconciliation_records import Client, service
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
-from test_pg_sync_ownership import receive
-from test_watchdog import _watchdog
+from support.ownership import receive
+from support.watchdog import _watchdog
 
-from app.services.watchdog import _ADVISORY_LOCK_ID
+from app.db.postgres import WATCHDOG_LOCK_ID
 
 pytestmark = pytest.mark.integration
 
 
 def worker(url, pipe):
     async def run():
-        engine = create_async_engine(url, pool_size=1, max_overflow=0, pool_timeout=1)
+        engine = create_async_engine(url, pool_size=5, max_overflow=0, pool_timeout=30)
         sessions = async_sessionmaker(engine, expire_on_commit=False)
 
         class Google(Client):
@@ -50,7 +50,7 @@ def worker(url, pipe):
 
 
 @pytest.mark.parametrize("ending", ["completed", "failed", "cancelled"])
-async def test_recovery_ownership_lifecycle_with_one_application_slot(pg_sessions, ending):
+async def test_recovery_ownership_lifecycle_with_shared_application_pool(pg_sessions, ending):
     parent, child = multiprocessing.get_context("spawn").Pipe()
     process = multiprocessing.get_context("spawn").Process(
         target=worker,
@@ -64,15 +64,16 @@ async def test_recovery_ownership_lifecycle_with_one_application_slot(pg_session
             lock = (
                 await session.execute(
                     text(
-                        "SELECT l.pid, a.xact_start FROM pg_locks l "
+                        "SELECT l.pid, a.state FROM pg_locks l "
                         "JOIN pg_stat_activity a ON a.pid = l.pid "
+                        "AND a.datname = current_database() "
                         "WHERE l.locktype = 'advisory' AND l.objsubid = 1 AND l.granted "
                         "AND l.classid = :high AND l.objid = :low"
                     ),
-                    {"high": _ADVISORY_LOCK_ID >> 32, "low": _ADVISORY_LOCK_ID % 2**32},
+                    {"high": WATCHDOG_LOCK_ID >> 32, "low": WATCHDOG_LOCK_ID % 2**32},
                 )
             ).one()
-            assert lock.xact_start is None
+            assert lock.state == "idle"  # state, not xact_start: test_pg_backfill_ownership
         contender, runner = _watchdog(pg_sessions, datetime.now(UTC))
         assert (await contender.periodic_check()).action == "overlap"
         assert runner.calls == []

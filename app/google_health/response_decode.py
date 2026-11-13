@@ -6,6 +6,8 @@ import zlib
 
 import httpx
 
+from app.google_health.errors import GoogleHealthErrorCode
+
 # Bound newly inflated bytes, not the raw archive. 32 MiB leaves about 3 KiB per
 # record at the existing 10,000-record page size (sleep/exercise use 25), while
 # preventing a tiny compressed response from allocating gigabytes before JSON.
@@ -18,13 +20,19 @@ _CHUNK_BYTES = 64 * 1024
 class ResponseDecodeRejected(ValueError):
     """A deterministic decode rejection; retrying the same entity cannot fix it."""
 
+    code = GoogleHealthErrorCode.INVALID_ENCODING
+
 
 class ResponseDecodeLimitExceeded(ResponseDecodeRejected):
+    code = GoogleHealthErrorCode.RESPONSE_TOO_LARGE
+
     def __init__(self) -> None:
         super().__init__("Google Health response exceeded its decoded byte budget")
 
 
 class UnsupportedResponseEncoding(ResponseDecodeRejected):
+    code = GoogleHealthErrorCode.UNSUPPORTED_ENCODING
+
     def __init__(self) -> None:
         super().__init__("Google Health response has an unsupported content encoding")
 

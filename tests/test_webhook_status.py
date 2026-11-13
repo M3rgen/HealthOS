@@ -1,7 +1,7 @@
 """Synthetic-clock projections, durable counters and transactional observations."""
 
 import asyncio
-from datetime import UTC, datetime, timedelta
+from datetime import timedelta
 from types import SimpleNamespace
 
 import httpx
@@ -9,6 +9,7 @@ import pytest
 from fastapi import FastAPI
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from support.webhooks import START, configured
 
 from app.api import webhooks
 from app.core.config import Settings
@@ -16,21 +17,11 @@ from app.core.request_limits import WriteLimits
 from app.db.base import Base
 from app.models.state import WebhookBatchItem, WebhookEvent, WebhookNotification
 from app.models.webhook_status import WebhookStatusEvent
-from app.services.webhook_status import (
+from app.services.synchronization.webhook_status import (
     SAMPLE_INTERVAL,
     SILENCE_THRESHOLD,
     WebhookStatusService,
 )
-
-START = datetime(2026, 10, 1, tzinfo=UTC)
-
-
-def configured():
-    return Settings(
-        _env_file=None,
-        google_health_webhook_endpoint_uri="https://hooks.example/webhooks/google-health",
-        google_health_webhook_authorization="Bearer synthetic-test",
-    )
 
 
 @pytest.mark.parametrize("received", [False, True])

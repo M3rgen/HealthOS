@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 import yaml
 from pydantic import ValidationError
+from support.fixture_keys import SYNTHETIC_FERNET_KEY
 
 from app.core.config import Settings
 from scripts.verify_configuration import check_compose_runtime, parse_env, service_environment
@@ -29,7 +30,24 @@ def test_verifier_rejects_compose_without_production_app_env():
         {"services": {"app": {"environment": ["APP_ENV=development"]}}},
     )
     assert "docker-compose.yml app service must set APP_ENV: production" in errors
+    assert "docker-compose.yml must define a migrate service" in errors
     assert not any("docker-compose.dev.yml" in error for error in errors)
+
+
+@pytest.mark.parametrize(
+    "environment, valid",
+    [(None, False), ({"APP_ENV": "production"}, False), (["APP_ENV=development"], True)],
+)
+def test_verifier_requires_dev_migration_override_when_base_service_exists(environment, valid):
+    base = load_compose("docker-compose.yml")
+    dev = load_compose("docker-compose.dev.yml")
+    dev["services"].pop("migrate")
+    if environment is not None:
+        dev["services"]["migrate"] = {"environment": environment}
+    errors = check_compose_runtime(base, dev)
+    assert errors == (
+        [] if valid else ["docker-compose.dev.yml migrate must override APP_ENV with development"]
+    )
 
 
 def test_compose_production_with_template_placeholders_refuses_to_start(monkeypatch):
@@ -41,7 +59,8 @@ def test_compose_production_with_template_placeholders_refuses_to_start(monkeypa
     compose_env = service_environment(load_compose("docker-compose.yml")["services"]["app"])
     monkeypatch.setenv("APP_ENV", compose_env["APP_ENV"])
     monkeypatch.setenv(
-        "DATABASE_URL", "postgresql+asyncpg://health:strong-generated@postgres:5432/health"
+        "DATABASE_URL",
+        "postgresql+asyncpg://health:synthetic-db-Q3v8Lr2Xk9Tw5Zp7Nm4Hc6Jd@postgres:5432/health",
     )
     with pytest.raises(ValidationError, match="unsafe or missing production configuration"):
         Settings(_env_file=None)
@@ -51,11 +70,11 @@ def test_production_rejects_change_me_placeholders():
     with pytest.raises(ValidationError, match="GOOGLE_CLIENT_ID"):
         Settings(
             app_env="production",
-            database_url="postgresql+asyncpg://health:random-password@postgres:5432/health",
+            database_url="postgresql+asyncpg://health:synthetic-db-Q3v8Lr2Xk9Tw5Zp7Nm4Hc6Jd@postgres:5432/health",
             google_client_id="CHANGE_ME",
             google_client_secret="client-secret",
-            google_token_encryption_key="encryption-key",
+            google_token_encryption_key=SYNTHETIC_FERNET_KEY,
             google_health_webhook_endpoint_uri="https://webhook.example.com/webhooks/google-health",
-            google_health_webhook_authorization="Bearer webhook-secret",
+            google_health_webhook_authorization="Bearer webhook-secret-0123456789-abcdefgh",
             _env_file=None,
         )

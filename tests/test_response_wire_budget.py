@@ -11,6 +11,7 @@ from compressed_records import compressed
 from oauth_streams import TokenStream
 from raw_response_records import FlowingBody, client, no_secret, stored
 from retrieval_records import END, START
+from support.loop_clock import advance_loop_clock
 
 from app.google_health import client as client_module
 from app.google_health import response_body, response_close, response_decode
@@ -149,6 +150,9 @@ async def test_fragmentation_memory_depends_on_bytes_not_chunk_count(size):
 
 
 class SteadyBody(httpx.AsyncByteStream):
+    """Delivers pieces apart by jumping the loop's clock: no real waiting, so the budget sees
+    exactly the delays the test names, however busy the machine is."""
+
     def __init__(self, wire: bytes, pieces: int, pause: float, stall: float = 0):
         self.wire, self.pieces, self.pause, self.stall = wire, pieces, pause, stall
         self.sent = 0
@@ -156,8 +160,9 @@ class SteadyBody(httpx.AsyncByteStream):
     async def __aiter__(self):
         step = len(self.wire) // self.pieces + 1
         for offset in range(0, len(self.wire), step):
-            await asyncio.sleep(self.stall if offset and offset >= len(self.wire) // 2 else 0)
-            await asyncio.sleep(self.pause)
+            advance_loop_clock(self.stall if offset and offset >= len(self.wire) // 2 else 0)
+            advance_loop_clock(self.pause)
+            await asyncio.sleep(0)  # the budget's timer fires here if the jump overran it
             self.sent += 1
             yield self.wire[offset : offset + step]
 
@@ -168,22 +173,23 @@ class SteadyBody(httpx.AsyncByteStream):
 @pytest.mark.parametrize("case", ["steady", "stall", "total"])
 async def test_body_budget_follows_progress_not_total_time(sessions, monkeypatch, case):
     """A slow but steady large page is kept whole; a stall or the hard cap still ends it."""
-    monkeypatch.setattr(response_body, "RESPONSE_BODY_SECONDS", 0.15)
+    # Seconds of the jumped loop clock: machine load cannot add up to any of these.
+    monkeypatch.setattr(response_body, "RESPONSE_BODY_SECONDS", 150)
     monkeypatch.setattr(response_body, "RESPONSE_PROGRESS_BYTES", 1024, raising=False)
     monkeypatch.setattr(
-        response_body, "RESPONSE_BODY_MAX_SECONDS", 0.25 if case == "total" else 60, raising=False
+        response_body, "RESPONSE_BODY_MAX_SECONDS", 250 if case == "total" else 6000, raising=False
     )
     record = {"name": "users/me/dataTypes/steps/dataPoints/a", "steps": {"count": "1"}}
     wire = json.dumps({"dataPoints": [record] * 400}).encode()  # 20 pieces of ~2 KiB
     streams = []
 
     def handler(_):
-        streams.append(SteadyBody(wire, 20, 0.02, stall=0.3 if case == "stall" else 0))
+        streams.append(SteadyBody(wire, 20, 20, stall=300 if case == "stall" else 0))
         return httpx.Response(200, stream=streams[-1])
 
     google = client(handler, sessions, google_api_max_retries=1)
     async with google.http:
-        if case == "steady":  # 0.4 s in total, beyond the 0.15 s window
+        if case == "steady":  # 400 s in total, beyond the 150 s window
             page = await google.list_data_points(REGISTRY["steps"], START, END)
             assert len(page.data_points) == 400 and len(streams) == 1
             await google.keep(page.responses)

@@ -13,8 +13,10 @@ from app.db.session import get_session
 from app.models.health import HeartRate
 from app.models.raw_versions import RawHealthDataVersion
 from app.models.state import RawHealthData
-from app.services import codex_health, current_heart
-from app.services.dashboard import dashboard_data
+from app.services.dashboard_views.dashboard import dashboard_data
+from app.services.readers import current_heart
+from app.services.readers.dashboard_queries import DashboardQuery
+from app.services.umay import codex_health
 
 
 def heart(name="one", at=T0, source=PHONE, **values):
@@ -25,7 +27,6 @@ def heart(name="one", at=T0, source=PHONE, **values):
 
 @pytest.fixture
 async def api(sessions, monkeypatch):
-    monkeypatch.setattr(codex_health, "SessionLocal", sessions)
     app = FastAPI()
     app.include_router(router)
 
@@ -47,16 +48,18 @@ async def outputs(api, sessions, expected, timezone="UTC", first=DAY):
         day = first + timedelta(days=offset)
         chart = [hours.get(hour) for hour in range(24)]
         async with sessions() as session:
-            result = await dashboard_data(session, day, 1, timezone)
+            result = await dashboard_data(session, query=DashboardQuery(day, 1, timezone))
             assert result["charts"]["heart_rate"] == chart
         query = dict(end_date=str(day), timezone=timezone)
         response = await api.get("/api/dashboard", params={**query, "days": 1})
         assert response.status_code == 200, response.text
         assert response.json()["charts"]["heart_rate"] == chart
-        daily = await codex_health.read_health({"action": "daily", "start_date": str(day), **query})
+        daily = await codex_health.read_health(
+            sessions, {"action": "daily", "start_date": str(day), **query}
+        )
         assert daily["charts"]["heart_rate"] == chart
     intraday = await codex_health.read_health(
-        dict(action="intraday", data_type="heart-rate", start_date=str(first), **query)
+        sessions, dict(action="intraday", data_type="heart-rate", start_date=str(first), **query)
     )
     evidence = [e for row in intraday["summaries"] for e in row["evidence"]]
     if all(77 not in hours.values() for hours in expected):
@@ -167,7 +170,10 @@ async def test_source_filters_still_apply_to_current_samples(api, sessions, stat
         before = await snapshot(session)
         for strict in (False, True):
             result = await dashboard_data(
-                session, DAY, 1, "UTC", include_source_deleted=True, valid_sources_only=strict
+                session,
+                include_source_deleted=True,
+                valid_sources_only=strict,
+                query=DashboardQuery(DAY, 1, "UTC"),
             )
             expected = 50 if state == "deleted" and not strict else None
             assert result["charts"]["heart_rate"] == [None, expected, *([None] * 22)]
@@ -187,7 +193,7 @@ async def test_read_window_uses_current_source_time(sessions, monkeypatch):
 
     monkeypatch.setattr(current_heart, "current_heart_rate", tracked)
     async with sessions() as session:
-        await dashboard_data(session, DAY, 1, "UTC")
+        await dashboard_data(session, query=DashboardQuery(DAY, 1, "UTC"))
         assert parsed == []  # retained normalized time must not select this payload
-        await dashboard_data(session, DAY + timedelta(days=1), 1, "UTC")
+        await dashboard_data(session, query=DashboardQuery(DAY + timedelta(days=1), 1, "UTC"))
         assert parsed == [corrected]

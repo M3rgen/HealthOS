@@ -24,20 +24,18 @@ from identity_records import (
     versions_of,
 )
 from sqlalchemy import func, select, text
+from support.waits import blocked_on_a_lock
 
-from app.models.identity import RawHealthDataSupersession
+from app.db.postgres import DATA_TYPE_LOCK, advisory_key
+from app.models.identity_tables import RawHealthDataSupersession
 from app.models.raw_versions import RawHealthDataEvent
-from app.services.dashboard import dashboard_data
-from app.services.identity import verify_identities
-from app.services.identity_backfill import identity_backfill
-from app.services.source_chains import (
-    DATA_TYPE_LOCK,
-    BackfillRunning,
-    _key,
-    backfill_lock,
-)
-from app.services.storage import store_records
-from app.sync.deletions import mark_source_deletions
+from app.services.archive.source_deletions import mark_source_deletions
+from app.services.archive.storage import store_records
+from app.services.dashboard_views.dashboard import dashboard_data
+from app.services.identities.identity_backfill import identity_backfill
+from app.services.identities.identity_verification import verify_identities
+from app.services.identities.source_chain_locks import BackfillRunning, backfill_lock
+from app.services.readers.dashboard_queries import DashboardQuery
 
 pytestmark = pytest.mark.integration
 
@@ -91,7 +89,7 @@ async def test_one_backfill_at_a_time_and_writers_share_the_data_type_lock(pg_se
             await identity_backfill(pg_sessions)
     await identity_backfill(pg_sessions)  # released
 
-    params = {"namespace": DATA_TYPE_LOCK, "key": _key("heart-rate")}
+    params = {"namespace": DATA_TYPE_LOCK, "key": advisory_key("heart-rate")}
 
     async def exclusive_free() -> bool:
         async with pg_sessions.begin() as session:
@@ -113,7 +111,7 @@ async def test_one_backfill_at_a_time_and_writers_share_the_data_type_lock(pg_se
     async with pg_sessions.begin() as writer:
         await store_records(writer, HEART, [heart(62, at=T0 + 2 * HOUR)])
         task = asyncio.create_task(identity_backfill(pg_sessions, data_types=["heart-rate"]))
-        await asyncio.sleep(0.5)
+        await blocked_on_a_lock(pg_sessions, task)  # queued behind the page's shared lock
         assert not task.done()
     report = await asyncio.wait_for(task, 30)
     assert report["heart-rate"].rows == 3
@@ -190,7 +188,7 @@ async def test_analytics_views_count_what_the_dashboard_counts(pg_sessions) -> N
 
     async def counted() -> tuple:
         async with pg_sessions() as session:
-            data = await dashboard_data(session, date(2026, 10, 18), 1, "UTC")
+            data = await dashboard_data(session, query=DashboardQuery(date(2026, 10, 18), 1, "UTC"))
             view = await session.scalar(text("SELECT sum(count) FROM analytics_steps"))
         return data["days"][0]["steps"], float(view)
 

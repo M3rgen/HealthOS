@@ -6,14 +6,14 @@ exactly as they came off the wire (a compressed body stays compressed; its
 ``content-encoding`` header is kept), the request (method, path, query string, JSON body:
 never a header, so never a token), the status and a few response headers. Pages travel
 with their records and are stored in the same transaction
-(``app.services.storage.store_page``); everything else (failures, identity, devices,
+(``app.services.archive.storage.store_page``); everything else (failures, identity, devices,
 probes) goes to a :class:`ResponseArchive`.
 """
 
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Protocol
@@ -85,5 +85,5 @@ def safe_query(raw: bytes) -> str | None:
     return query or None
 
 
-def kept_headers(headers) -> dict[str, str]:
+def kept_headers(headers: Mapping[str, str]) -> dict[str, str]:
     return {name: headers[name] for name in KEPT_HEADERS if name in headers}

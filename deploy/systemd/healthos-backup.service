@@ -33,8 +33,8 @@ OnFailure=healthos-backup-failure.service
 
 [Service]
 Type=oneshot
-# Explicit so systemd sets HOME (docker and gpg read it). Any account in the
-# docker group that can read the key file works too.
+# Root is retained for the root-owned Docker socket and /etc/healthos/backup.key.
+# Docker access is root-equivalent; an unprivileged account would need the same access.
 User=root
 WorkingDirectory=/opt/healthos
 # Optional: BACKUP_AGE_RECIPIENT, BACKUP_KEY_FILE, BACKUP_HOST_DIR, BACKUP_STATUS_HOST_DIR,
@@ -45,5 +45,47 @@ ExecStart=/bin/bash /opt/healthos/scripts/backup.sh
 UMask=0077
 NoNewPrivileges=yes
 PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+# The capability set below is empty, so this root cannot read or write what the deploy user
+# owns (.env is that user's, mode 600) and CAP_DAC_READ_SEARCH would open every file on the host
+# to the whole script. Instead systemd itself reads the one file needed and hands the run a
+# private copy in a non-swappable, unit-only directory; scripts/backup.sh passes it to Compose.
+LoadCredential=healthos.env:/opt/healthos/.env
+# A missing ReadWritePaths= entry would fail the unit at namespace setup (226/NAMESPACE) even
+# for an ExecStartPre=+, so the entries are optional ("-") and the "+" step, the only part with
+# full privileges, creates missing directories first. It also gives both directories to root:
+# DEPLOYMENT step 4 and any earlier `make backup` leave them with the deploy user, whom this
+# root cannot write for. Modes and contents stay as they are; the main command then gets them
+# writable, and `make backup` reruns itself with sudo for them. For custom BACKUP_HOST_DIR/
+# BACKUP_STATUS_HOST_DIR, adjust these absolute paths (and this ExecStartPre) in a unit override
+# as well as backup.env.
+ExecStartPre=+/bin/sh -ec 'test -d /opt/healthos/backups || install -d -m 700 /opt/healthos/backups; test -d /opt/healthos/backup-status || install -d -m 755 /opt/healthos/backup-status; chown -Rh root:root /opt/healthos/backups /opt/healthos/backup-status || echo "healthos-backup: could not take ownership of the backup directories" >&2'
+ReadWritePaths=-/opt/healthos/backups -/opt/healthos/backup-status
+# GPG needs writable private state; never write into the read-only root home.
+RuntimeDirectory=healthos-backup-gnupg
+RuntimeDirectoryMode=0700
+Environment=GNUPGHOME=/run/healthos-backup-gnupg
+Environment=PYTHONDONTWRITEBYTECODE=1
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+LockPersonality=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+ProcSubset=pid
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
 Nice=10
 IOSchedulingClass=idle

@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from enum import StrEnum
 
+from app.core.records import RecordType
 from app.core.timeutil import as_utc
 
 # Session filters compare civil (local wall-clock) start times with the window bounds,
@@ -72,8 +73,7 @@ SETTINGS_SCOPE = "https://www.googleapis.com/auth/googlehealth.settings.readonly
 
 
 @dataclass(frozen=True)
-class DataTypeSpec:
-    name: str
+class DataTypeSpec(RecordType):
     kind: RecordKind
     scope: str
     webhook: bool = False
@@ -81,15 +81,6 @@ class DataTypeSpec:
     max_window_days: int | None = None
     time_filtered: bool = True
     personal_health_data: bool = True
-
-    @property
-    def payload_key(self) -> str:
-        return self.name.replace("-", "_")
-
-    @property
-    def json_key(self) -> str:
-        first, *rest = self.name.split("-")
-        return first + "".join(word.title() for word in rest)
 
     def filter_for(self, start_iso: str, end_iso: str) -> str | None:
         if not self.time_filtered:

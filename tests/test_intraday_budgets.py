@@ -10,18 +10,17 @@ from unittest.mock import Mock
 import pytest
 from derived_records import BAND, DAY, PHONE, T0, point, snapshot, steps, store
 from interpretation_records import SCOPE_ERROR, call
-from interpretation_records import production_reader as production_reader
 from sqlalchemy import select, update
 
 from app.google_health.data_types import REGISTRY
 from app.models.health import Steps
-from app.models.identity import RawSourceDevice
+from app.models.identity_tables import RawSourceDevice
 from app.models.state import RawHealthData
 from app.parsers.common import payload_hash
-from app.services import health_interpretation
-from app.services import interpretation_cells as cells_service
-from app.services import interpretation_intraday as intraday
-from app.services.interpretation_types import Interpretation, Refusal
+from app.services.interpretation import health_interpretation
+from app.services.interpretation import interpretation_cells as cells_service
+from app.services.interpretation import interpretation_intraday as intraday
+from app.services.interpretation.interpretation_types import Interpretation, Refusal
 
 
 def heart(name, offset, value):
@@ -118,7 +117,7 @@ async def test_interval_comparisons_and_event_visits_are_not_quadratic(
     monkeypatch.setattr(cells_service.CellPlan, "cells", counted_cells)
     # Isolate computation from the independent JSON response-size limit.
     monkeypatch.setattr(health_interpretation, "RESPONSE_BUDGET_BYTES", 8 * 1024 * 1024)
-    row = (await call("intraday", limit=1))["summaries"][0]
+    row = (await call(sessions, "intraday", limit=1))["summaries"][0]
     assert len(row["cells"]) == 2 * count + 1
     assert len(row["evidence"]) == count
     assert row["supported_seconds"] == (2 if dense else count)
@@ -166,7 +165,7 @@ async def test_step_cells_match_reference_with_equal_endpoints_missing_and_zero(
     await store(sessions, "steps", *[step(str(i), *span) for i, span in enumerate(spans)])
     async with sessions() as session:
         before = await snapshot(session)
-    result = await call("intraday", data_type="steps")
+    result = await call(sessions, "intraday", data_type="steps")
     row = result["summaries"][0]
     expected = naive_cells([(a, b, v / (b - a) if v is not None else None) for a, b, v in spans])
     assert row["cells"] == expected
@@ -214,7 +213,7 @@ async def test_heart_conflicts_gap_limit_zero_and_clipped_interpolation(sessions
     )
     async with sessions() as session:
         before = await snapshot(session)
-    row = (await call("intraday", data_type="heart-rate"))["summaries"][0]
+    row = (await call(sessions, "intraday", data_type="heart-rate"))["summaries"][0]
     assert row["cells"] == naive_cells(
         [(0, 60, 105), (240, 540, 100), (960, 1020, 0), (86340, 86400, 90)]
     )
@@ -253,10 +252,10 @@ async def test_whole_query_exact_limit_and_one_over_precede_all_output_allocatio
     async with sessions() as session:
         before = await snapshot(session)
     monkeypatch.setattr(owner, setting, maximum)
-    whole = await call("intraday", **args)
+    whole = await call(sessions, "intraday", **args)
     assert whole["total_summaries"] == 4
-    page = await call("intraday", limit=1, **args)
-    rest = await call("intraday", limit=200, cursor=page["next_cursor"], **args)
+    page = await call(sessions, "intraday", limit=1, **args)
+    rest = await call(sessions, "intraday", limit=200, cursor=page["next_cursor"], **args)
     assert page["summaries"] + rest["summaries"] == whole["summaries"]
     assert sum(len(row["cells"]) for row in whole["summaries"]) == 12
     assert sum(len(row["evidence"]) for row in whole["summaries"]) == 4
@@ -267,8 +266,8 @@ async def test_whole_query_exact_limit_and_one_over_precede_all_output_allocatio
     monkeypatch.setattr(intraday, "statistics", blocked)
     monkeypatch.setattr(cells_service.CellPlan, "cells", blocked)
     for limit in (1, 200):
-        assert_refusal(await call("intraday", limit=limit, **args), code)
-    assert_refusal(await call("intraday", cursor=page["next_cursor"], **args), code)
+        assert_refusal(await call(sessions, "intraday", limit=limit, **args), code)
+    assert_refusal(await call(sessions, "intraday", cursor=page["next_cursor"], **args), code)
     blocked.assert_not_called()
     async with sessions() as session:
         assert await snapshot(session) == before
@@ -286,7 +285,7 @@ async def test_filters_precede_planning_but_excluded_changes_expire_cursor(
     ]
     await store(sessions, "steps", *records)
     args = dict(end_date=str(DAY + timedelta(days=1)))
-    whole = (await call("intraday", **args))["summaries"]
+    whole = (await call(sessions, "intraday", **args))["summaries"]
     selected = whole[0]
     filters = {
         key: selected[key] for key in ("source", "definition") if filter_kind in (key, "both")
@@ -297,13 +296,13 @@ async def test_filters_precede_planning_but_excluded_changes_expire_cursor(
     monkeypatch.setattr(health_interpretation, "MAX_SUMMARIES", len(expected))
     planner = Mock(wraps=intraday.CellPlan)
     monkeypatch.setattr(intraday, "CellPlan", planner)
-    page = await call("intraday", limit=1, **args, **filters)
+    page = await call(sessions, "intraday", limit=1, **args, **filters)
     assert planner.call_count == len(expected)
-    rest = await call("intraday", cursor=page["next_cursor"], **args, **filters)
+    rest = await call(sessions, "intraday", cursor=page["next_cursor"], **args, **filters)
     assert page["summaries"] + rest["summaries"] == expected
     assert rest["next_cursor"] is None
     for key in ("source", "definition"):
-        assert (await call("intraday", **args, **{key: "absent"}))["total_summaries"] == 0
+        assert (await call(sessions, "intraday", **args, **{key: "absent"}))["total_summaries"] == 0
     outside = next(row for row in whole if row not in expected)
     outside_id = outside["evidence"][0]["record"]
     original = next(record for record in records if record["name"] == outside_id)
@@ -315,9 +314,10 @@ async def test_filters_precede_planning_but_excluded_changes_expire_cursor(
     async with sessions() as session:
         before = await snapshot(session)
     assert_refusal(
-        await call("intraday", cursor=page["next_cursor"], **args, **filters), "stale_cursor"
+        await call(sessions, "intraday", cursor=page["next_cursor"], **args, **filters),
+        "stale_cursor",
     )
-    assert (await call("intraday", **args, **filters))["summaries"] == expected
+    assert (await call(sessions, "intraday", **args, **filters))["summaries"] == expected
     async with sessions() as session:
         assert await snapshot(session) == before
 
@@ -326,11 +326,13 @@ async def test_evidence_budget_counts_repeated_boundary_samples(sessions, monkey
     await store(sessions, "heart-rate", heart("before", 86340, 60), heart("after", 86460, 120))
     args = dict(end_date=str(DAY + timedelta(days=1)), data_type="heart-rate")
     monkeypatch.setattr(cells_service, "MAX_INTRADAY_EVIDENCE", 4)
-    result = await call("intraday", **args)
+    result = await call(sessions, "intraday", **args)
     assert result["total_summaries"] == 2
     assert [len(row["evidence"]) for row in result["summaries"]] == [2, 2]
     monkeypatch.setattr(cells_service, "MAX_INTRADAY_EVIDENCE", 3)
-    assert_refusal(await call("intraday", limit=1, **args), "intraday_evidence_budget_exceeded")
+    assert_refusal(
+        await call(sessions, "intraday", limit=1, **args), "intraday_evidence_budget_exceeded"
+    )
 
 
 @pytest.mark.parametrize(
@@ -338,7 +340,7 @@ async def test_evidence_budget_counts_repeated_boundary_samples(sessions, monkey
 )
 async def test_intraday_membership_eligibility_and_identity_expire_cursor(sessions, mutation):
     await store(sessions, "steps", step("a", 1, 2, 1), step("b", 1, 2, 2, PHONE))
-    page = await call("intraday", limit=1)
+    page = await call(sessions, "intraday", limit=1)
     assert page["total_summaries"] == 2 and page["next_cursor"]
     if mutation == "member":
         await store(sessions, "steps", step("new", 3, 4, 1))
@@ -375,8 +377,8 @@ async def test_intraday_membership_eligibility_and_identity_expire_cursor(sessio
                 )
     async with sessions() as session:
         before = await snapshot(session)
-    assert_refusal(await call("intraday", cursor=page["next_cursor"]), "stale_cursor")
-    current = await call("intraday")
+    assert_refusal(await call(sessions, "intraday", cursor=page["next_cursor"]), "stale_cursor")
+    current = await call(sessions, "intraday")
     assert current["total_summaries"] == (2 if mutation in {"member", "identity"} else 1)
     async with sessions() as session:
         assert await snapshot(session) == before
@@ -387,11 +389,13 @@ async def test_evidence_budget_counts_uninterpolated_samples(sessions, monkeypat
     await store(sessions, "heart-rate", *[heart(str(i), 60, 60 + i % 2) for i in range(4)])
     args = dict(data_type="heart-rate", end_date=str(DAY))
     monkeypatch.setattr(cells_service, "MAX_INTRADAY_EVIDENCE", 4)
-    row = (await call("intraday", **args))["summaries"][0]
+    row = (await call(sessions, "intraday", **args))["summaries"][0]
     assert len(row["evidence"]) == 4 and len(row["cells"]) == 1
     assert row["supported_seconds"] == 0
     monkeypatch.setattr(cells_service, "MAX_INTRADAY_EVIDENCE", 3)
-    assert_refusal(await call("intraday", limit=1, **args), "intraday_evidence_budget_exceeded")
+    assert_refusal(
+        await call(sessions, "intraday", limit=1, **args), "intraday_evidence_budget_exceeded"
+    )
 
 
 async def test_default_evidence_limit_bounds_multi_day_amplification(sessions, monkeypatch):
@@ -407,7 +411,7 @@ async def test_default_evidence_limit_bounds_multi_day_amplification(sessions, m
     monkeypatch.setattr(health_interpretation, "RESPONSE_BUDGET_BYTES", 8 * 1024 * 1024)
     build = Mock(wraps=intraday.Intraday)
     monkeypatch.setattr(intraday, "Intraday", build)
-    result = await call("intraday", limit=1, **args)
+    result = await call(sessions, "intraday", limit=1, **args)
     assert result["total_summaries"] == 90 and result["next_cursor"]
     assert sum(len(item.kwargs["evidence"]) for item in build.call_args_list) == 20_000
     await store(sessions, "steps", step("one-over", 60, 61, 1))
@@ -418,7 +422,8 @@ async def test_default_evidence_limit_bounds_multi_day_amplification(sessions, m
     monkeypatch.setattr(intraday, "evidence", blocked)
     for limit in (1, 200):
         assert_refusal(
-            await call("intraday", limit=limit, **args), "intraday_evidence_budget_exceeded"
+            await call(sessions, "intraday", limit=limit, **args),
+            "intraday_evidence_budget_exceeded",
         )
     blocked.assert_not_called()
     async with sessions() as session:
@@ -433,7 +438,7 @@ async def test_default_cell_limit_exact_and_one_new_boundary(sessions, monkeypat
         *[step(str(i), 2 * i, 2 * i + 1, 1) for i in range(10_000)],
     )
     monkeypatch.setattr(health_interpretation, "RESPONSE_BUDGET_BYTES", 16 * 1024 * 1024)
-    row = (await call("intraday", limit=1))["summaries"][0]
+    row = (await call(sessions, "intraday", limit=1))["summaries"][0]
     assert len(row["cells"]) == 20_000 and len(row["evidence"]) == 10_000
     assert row["supported_seconds"] == 10_000 and row["time_weighted_mean"] == 1
     # A touching interval introduces exactly one new edge, rather than two.
@@ -445,7 +450,9 @@ async def test_default_cell_limit_exact_and_one_new_boundary(sessions, monkeypat
     monkeypatch.setattr(intraday, "evidence", blocked)
     monkeypatch.setattr(cells_service.CellPlan, "cells", blocked)
     for limit in (1, 200):
-        assert_refusal(await call("intraday", limit=limit), "intraday_cell_budget_exceeded")
+        assert_refusal(
+            await call(sessions, "intraday", limit=limit), "intraday_cell_budget_exceeded"
+        )
     blocked.assert_not_called()
     async with sessions() as session:
         assert await snapshot(session) == before

@@ -1,0 +1,352 @@
+.topbar {
+  height: 74px;
+  align-items: center;
+  padding: 0 24px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  gap: 20px;
+  border-bottom: 1px solid var(--line-soft);
+  position: relative;
+  z-index: 5;
+}
+.brand {
+  font-size: 1.875rem;
+  font-weight: 750;
+  letter-spacing: -0.0625rem;
+}
+.brand span {
+  font-weight: 600;
+}
+.nav-button {
+  position: relative;
+  border: 0;
+  background: none;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 14px;
+  font-size: 0.9375rem;
+  font-weight: 500;
+  white-space: nowrap;
+  letter-spacing: -0.005em;
+  color: var(--muted);
+  border-radius: 0;
+  transition: color var(--dur-fast) var(--ease-out);
+}
+.nav-button.active {
+  color: var(--text);
+  font-weight: 600;
+}
+.header-meta {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  color: var(--muted);
+  font-size: 0.875rem;
+  justify-self: end;
+  margin-left: 0;
+  min-width: 0;
+}
+.topbar > .brand {
+  justify-self: start;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  white-space: nowrap;
+  border-radius: 4px;
+}
+.brand .brand-mark {
+  display: block;
+  width: 42px;
+  height: 42px;
+  flex-shrink: 0;
+  stroke: var(--amber);
+  stroke-width: 3.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  transition: transform 180ms ease-out;
+}
+.brand .brand-wordmark {
+  font-size: 1.6875rem;
+  line-height: 1;
+  font-weight: 650;
+  letter-spacing: -0.035em;
+}
+.brand .brand-os {
+  color: var(--amber);
+  letter-spacing: -0.025em;
+  margin-left: 1px;
+  font-weight: 380;
+}
+.brand:hover .brand-mark {
+  transform: translateY(-2px);
+}
+.topbar > nav {
+  justify-content: safe center;
+  width: auto;
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.header-meta #header-date {
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  white-space: nowrap;
+  padding: 8px 12px;
+  margin-right: -12px;
+  border-radius: var(--radius-control);
+  font-size: 0.84375rem;
+  font-weight: 500;
+  transition:
+    background var(--dur-fast),
+    color var(--dur-fast);
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.header-meta #header-date:hover,
+.header-meta #header-date[aria-expanded="true"] {
+  color: var(--text);
+  background: rgb(255 255 255 / 0.05);
+}
+.nav-button:hover {
+  color: var(--text);
+}
+.nav-button:after {
+  content: "";
+  position: absolute;
+  left: 14px;
+  right: 14px;
+  bottom: -1px;
+  height: 2px;
+  border-radius: 2px 2px 0 0;
+  background: var(--amber);
+  box-shadow: 0 0 12px var(--amber-glow);
+  transform: scaleX(0);
+  opacity: 0;
+  transition:
+    transform var(--dur) var(--ease-out),
+    opacity var(--dur) var(--ease-out);
+}
+.nav-button.active:after {
+  content: "";
+  position: absolute;
+  left: 14px;
+  right: 14px;
+  bottom: -1px;
+  height: 2px;
+  border-radius: 2px 2px 0 0;
+  background: var(--amber);
+  box-shadow: 0 0 12px var(--amber-glow);
+  transition:
+    transform var(--dur) var(--ease-out),
+    opacity var(--dur) var(--ease-out);
+  transform: scaleX(1);
+  opacity: 1;
+}
+.header-meta #header-date .button-icon {
+  width: var(--icon-sm);
+  height: var(--icon-sm);
+  color: var(--amber);
+  opacity: 0.85;
+}
+@media (max-width: bp(w1150)) {
+  .topbar {
+    padding: 0 24px;
+  }
+}
+@media (max-width: bp(w760)) {
+  .topbar > .brand {
+    gap: 8px;
+  }
+  .brand .brand-mark {
+    width: 34px;
+    height: 34px;
+  }
+  .brand .brand-wordmark {
+    font-size: 1.4375rem;
+  }
+  .topbar {
+    height: auto;
+    min-height: 100px;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 0;
+    padding: 12px 18px 0;
+  }
+  .topbar > nav {
+    grid-row: 2;
+    grid-column: 1/-1;
+    justify-self: center;
+    min-height: 43px;
+    flex-wrap: wrap;
+    justify-content: center;
+    order: initial;
+    gap: 0 14px;
+  }
+  .header-meta {
+    grid-column: 2;
+    grid-row: 1;
+    order: initial;
+  }
+  .nav-button {
+    padding: 0 6px;
+    font-size: 0.875rem;
+  }
+  .nav-button:after,
+  .nav-button.active:after {
+    left: 6px;
+    right: 6px;
+  }
+  .header-meta #header-date {
+    margin-right: -8px;
+    padding: 6px 8px;
+  }
+}
+@media (max-width: bp(w540)) {
+  .brand {
+    font-size: 1.625rem;
+  }
+  .header-meta {
+    font-size: 0.75rem;
+  }
+}
+@media (max-width: bp(w360)) {
+  .topbar > nav {
+    gap: 0 6px;
+  }
+}
+/* Too narrow for the wordmark and the date side by side (at large browser fonts this happens on
+   ordinary phones): the mark stays and the link keeps its accessible name. */
+@media (max-width: bp(w319)) {
+  .brand .brand-wordmark {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+  }
+}
+@media (min-width: bp(w901)) and (min-height: 30.0625em) {
+  /* The desktop overview uses the available viewport height. */
+  .topbar {
+    height: 64px;
+  }
+}
+#header-date-short {
+  display: none;
+  white-space: nowrap;
+}
+/* Short screens: the navigation shares one row with the brand and the date button; the wordmark
+   and the date text stay available to screen readers. Navigation that does not fit scrolls
+   sideways inside itself, the page never does. */
+@media (max-height: 35em) and (min-width: bp(w320)), (max-height: 420px) {
+  .topbar {
+    height: auto;
+    min-height: 44px;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    gap: 4px;
+    padding: 0 8px;
+  }
+  .topbar > nav {
+    grid-row: 1;
+    grid-column: 2;
+    justify-self: stretch;
+    justify-content: safe center;
+    gap: 0;
+    height: auto;
+    overflow-x: auto;
+    flex-wrap: nowrap;
+    scrollbar-width: none;
+  }
+  .header-meta {
+    grid-row: 1;
+    grid-column: 3;
+  }
+  .brand .brand-mark,
+  .brand .brand-mark-custom {
+    width: 30px;
+    height: 30px;
+  }
+  .nav-button {
+    min-height: 44px;
+    padding: 0 6px;
+    font-size: 0.875rem;
+    white-space: nowrap;
+  }
+  .nav-button:after,
+  .nav-button.active:after {
+    left: 6px;
+    right: 6px;
+    bottom: 0;
+  }
+  .header-meta #header-date {
+    margin-right: 0;
+    min-height: 44px;
+    min-width: 44px;
+    padding: 0 6px;
+    justify-content: center;
+  }
+  /* In em, like the rest of this sheet: a larger browser font needs more width for the same words.
+     What gives way in the short row, in order: the wordmark, then the month's full name and the
+     year, and on the narrowest screens the day itself (it stays in the button's accessible name). */
+  @media (max-width: bp(w704)) {
+    .brand .brand-wordmark {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 1px;
+      height: 1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      white-space: nowrap;
+    }
+  }
+  @media (max-width: bp(w480)) {
+    #header-date-text {
+      display: none;
+    }
+    #header-date-short {
+      display: inline;
+    }
+  }
+  @media (max-width: bp(w360)) {
+    #header-date-short {
+      display: none;
+    }
+    .nav-button {
+      padding: 0 4px;
+      font-size: 0.8125rem;
+    }
+    .nav-button:after,
+    .nav-button.active:after {
+      left: 4px;
+      right: 4px;
+    }
+    /* "Genel bakış" is the way home here; the room goes to the last menu item. */
+    .topbar > .brand {
+      display: none;
+    }
+    .topbar {
+      grid-template-columns: minmax(0, 1fr) auto;
+    }
+    .topbar > nav {
+      grid-column: 1;
+    }
+    .header-meta {
+      grid-column: 2;
+    }
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .brand .brand-mark {
+    transition: none;
+  }
+  .brand:hover .brand-mark {
+    transform: none;
+  }
+}

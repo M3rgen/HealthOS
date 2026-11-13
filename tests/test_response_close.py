@@ -9,9 +9,18 @@ import zlib
 import httpx
 import pytest
 from compressed_records import compressed
-from raw_response_records import FlowingBody, PausedBody, client, no_secret, stored
+from raw_response_records import (
+    FlowingBody,
+    PausedBody,
+    WatchedArchive,
+    client,
+    no_secret,
+    stored,
+)
 from retrieval_records import END, START, Runner, point
 from sqlalchemy import select
+from support.loop_clock import PAST_ALL_BUDGETS, advance_loop_clock
+from support.waits import until
 
 from app.core.timeutil import as_utc
 from app.google_health import response_body, response_close, response_decode
@@ -19,7 +28,7 @@ from app.google_health.client import GoogleHealthError
 from app.google_health.data_types import REGISTRY
 from app.models.retrieval import RetrievalCheckpoint, RetrievalEvent, RetrievalReceipt
 from app.models.state import BackfillJob, JobStatus, RawHealthData, SyncState
-from app.services.storage import store_records
+from app.services.archive.storage import store_records
 from app.sync.errors import error_summary, is_transient
 from app.sync.ownership import run_ownership
 
@@ -28,12 +37,11 @@ from app.sync.ownership import run_ownership
 @pytest.mark.parametrize("encoding", ["identity", "gzip", "deflate"])
 @pytest.mark.parametrize("recover", [False, True])
 @pytest.mark.parametrize("status", [200, 307, 308])
+@pytest.mark.usefixtures("expiring_streams")
 async def test_response_budget_archives_attempts_and_bounds_retries(
-    sessions, monkeypatch, caplog, phase, encoding, recover, status
+    sessions, caplog, phase, encoding, recover, status
 ):
-    monkeypatch.setattr(response_close, "RESPONSE_CLOSE_SECONDS", 0.01)
     assert 0 < response_body.RESPONSE_BODY_SECONDS <= 60
-    monkeypatch.setattr(response_body, "RESPONSE_BODY_SECONDS", 0.02)
     payload = b' {"dataPoints": [], "private-body": "synthetic"}\n'
     wire = {"identity": payload, "gzip": gzip.compress(payload), "deflate": zlib.compress(payload)}[
         encoding
@@ -71,7 +79,7 @@ async def test_response_budget_archives_attempts_and_bounds_retries(
     google = client(handler, sessions, google_api_max_retries=2)
     task = asyncio.create_task(google.list_data_points(REGISTRY["steps"], START, END))
     try:
-        await asyncio.wait((task,), timeout=2)  # observation only; never cancels the request
+        await asyncio.wait((task,))  # a budget that never fires hangs here; pytest-timeout ends it
         assert task.done(), "response budget did not terminate the request"
         if recover:
             page = task.result()
@@ -150,11 +158,10 @@ async def test_response_budget_archives_attempts_and_bounds_retries(
         "gzip-stack-limit",
     ],
 )
+@pytest.mark.usefixtures("expiring_streams")
 async def test_response_failure_releases_ownership_and_resumes_checkpoint(
     sessions, monkeypatch, caplog, lane, phase, stream_errors=None, encoding="identity"
 ):
-    monkeypatch.setattr(response_close, "RESPONSE_CLOSE_SECONDS", 0.01)
-    monkeypatch.setattr(response_body, "RESPONSE_BODY_SECONDS", 0.02)
     runner = Runner(sessions, lane, kind="steps")
     old, first, last = [point(kind="steps") for _ in range(3)]
     async with sessions.begin() as session:
@@ -169,14 +176,7 @@ async def test_response_failure_releases_ownership_and_resumes_checkpoint(
     decoding = damage in {"truncated", "checksum", "limit"} or damage == "wire"
     if limited:
         monkeypatch.setattr(response_decode, "MAX_DECODED_BYTES", len(rejected) - 1)
-    if encoding == "gzip-members":
-        wire = compressed(rejected[:20], "gzip") + compressed(rejected[20:], "gzip")
-        encoding = "gzip"
-    elif encoding == "gzip-stack":
-        wire = compressed(compressed(rejected, "gzip"), "deflate")
-        encoding = "gzip, deflate"
-    else:
-        wire = compressed(rejected, encoding, damage) if decoding or stream_errors else rejected
+    wire, encoding = failure_wire(rejected, encoding, damage, decoding, stream_errors)
     if wire_limited:
         monkeypatch.setattr(response_body, "MAX_WIRE_BYTES", max(len(good), len(wire)) + 1)
     unexpected = stream_errors and not issubclass(
@@ -195,7 +195,12 @@ async def test_response_failure_releases_ownership_and_resumes_checkpoint(
                 PausedBody(wire, "close", read_error=stream_errors[0], close_error=stream_errors[1])
                 if stream_errors
                 else (
-                    FlowingBody(wire, buffered=wire_limited, finish=decoding and not wire_limited)
+                    FlowingBody(
+                        wire,
+                        buffered=wire_limited,
+                        finish=decoding and not wire_limited,
+                        stalls=not wire_limited,
+                    )
                     if phase in {"body", "wire"} or decoding
                     else PausedBody(wire, phase)
                 )
@@ -213,15 +218,6 @@ async def test_response_failure_releases_ownership_and_resumes_checkpoint(
         return httpx.Response(200, json={"dataPoints": [last]})
 
     google = client(handler, sessions, google_api_max_retries=2)
-    exchange = google._exchange
-
-    async def bounded_exchange(*args, **kwargs):
-        # Bound HTTP reads, closes and retries, independently of database commits.
-        # A durable resume must not be cancelled while committing its receipt just
-        # because a loaded runner takes longer to schedule the database worker.
-        return await asyncio.wait_for(exchange(*args, **kwargs), 2)
-
-    monkeypatch.setattr(google, "_exchange", bounded_exchange)
     try:
         with pytest.raises(GoogleHealthError) as caught:
             await runner.run(google)
@@ -337,8 +333,7 @@ async def test_unexpected_stream_failure_preserves_archive_and_progress(
     )
 
 
-async def test_stream_finishing_within_body_budget_is_complete(sessions, monkeypatch):
-    monkeypatch.setattr(response_body, "RESPONSE_BODY_SECONDS", 0.1)
+async def test_stream_finishing_within_body_budget_is_complete(sessions):
     wire = b' {"dataPoints": []}\n'
     stream = FlowingBody(wire, finish=True)
     stream.release.set()
@@ -354,8 +349,8 @@ async def test_stream_finishing_within_body_budget_is_complete(sessions, monkeyp
 
 
 @pytest.mark.parametrize("lane", ["sync", "backfill"])
-async def test_body_retry_success_stores_only_the_valid_page(sessions, monkeypatch, lane):
-    monkeypatch.setattr(response_body, "RESPONSE_BODY_SECONDS", 0.02)
+@pytest.mark.usefixtures("expiring_streams")
+async def test_body_retry_success_stores_only_the_valid_page(sessions, lane):
     stream = FlowingBody(json.dumps({"dataPoints": [point(kind="steps")]}).encode())
     stream.release.set()
     record, calls = point(kind="steps"), []
@@ -396,7 +391,11 @@ async def test_external_cancel_does_not_retry_body_timeout(
     cleanup="timeout",
 ):
     monkeypatch.setattr(response_body, "RESPONSE_BODY_SECONDS", 0.02 if phase == "close" else 60)
-    monkeypatch.setattr("app.google_health.client.KEEP_ON_CANCEL_SECONDS", 0.02)
+    # cleanup="timeout": the budget runs out only after the archive write (below), not when the
+    # stalled close jumps the clock. In-memory SQLite shares one connection, so a write still
+    # running then would overlap the receipt's and lose rows, which no real database does.
+    keep = 2 * PAST_ALL_BUDGETS if cleanup == "timeout" else 2
+    monkeypatch.setattr("app.google_health.client.KEEP_ON_CANCEL_SECONDS", keep)
     stream = FlowingBody(b'{"dataPoints": []}')
     if stream_errors:
         stream = PausedBody(
@@ -423,18 +422,24 @@ async def test_external_cancel_does_not_retry_body_timeout(
         )
 
     google = client(handler, sessions)
+    archive = WatchedArchive(sessions)
+    google.archive = archive
     task = asyncio.create_task(Runner(sessions, lane, kind="steps").run(google))
     try:
-        await asyncio.wait_for((stream.reading if phase == "read" else stream.closing).wait(), 2)
+        await asyncio.wait_for((stream.reading if phase == "read" else stream.closing).wait(), 30)
         task.cancel("secret-access-token")
-        if cleanup != "timeout":
+        if cleanup == "timeout":
+            await asyncio.wait_for(archive.done.wait(), 30)
+            advance_loop_clock(3 * PAST_ALL_BUDGETS)
+        else:
             if cleanup == "cancel-again":
                 await asyncio.sleep(0)
                 task.cancel("secret-access-token")
             stream.release.set()
         with pytest.raises(asyncio.CancelledError):
             await task
-        (row,) = await stored(sessions)
+        # A write that outlasted the cancellation budget finishes shielded in the background.
+        (row,) = await until(lambda: stored(sessions), "the archived response")
         assert len(calls) == 1 and row.body == stream.wire
         assert row.complete == (bool(stream_errors) and stream_errors[0] is None)
         assert row.body_sha256 == hashlib.sha256(stream.wire).hexdigest()
@@ -468,3 +473,15 @@ async def test_cancel_during_unexpected_stream_cleanup(
         sessions, monkeypatch, lane, "unexpected", 200, (read_error, OSError), encoding, cleanup
     )
     assert "private-body" not in caplog.text and "secret-access-token" not in caplog.text
+
+
+def failure_wire(rejected, encoding, damage, decoding, stream_errors):
+    if encoding == "gzip-members":
+        wire = compressed(rejected[:20], "gzip") + compressed(rejected[20:], "gzip")
+        encoding = "gzip"
+    elif encoding == "gzip-stack":
+        wire = compressed(compressed(rejected, "gzip"), "deflate")
+        encoding = "gzip, deflate"
+    else:
+        wire = compressed(rejected, encoding, damage) if decoding or stream_errors else rejected
+    return wire, encoding

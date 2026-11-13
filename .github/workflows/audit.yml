@@ -1,0 +1,84 @@
+name: audit
+
+# Advisories change while the code does not: the same audits as the security job of ci.yml, on the
+# default branch every day. A finding fails the run, which shows in Actions and notifies the
+# person who last changed this schedule.
+"on":
+  schedule:
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  audit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: "0.13.6"
+          enable-cache: true
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24.22.2"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Python dependency audit
+        id: python
+        run: |
+          uv python install 3.12.16
+          uv export --frozen --no-dev --no-emit-project | uvx --python 3.12.16 --exclude-newer 2026-11-08T00:00:00Z pip-audit==2.10.1 -r /dev/stdin --strict
+      - name: Frontend production dependency audit
+        id: npm
+        if: ${{ !cancelled() }}
+        working-directory: frontend
+        run: npm audit --omit=dev --audit-level=high
+      - name: Build tooling audit
+        # Playwright and eslint never touch the image. vite is not in the image either, but it builds
+        # the bundle that ships, so a high advisory in its tree fails this scheduled audit. ci.yml keeps
+        # --omit=dev as the per-commit gate.
+        id: npm_tooling
+        if: ${{ !cancelled() }}
+        working-directory: frontend
+        run: npm audit --audit-level=high
+      - name: Application image
+        id: image
+        if: ${{ !cancelled() }}
+        run: docker build --tag healthos:audit .
+      - name: Container vulnerability audit
+        id: trivy
+        if: ${{ !cancelled() && steps.image.outcome == 'success' }}
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: healthos:audit
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+          scanners: vuln
+      - name: Audit results
+        if: ${{ always() }}
+        env:
+          PYTHON_AUDIT: ${{ steps.python.outcome }}
+          NPM_AUDIT: ${{ steps.npm.outcome }}
+          NPM_TOOLING_AUDIT: ${{ steps.npm_tooling.outcome }}
+          IMAGE_BUILD: ${{ steps.image.outcome }}
+          TRIVY_AUDIT: ${{ steps.trivy.outcome }}
+        run: |
+          {
+            echo '| Denetim | Sonuç |'
+            echo '| --- | --- |'
+            echo "| pip-audit | $PYTHON_AUDIT |"
+            echo "| npm audit | $NPM_AUDIT |"
+            echo "| npm audit (derleme araçları) | $NPM_TOOLING_AUDIT |"
+            echo "| İmaj derleme | $IMAGE_BUILD |"
+            echo "| Trivy | $TRIVY_AUDIT |"
+          } >> "$GITHUB_STEP_SUMMARY"

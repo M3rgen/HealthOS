@@ -5,13 +5,15 @@ from unittest.mock import AsyncMock
 from app import main
 from app.core.config import Settings
 from app.core.timeutil import as_utc
+from app.core.webhook_types import NotificationStatus
 from app.google_health.client import Page
 from app.google_health.data_types import REGISTRY
 from app.models.state import JobStatus, SyncState, WebhookNotification
-from app.services.runtime import Runtime
-from app.services.webhook_processing import INTERRUPTED_ERROR, WebhookBatchProcessor
-from app.services.webhook_status import WebhookStatusService
+from app.runtime import Runtime
+from app.services.providers.ingestion import GoogleSource
+from app.services.synchronization.webhook_status import WebhookStatusService
 from app.sync.incremental import STALE_RUNNING_AFTER, IncrementalSync
+from app.sync.webhook_processing import INTERRUPTED_ERROR, WebhookBatchProcessor
 
 # Last heartbeat long enough ago that no live process can still own the row.
 STALE = datetime.now(UTC) - STALE_RUNNING_AFTER - timedelta(minutes=1)
@@ -35,6 +37,7 @@ def start_app(sessions, monkeypatch, settings, incremental):
 
 
 async def test_startup_fails_sync_states_left_running_by_a_dead_process(sessions, monkeypatch):
+    fresh = datetime.now(UTC)  # explicit: the column's default is the database's own clock
     async with sessions.begin() as session:
         session.add_all(
             [
@@ -48,14 +51,14 @@ async def test_startup_fails_sync_states_left_running_by_a_dead_process(sessions
                 ),
                 SyncState(data_type="sleep", status=JobStatus.completed),
                 # Heartbeat a moment ago: a `healthos sync` in another container.
-                SyncState(data_type="weight", status=JobStatus.running),
+                SyncState(data_type="weight", status=JobStatus.running, updated_at=fresh),
             ]
         )
     settings = Settings(_env_file=None, app_env="test")
     incremental = IncrementalSync(
         settings,
         sessions,
-        None,
+        GoogleSource(None),
         {name: REGISTRY[name] for name in ("steps", "sleep", "weight")},
     )
     async with start_app(sessions, monkeypatch, settings, incremental):
@@ -92,21 +95,25 @@ def element(element_hash, status, data_type="steps", **fields):
 
 
 async def test_startup_fails_webhook_elements_left_running_by_a_dead_process(sessions, monkeypatch):
+    fresh = datetime.now(UTC)  # explicit: the column's default is the database's own clock
     async with sessions.begin() as session:
         session.add_all(
             [
                 element("crashed", "running", updated_at=STALE),
                 element("done", "completed"),
                 # Another process just claimed it.
-                element("claimed", "running"),
+                element("claimed", "running", updated_at=fresh),
                 # Claimed long ago, but its fetch is still paging (fresh sync heartbeat).
                 element("paging", "running", data_type="sleep", updated_at=STALE),
-                SyncState(data_type="sleep", status=JobStatus.running),
+                SyncState(data_type="sleep", status=JobStatus.running, updated_at=fresh),
             ]
         )
     settings = Settings(_env_file=None, app_env="test")
     incremental = IncrementalSync(
-        settings, sessions, None, {"steps": REGISTRY["steps"], "sleep": REGISTRY["sleep"]}
+        settings,
+        sessions,
+        GoogleSource(None),
+        {"steps": REGISTRY["steps"], "sleep": REGISTRY["sleep"]},
     )
 
     async with start_app(sessions, monkeypatch, settings, incremental):
@@ -116,8 +123,8 @@ async def test_startup_fails_webhook_elements_left_running_by_a_dead_process(ses
             claimed = await session.get(WebhookNotification, "claimed")
             paging = await session.get(WebhookNotification, "paging")
 
-    # failed is claimable again, so the next delivery or replay retries the element.
-    assert crashed.status == "failed"
+    # Interruption is retryable independently of the human-readable diagnostic.
+    assert crashed.status is NotificationStatus.interrupted
     assert crashed.last_error == INTERRUPTED_ERROR
     assert crashed.attempt_count == 1
     assert done.status == "completed"
@@ -147,7 +154,9 @@ class AgingClient:
 
 async def test_a_paging_sync_refreshes_its_heartbeat_on_every_page(sessions):
     client = AgingClient(sessions)
-    incremental = IncrementalSync(Settings(), sessions, client, {"steps": REGISTRY["steps"]})
+    incremental = IncrementalSync(
+        Settings(), sessions, GoogleSource(client), {"steps": REGISTRY["steps"]}
+    )
     start = datetime(2026, 8, 1, tzinfo=UTC)
 
     await incremental.run("steps", start, start + timedelta(days=1))

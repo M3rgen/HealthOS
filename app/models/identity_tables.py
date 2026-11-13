@@ -39,9 +39,6 @@ from app.models.identity_constants import (
 )
 from app.models.state import RawJSON
 
-# Load the archive tables and their healthos_refuse_change() DDL before identity guards.
-import app.models.raw_versions  # noqa: E402, F401  isort: skip
-
 
 class RawHealthDataIdentity(Base):
     __tablename__ = IDENTITY_TABLE
@@ -117,9 +114,7 @@ class RawSourceChain(Base):
         CheckConstraint("from_fingerprint <> to_fingerprint", name="distinct_sources"),
     )
 
-    id: Mapped[int] = mapped_column(
-        BigInteger().with_variant(Integer(), "sqlite"), primary_key=True, autoincrement=True
-    )
+    id: Mapped[int] = mapped_column(BigInteger(), primary_key=True, autoincrement=True)
     data_type: Mapped[str] = mapped_column(String(128), nullable=False)
     # app.parsers.identity.source_fingerprint of the dataSource before and after the change.
     from_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
@@ -168,9 +163,7 @@ class RawSourceDevice(Base):
         Index("ix_raw_source_devices_current", "data_type", "fingerprint", "id"),
     )
 
-    id: Mapped[int] = mapped_column(
-        BigInteger().with_variant(Integer(), "sqlite"), primary_key=True, autoincrement=True
-    )
+    id: Mapped[int] = mapped_column(BigInteger(), primary_key=True, autoincrement=True)
     data_type: Mapped[str] = mapped_column(String(128), nullable=False)
     fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
     device: Mapped[str] = mapped_column(String(64), nullable=False)
@@ -212,7 +205,7 @@ class RawSourcePair(Base):
 
 
 class RawSourceDecision(Base):
-    """The owner's decision about two source fingerprints (``health-mirror identity-decide``).
+    """The owner's decision about two source fingerprints (``healthos identity-decide``).
 
     ``link``, ``reject``, ``confirm``: about the chain ``first -> second`` (record it; stop
     using it; reviewed, keep it). ``distinct``, ``not-distinct``: about the pair (two devices;
@@ -227,9 +220,7 @@ class RawSourceDecision(Base):
         ),
     )
 
-    id: Mapped[int] = mapped_column(
-        BigInteger().with_variant(Integer(), "sqlite"), primary_key=True, autoincrement=True
-    )
+    id: Mapped[int] = mapped_column(BigInteger(), primary_key=True, autoincrement=True)
     data_type: Mapped[str] = mapped_column(String(128), nullable=False)
     decision: Mapped[str] = mapped_column(String(16), nullable=False)
     first_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
@@ -293,9 +284,7 @@ class RawSourceAgreement(Base):
         ),
     )
 
-    id: Mapped[int] = mapped_column(
-        BigInteger().with_variant(Integer(), "sqlite"), primary_key=True, autoincrement=True
-    )
+    id: Mapped[int] = mapped_column(BigInteger(), primary_key=True, autoincrement=True)
     data_type: Mapped[str] = mapped_column(String(128), nullable=False)
     first_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
     second_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
@@ -318,7 +307,6 @@ class IdentityDeferredDeletion(Base):
             "ix_identity_deferred_deletions_open",
             "data_type",
             postgresql_where=text("resolved_at IS NULL"),
-            sqlite_where=text("resolved_at IS NULL"),
         ),
     )
 

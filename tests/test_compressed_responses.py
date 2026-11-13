@@ -16,8 +16,8 @@ from app.db.base import Base
 from app.google_health import client as client_module
 from app.google_health.client import ResponseStreamError
 from app.models.raw_versions import RawApiResponse
-from app.services.responses import verify_responses
-from app.services.storage import store_page
+from app.services.archive.responses import verify_responses
+from app.services.archive.storage import store_page
 
 
 @pytest.mark.parametrize("encoding", ["gzip", "deflate", "raw-deflate", "identity"])

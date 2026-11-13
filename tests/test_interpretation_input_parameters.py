@@ -2,24 +2,24 @@
 
 from datetime import timedelta
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import AsyncMock, Mock
 from uuid import UUID
 
 import pytest
 from derived_records import BAND, DAY, T0, manual, point, snapshot, store
 from interpretation_records import call
-from interpretation_records import production_reader as production_reader
 from sqlalchemy import event, insert
 from sqlalchemy.dialects.postgresql.asyncpg import dialect
+from support.sqlite_database import SQLite
 
-from app.models.identity import RawSourceDevice
+from app.models.identity_tables import RawSourceDevice
 from app.models.manual import ManualMeasurement
 from app.models.manual_flags import ManualMeasurementFlagEvent
 from app.models.state import RawHealthData
 from app.parsers.common import canonical_json, payload_hash
-from app.services import interpretation_input_state as state
-from app.services import interpretation_inputs as inputs
-from app.services.manual_flags import record_flag
+from app.services.archive.manual_flags import record_flag
+from app.services.interpretation import interpretation_inputs as inputs
+from app.services.shared.query_ranges import CivilDateRange
 
 
 def raw_rows(count):
@@ -50,7 +50,12 @@ def measurements(count):
 
 
 async def read(session, manual=True):
-    return await inputs.load_inputs(session, DAY, DAY, "UTC", {"weight", "height"}, manual=manual)
+    return await inputs.load_inputs(
+        session,
+        {"weight", "height"},
+        manual=manual,
+        dates=CivilDateRange(DAY, DAY, "UTC"),
+    )
 
 
 @pytest.mark.parametrize("raw_count,manual_count", [(16_384, 0), (0, 32_768), (16_384, 32_768)])
@@ -89,6 +94,16 @@ async def test_postgres_expanded_parameters_through_load_inputs(raw_count, manua
         compile_statement(statement)
         return next(results)
 
+    async def stream_scalars(statement):
+        rows = await scalars(statement)
+
+        async def partitions(size):
+            for offset in range(0, len(rows), size):
+                yield rows[offset : offset + size]
+
+        return Mock(partitions=partitions, close=AsyncMock())
+
+    session.stream_scalars = stream_scalars
     session.execute, session.scalars = execute, scalars
     loaded = await read(session)
     assert len(loaded.rows) == raw_count and len(loaded.measurements) == manual_count
@@ -145,14 +160,14 @@ async def test_sqlite_large_reads_keep_pairs_order_latest_and_global_flag_budget
         ):
             await session.execute(insert(model), rows)
     signatures, parameters = [], []
-    original = inputs.payload_hash
+    original = inputs._signature_hash
 
     def capture(value):
-        if isinstance(value, dict) and "flags" in value:
-            signatures.append(value)
-        return original(value)
+        snapshot = {key: list(rows) for key, rows in value.items()}
+        signatures.append(snapshot)
+        return original(snapshot)
 
-    monkeypatch.setattr(inputs, "payload_hash", capture)
+    monkeypatch.setattr(inputs, "_signature_hash", capture)
     async with sessions.begin() as session:
 
         def check_parameters(conn, cursor, statement, values, context, many):
@@ -174,7 +189,7 @@ async def test_sqlite_large_reads_keep_pairs_order_latest_and_global_flag_budget
         ]
         assert [(r[0], r[1]) for r in signatures[-1]["devices"]] == sorted(expected)
         assert max(parameters) <= 901
-        monkeypatch.setattr(state, "_SQLITE_FINGERPRINTS", 137)
+        monkeypatch.setattr(SQLite, "value_block_size", 137)
         assert (await read(session)).fingerprint == loaded.fingerprint
     # One more event exceeds the global event budget, regardless of page size.
     async with sessions.begin() as session:
@@ -183,7 +198,9 @@ async def test_sqlite_large_reads_keep_pairs_order_latest_and_global_flag_budget
             [dict(measurement_id=UUID(int=1), flag="test", action="mark", created_at=T0)],
         )
     for limit in (1, 200):
-        assert (await call("longitudinal", limit=limit))["code"] == "input_budget_exceeded"
+        assert (await call(sessions, "longitudinal", limit=limit))[
+            "code"
+        ] == "input_budget_exceeded"
 
 
 async def test_empty_and_disabled_manual_windows_ignore_unrelated_flags(sessions):
@@ -216,7 +233,7 @@ async def test_round_trip_events_expire_cursor_without_changing_values(sessions,
     decision = dict(data_type="weight", fingerprint=payload_hash(BAND), decided_at=T0)
     async with sessions.begin() as session:
         session.add(RawSourceDevice(**decision, device="original"))
-    before = await call("longitudinal", limit=1)
+    before = await call(sessions, "longitudinal", limit=1)
     assert before["next_cursor"]
     async with sessions() as session:
         archive = await snapshot(session)
@@ -229,8 +246,10 @@ async def test_round_trip_events_expire_cursor_without_changing_values(sessions,
                 session.add(
                     RawSourceDevice(**decision, device="changed" if changed else "original")
                 )
-        assert (await call("longitudinal", cursor=before["next_cursor"]))["code"] == "stale_cursor"
-    assert (await call("longitudinal", limit=1))["summaries"] == before["summaries"]
+        assert (await call(sessions, "longitudinal", cursor=before["next_cursor"]))[
+            "code"
+        ] == "stale_cursor"
+    assert (await call(sessions, "longitudinal", limit=1))["summaries"] == before["summaries"]
     async with sessions() as session:
         assert (await read(session)).fingerprint != fingerprint
         after = await snapshot(session)

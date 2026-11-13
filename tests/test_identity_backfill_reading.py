@@ -8,13 +8,14 @@ import pytest
 from identity_records import HEART, STEPS, T0, heart, legacy, store
 
 from app.core.timeutil import as_utc
-from app.models.identity import RawHealthDataSupersession
+from app.models.identity_tables import RawHealthDataSupersession
 from app.models.raw_versions import RawHealthDataEvent
 from app.models.state import RawHealthData
 from app.parsers.common import payload_hash
-from app.services import identity_backfill as backfill
-from app.services import identity_backfill_reading as reading
-from app.services.identity_backfill_stats import BackfillStats
+from app.services.identities import identity_backfill as backfill
+from app.services.identities import identity_backfill_reading as reading
+from app.services.identities.identity_backfill_stats import BackfillStats
+from app.services.identities.identity_options import BackfillOptions
 
 
 def raw(index, start, **values):
@@ -35,22 +36,10 @@ def raw(index, start, **values):
     )
 
 
-def test_legacy_exports_are_the_production_reader():
-    for name in (
-        "_COLUMNS",
-        "_Row",
-        "_read_batch",
-        "_rows_at",
-        "_rows_of",
-        "_EPOCH",
-        "_micros",
-        "_from_micros",
-        "_collect_starts",
-    ):
-        assert getattr(backfill, name) is getattr(reading, name)
-    assert reading._Row.__module__ == reading.__name__
-    assert reading._read_batch.__module__ == reading.__name__
-    assert reading._collect_starts.__module__ == reading.__name__
+def test_shared_reader_types_and_operations_belong_to_the_reader_module():
+    assert reading.Row.__module__ == reading.__name__
+    assert reading.read_batch.__module__ == reading.__name__
+    assert reading.collect_starts.__module__ == reading.__name__
 
 
 @pytest.mark.parametrize("batch_size", [1, 2, 3, 5, 10])
@@ -72,16 +61,16 @@ async def test_batches_finish_the_last_start_and_resume_without_duplicates(sessi
         )
     cursor, found = None, []
     async with sessions() as session:
-        while batch := await reading._read_batch(session, HEART.name, batch_size, cursor, None):
+        while batch := await reading.read_batch(session, HEART.name, batch_size, cursor, None):
             # Every start in this batch includes all its rows, including the boundary start.
             for start, expected in ((T0, {2, 5}), (later, {1, 3, 4}), (last, {6})):
                 group = {row[0].int for row in batch if as_utc(row[3]) == start}
                 assert not group or group == expected
             found.extend(row[0].int for row in batch)
             cursor = (batch[-1][3], batch[-1][0])
-        resumed = await reading._read_batch(session, HEART.name, 1, None, later)
+        resumed = await reading.read_batch(session, HEART.name, 1, None, later)
         # Once a cursor exists, it takes precedence over the initial --after cutoff.
-        following = await reading._read_batch(
+        following = await reading.read_batch(
             session, HEART.name, 1, (resumed[-1][3], resumed[-1][0]), last + timedelta(days=1)
         )
     assert found == [2, 5, 1, 3, 4, 6]
@@ -102,9 +91,9 @@ async def test_rows_of_separates_stale_starts_and_preserves_parsing_counters(ses
             ]
         )
     async with sessions() as session:
-        batch = await reading._read_batch(session, HEART.name, 10, None, None)
+        batch = await reading.read_batch(session, HEART.name, 10, None, None)
     stats = BackfillStats(rows=7, named=2, unidentified=3)
-    rows, stale = reading._rows_of(HEART, batch, stats)
+    rows, stale = reading.rows_of(HEART, batch, stats)
     assert [row.raw_id.int for row in rows] == [1]
     assert [row.raw_id.int for row in stale] == [2]
     assert (stats.rows, stats.named, stats.unidentified, stats.start_mismatches) == (11, 3, 4, 0)
@@ -115,7 +104,7 @@ async def test_rows_of_separates_stale_starts_and_preserves_parsing_counters(ses
     assert stale[0].deleted and not stale[0].quarantined
     assert stale[0].identity.start == later
     assert rows[0].order > stale[0].order
-    assert reading._rows_of(HEART, batch, None) == (rows, stale)
+    assert reading.rows_of(HEART, batch, None) == (rows, stale)
 
 
 async def test_rows_at_deduplicates_and_chunks_starts_without_crossing_data_types(sessions):
@@ -132,8 +121,8 @@ async def test_rows_at_deduplicates_and_chunks_starts_without_crossing_data_type
             ]
         )
     async with sessions() as session:
-        found = await reading._rows_at(session, HEART, [*reversed(starts), starts[0], starts[-1]])
-        assert await reading._rows_at(session, HEART, []) == []
+        found = await reading.rows_at(session, HEART, [*reversed(starts), starts[0], starts[-1]])
+        assert await reading.rows_at(session, HEART, []) == []
     assert sorted(row[0].int for row in found) == [1, 2, 3, 4]
 
 
@@ -210,7 +199,7 @@ async def test_collect_starts_merges_changed_returned_touched_and_lapsed_rows(
                     new_payload_hash=right.payload_hash,
                 )
             )
-    found = await reading._collect_starts(
+    found = await reading.collect_starts(
         sessions,
         HEART.name,
         since=since if changed else None,
@@ -218,7 +207,7 @@ async def test_collect_starts_merges_changed_returned_touched_and_lapsed_rows(
         lapsed={("a", "b")} if lapsed else set(),
     )
     assert isinstance(found, array) and found.typecode == "q"
-    assert [reading._from_micros(value) for value in found] == [at(offset) for offset in expected]
+    assert [reading.from_micros(value) for value in found] == [at(offset) for offset in expected]
 
 
 @pytest.mark.parametrize(
@@ -231,30 +220,30 @@ async def test_collect_starts_merges_changed_returned_touched_and_lapsed_rows(
     ],
 )
 def test_microseconds_round_trip_utc_naive_offset_and_pre_epoch_times(value):
-    assert reading._from_micros(reading._micros(value)) == as_utc(value)
-    assert reading._micros(reading._EPOCH) == 0
+    assert reading.from_micros(reading._micros(value)) == as_utc(value)
+    assert reading._micros(reading.EPOCH) == 0
 
 
-async def test_full_and_incremental_runs_keep_legacy_reader_monkeypatch_points(
-    sessions, clock, monkeypatch
-):
+async def test_full_and_incremental_runs_use_the_shared_reader(sessions, clock, monkeypatch):
     calls = []
-    for name in ("_read_batch", "_rows_at", "_collect_starts"):
-        original = getattr(backfill, name)
+    for name in ("read_batch", "rows_at", "collect_starts"):
+        original = getattr(reading, name)
 
         async def tracked(*args, _name=name, _original=original, **kwargs):
             calls.append(_name)
             return await _original(*args, **kwargs)
 
-        monkeypatch.setattr(backfill, name, tracked)
+        monkeypatch.setattr(reading, name, tracked)
     await legacy(sessions, HEART, heart(60), T0)
-    full = await backfill.identity_backfill(sessions, data_types=[HEART.name], batch_size=1)
-    assert full[HEART.name].mode == "full" and "_read_batch" in calls
+    full = await backfill.identity_backfill(
+        sessions, data_types=[HEART.name], options=BackfillOptions(batch_size=1)
+    )
+    assert full[HEART.name].mode == "full" and "read_batch" in calls
     calls.clear()
     clock.advance(minutes=1)
     await store(sessions, HEART, heart(61))
     incremental = await backfill.identity_backfill(
-        sessions, data_types=[HEART.name], batch_size=1, incremental=True
+        sessions, data_types=[HEART.name], incremental=True, options=BackfillOptions(batch_size=1)
     )
     assert incremental[HEART.name].mode == "incremental"
-    assert "_collect_starts" in calls and "_rows_at" in calls
+    assert "collect_starts" in calls and "rows_at" in calls

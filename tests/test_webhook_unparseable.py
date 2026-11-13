@@ -8,14 +8,14 @@ from unittest.mock import Mock
 
 import pytest
 from sqlalchemy import func, null, select
-from test_webhook_date_windows import fetching_receiver as fetching_receiver
-from test_webhook_route import notification
-from test_webhook_status_http import receiver as receiver
-from test_webhook_unstorable import rows, snapshot
+from support.webhook_archive import rows, snapshot
+from support.webhooks import fetching_receiver as fetching_receiver
+from support.webhooks import notification
+from support.webhooks import receiver as receiver
 
 from app.models.retrieval import RetrievalReceipt
 from app.models.state import RawHealthData, SyncState, WebhookEvent
-from app.services import webhook_metadata
+from app.services.synchronization import webhook_metadata
 
 DEEP = b"[" * 100_000 + b"0" + b"]" * 100_000
 NOTICE = notification()

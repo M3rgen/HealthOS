@@ -47,8 +47,10 @@ async function launch(options = {}) {
   const browser = await chromium.launch({ headless: true, ...options, args });
   // Apply per-page settings to every page, whether opened by browser.newPage or context.newPage.
   const newContext = browser.newContext.bind(browser);
+  // Without a stored choice the interface follows the browser's language (i18n/index.js); the
+  // checks are written against the Turkish page, so a context is tr-TR unless a check names one.
   browser.newContext = async (contextOptions) => {
-    const context = await newContext(contextOptions);
+    const context = await newContext({ locale: 'tr-TR', ...contextOptions });
     context.setDefaultTimeout(STEP_TIMEOUT);
     if (!MODEL_MOTION) await context.addInitScript(() => {
       try { if (localStorage.getItem('healthos.motion') === null) localStorage.setItem('healthos.motion', 'false'); } catch { /* no storage */ }
@@ -92,4 +94,25 @@ function run(main) {
   main().catch((error) => { console.error(error); process.exit(1); });
 }
 
-module.exports = { BASE, OUTPUT, SKIP_CODE, STEP_TIMEOUT, chromium, launch, shot, skip, run, until };
+/**
+ * ≤900 px the overview shows one card at a time behind tabs (overview-tabs.js): clicks the tab of
+ * `key` (profile, connection, steps, sleep, heart). A no-op where every card is shown.
+ */
+async function showCard(page, key) {
+  const tab = page.locator(`#overview-tab-${key}`);
+  if (await tab.isVisible()) await tab.click();
+}
+
+/**
+ * Narrow or short screens show one Sistem group at a time (status, devices, sync, settings):
+ * selects `key` and leaves focus on its tab. A no-op where every group is shown.
+ */
+async function showSystemGroup(page, key) {
+  const tab = page.locator(`#system-tab-${key}`);
+  if (!await tab.isVisible()) return;
+  await tab.click();
+  await page.waitForFunction(id => !document.querySelector(`[data-group="${id}"]`).hidden, key);
+  await tab.focus();
+}
+
+module.exports = { BASE, OUTPUT, SKIP_CODE, STEP_TIMEOUT, chromium, launch, shot, skip, run, until, showCard, showSystemGroup };

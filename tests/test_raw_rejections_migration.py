@@ -9,6 +9,7 @@ from alembic.config import Config
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session
+from support import sqlite_guards
 
 from app.core.config import get_settings
 from app.models import raw_rejections
@@ -69,7 +70,9 @@ def test_upgrade_adds_only_new_tables_and_keeps_every_existing_row(database):
     # Every existing table, index and trigger is defined exactly as before.
     assert schema <= after
     added = {name for _, name, _ in after - schema}
-    assert {name for name, (table, _) in raw_rejections.SQLITE_TRIGGER_SQL.items()} <= added
+    assert {
+        name for name, (table, _) in sqlite_guards.definitions(raw_rejections.GUARDS).items()
+    } <= added
     assert all(any(table in name for table in raw_rejections.TABLES) for name in added), added
     command.upgrade(config, "head")
     command.check(config)

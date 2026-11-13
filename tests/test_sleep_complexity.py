@@ -6,8 +6,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.services.dashboard import sleep_estimate
-from app.services.sleep_timeline import sleep_timeline
+from app.services.interpretation.sleep_estimate import sleep_estimate
+from app.services.interpretation.sleep_timeline import sleep_timeline
 
 
 @pytest.mark.parametrize("shape", ["disjoint", "nested", "dense"])

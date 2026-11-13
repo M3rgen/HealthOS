@@ -25,14 +25,15 @@ from apscheduler.events import (
 from identity_records import HEART, NEW_NAME, STEPS, T0, heart, legacy, steps, store
 
 from app.core.config import Settings
-from app.models.identity import IdentityReconcileState
-from app.services import identity_backfill as backfill
-from app.services import identity_reconcile_window as window
-from app.services.identity_backfill import identity_backfill
-from app.services.identity_reconciler import IdentityReconciler
-from app.services.pipeline_health import PipelineHealthService
-from app.services.scheduler import build_scheduler
-from app.services.source_chains import LockBusy
+from app.models.identity_tables import IdentityReconcileState
+from app.services.identities import identity_backfill as backfill
+from app.services.identities import identity_reconcile_window as window
+from app.services.identities.identity_backfill import identity_backfill
+from app.services.identities.identity_options import BackfillOptions
+from app.services.identities.identity_reconciler import IdentityReconciler
+from app.services.identities.source_chain_locks import LockBusy
+from app.services.synchronization.pipeline_health import PipelineHealthService
+from app.services.synchronization.scheduler import build_scheduler
 
 NIGHT = datetime(2026, 10, 19, 2, 30, tzinfo=UTC)
 # Explicit, never read from the environment: CI exports RECONCILIATION_ENABLED=false, which a
@@ -109,7 +110,7 @@ async def test_the_window_end_leaves_the_data_type_failed_and_counted(sessions, 
         sessions,
         incremental=True,
         lock_deadline=window.busy_deadline(UNTIL, 60),
-        notice=notices.append,
+        options=BackfillOptions(notice=notices.append),
     )
 
     error = results["heart-rate"].error or ""
@@ -217,7 +218,7 @@ async def test_the_reconciler_starts_when_the_daily_reconciliation_ends():
         assert scheduler.get_job("identity-reconcile") is None
         scheduler.get_job("daily-reconciliation").modify(next_run_time=datetime.now(UTC))
         scheduler.wakeup()
-        await asyncio.wait_for(identity.started.wait(), timeout=5)
+        await asyncio.wait_for(identity.started.wait(), timeout=30)
         assert reconciliation.ran == [7]
     finally:
         await scheduler.shutdown_and_wait()

@@ -2,6 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { gzipSync } from 'node:zlib';
 import { randomBytes } from 'node:crypto';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { measureBudget, enforceBudget, performanceBudget, limits } from '../../frontend/build-budget.js';
 
 const asset = source => ({ type: 'asset', source });
@@ -70,8 +73,7 @@ test('exact gzip limits pass; one byte over JS or CSS fails with measurement and
   const messages = [];
   assert.doesNotThrow(() => enforceBudget(report, exact, message => messages.push(message)));
   assert.match(messages.join('\n'), /raw \d+ B; gzip \d+ B; gzip limit \d+ B \(enforced\)/);
-  assert.match(messages.join('\n'), /body\/three.js \(excluded\)/);
-  for (const kind of ['js', 'css']) {
+    for (const kind of ['js', 'css']) {
     const budget = { ...exact, [kind]: exact[kind] - 1 };
     assert.throws(() => enforceBudget(report, budget, () => {}),
       new RegExp(`${kind.toUpperCase()} gzip budget exceeded: measured ${exact[kind]} B > limit ${budget[kind]} B`));
@@ -79,7 +81,7 @@ test('exact gzip limits pass; one byte over JS or CSS fails with measurement and
 });
 
 test('fixed repository limits are numeric and enforcement uses gzip rather than raw bytes', () => {
-  assert.deepEqual(limits, { js: 60000, css: 20000 });
+  assert.deepEqual(limits, { js: 51310, css: 20000, deferredJs: 170000, deferredCss: 137, figureAssets: 1950000 });
   const bundle = fixture();
   bundle['assets/entry.js'].code = 'a'.repeat(1000000);
   const report = measureBudget(bundle);
@@ -153,7 +155,47 @@ test('production plugin runs late and does not depend on the output directory', 
     const oversized = fixture();
     oversized['assets/entry.js'].code = randomBytes(100000).toString('hex');
     console.log = () => {};
-    try { assert.throws(() => plugin.generateBundle.handler({}, oversized), /measured \d+ B > limit 60000 B/); }
+    try { assert.throws(() => plugin.generateBundle.handler({}, oversized), /measured \d+ B > limit 51310 B/); }
     finally { console.log = original; }
   }
 });
+
+test('deferred body and three.js are enforced like the initial code', () => {
+  const report = measureBudget(fixture());
+  const exact = { js: report.initial.js.gzip, css: report.initial.css.gzip, deferredJs: report.deferred.js.gzip, deferredCss: report.deferred.css.gzip };
+  const messages = [];
+  assert.doesNotThrow(() => enforceBudget(report, exact, message => messages.push(message)));
+  assert.match(messages.join('\n'), /deferred JS: raw \d+ B; gzip \d+ B; gzip limit \d+ B \(enforced\)/);
+  assert.throws(() => enforceBudget(report, { ...exact, deferredJs: exact.deferredJs - 1 }, () => {}), /Deferred JS gzip budget exceeded/);
+  assert.throws(() => enforceBudget(report, { ...exact, deferredCss: exact.deferredCss - 1 }, () => {}), /Deferred CSS gzip budget exceeded/);
+  for (const invalid of [0, -1, 1.5, '1']) assert.throws(() => enforceBudget(report, { ...exact, deferredJs: invalid }, () => {}), /deferredJs limit must be a positive integer/);
+});
+
+test('figure assets are the public files deferred code references, measured from disk', t => {
+  const publicDir = mkdtempSync(path.join(tmpdir(), 'budget-public-'));
+  t.after(() => rmSync(publicDir, { recursive: true, force: true }));
+  mkdirSync(path.join(publicDir, 'models'), { recursive: true });
+  writeFileSync(path.join(publicDir, 'models/body.glb'), Buffer.alloc(300000));
+  mkdirSync(path.join(publicDir, 'assets/skin'), { recursive: true });
+  writeFileSync(path.join(publicDir, 'assets/skin/a.webp'), Buffer.alloc(1000));
+  writeFileSync(path.join(publicDir, 'unused.webp'), Buffer.alloc(5));
+  const bundle = fixture();
+  bundle['assets/viewer.js'].code = 'load("/models/body.glb");load(\'/assets/skin/a.webp\');load(`/assets/skin/a.webp`);';
+  const report = measureBudget(bundle, '/', { publicDir });
+  assert.deepEqual(report.figure, { bytes: 301000, files: ['/assets/skin/a.webp', '/models/body.glb'] });
+  assert.doesNotThrow(() => enforceBudget(report, { js: 60000, css: 20000, figureAssets: 301000 }, () => {}));
+  assert.throws(() => enforceBudget(report, { js: 60000, css: 20000, figureAssets: 300999 }, () => {}), /Figure assets budget exceeded: measured 301000 B > limit 300999 B/);
+  bundle['assets/viewer.js'].code += 'load("/models/gone.glb");';
+  assert.throws(() => measureBudget(bundle, '/', { publicDir }), /missing file \/models\/gone.glb/);
+});
+
+for (const headroom of [499, 500]) {
+  test(`runtime and headroom are logged; ${headroom} B warns only below 500 B`, () => {
+    const report = measureBudget(fixture()), messages = [];
+    enforceBudget(report, { js: report.initial.js.gzip + headroom, css: limits.css }, message => messages.push(message));
+    const runtime = messages.find(message => message.includes('initial JS headroom'));
+    assert.ok(runtime.includes(`Node ${process.versions.node}; zlib ${process.versions.zlib}`));
+    assert.ok(runtime.includes(`headroom ${headroom} B`));
+    assert.equal(runtime.includes('WARNING: below 500 B'), headroom < 500);
+  });
+}

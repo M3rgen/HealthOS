@@ -4,6 +4,7 @@
     {
       "id": "yurt",
       "label": "Otağ",
+      "labelEn": "Yurt",
       "builtin": true,
       "files": {
         "mark": "/assets/presets/logo/yurt/mark.svg",
@@ -19,6 +20,7 @@
     {
       "id": "healthos",
       "label": "Klasik",
+      "labelEn": "Classic",
       "builtin": true,
       "files": {
         "mark": "/assets/brand/healthos-mark-amber.svg",
@@ -31,6 +33,7 @@
     {
       "id": "dial",
       "label": "Kadran",
+      "labelEn": "Dial",
       "builtin": true,
       "files": {
         "mark": "/assets/presets/logo/dial/mark.svg",
@@ -45,6 +48,7 @@
     {
       "id": "monogram-h",
       "label": "Monogram",
+      "labelEn": "Monogram",
       "builtin": true,
       "files": {
         "mark": "/assets/presets/logo/monogram-h/mark.svg",
@@ -59,6 +63,7 @@
     {
       "id": "umay-wings",
       "label": "Umay kanatları",
+      "labelEn": "Umay wings",
       "builtin": true,
       "files": {
         "mark": "/assets/presets/logo/umay-wings/mark.svg",
@@ -73,6 +78,7 @@
     {
       "id": "pulse-h",
       "label": "Canlı H",
+      "labelEn": "Living H",
       "builtin": true,
       "files": {
         "mark": "/assets/presets/logo/pulse-h/mark.svg",
@@ -87,6 +93,7 @@
     {
       "id": "balance",
       "label": "Denge",
+      "labelEn": "Balance",
       "builtin": true,
       "files": {
         "mark": "/assets/presets/logo/balance/mark.svg",
@@ -103,6 +110,7 @@
     {
       "id": "umay",
       "label": "Portre",
+      "labelEn": "Portrait",
       "builtin": true,
       "files": {
         "src512": "/assets/umay/umay.webp",
@@ -115,6 +123,7 @@
     {
       "id": "umay-alt",
       "label": "Afiş",
+      "labelEn": "Poster",
       "builtin": true,
       "files": {
         "src512": "/assets/umay/umay-alt.webp",
@@ -124,6 +133,7 @@
     {
       "id": "flat",
       "label": "Sade amblem",
+      "labelEn": "Plain emblem",
       "builtin": true,
       "files": {
         "src512": "/assets/presets/umay/flat/umay.webp",
@@ -136,6 +146,7 @@
     {
       "id": "engraved",
       "label": "Gravür madalyon",
+      "labelEn": "Engraved medallion",
       "builtin": true,
       "files": {
         "src512": "/assets/presets/umay/engraved/umay.webp",
@@ -150,6 +161,7 @@
     {
       "id": "warm-grain",
       "label": "Sıcak doku",
+      "labelEn": "Warm grain",
       "builtin": true,
       "files": {
         "tile": "/assets/bg/grain-tile.webp",
@@ -159,6 +171,7 @@
     {
       "id": "fine-grain",
       "label": "İnce doku",
+      "labelEn": "Fine grain",
       "builtin": true,
       "files": {
         "tile": "/assets/bg/grain-overlay.webp"
@@ -167,6 +180,7 @@
     {
       "id": "topo",
       "label": "Topografik çizgiler",
+      "labelEn": "Topographic lines",
       "builtin": true,
       "files": {
         "tile": "/assets/presets/background/topo/tile.webp",
@@ -177,6 +191,7 @@
     {
       "id": "warm-mesh",
       "label": "Sıcak degrade",
+      "labelEn": "Warm gradient",
       "builtin": true,
       "files": {
         "tile": "/assets/presets/background/warm-mesh/tile.webp",
@@ -187,6 +202,7 @@
     {
       "id": "kilim",
       "label": "Kilim deseni",
+      "labelEn": "Kilim pattern",
       "builtin": true,
       "files": {
         "tile": "/assets/presets/background/kilim/tile.webp",

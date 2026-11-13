@@ -54,6 +54,11 @@ def app_policy(host: str | None) -> str:
     return "; ".join((*APP_POLICY, connect))
 
 
+# JSON that carries health data or the state of the archive is never stored by a browser or
+# proxy. A route that needs something else (the CSV export, a hashed asset) sets its own value.
+NO_STORE_PREFIXES = ("/api/", "/health", "/sync/", "/backfill/", "/google-health/")
+
+
 class SecurityHeadersMiddleware:
     def __init__(self, app: ASGIApp, docs_enabled: bool = True) -> None:
         self.app = app
@@ -74,6 +79,8 @@ class SecurityHeadersMiddleware:
                 headers = MutableHeaders(scope=message)
                 headers.setdefault("Content-Security-Policy", policy)
                 headers.setdefault("X-Content-Type-Options", "nosniff")
+                if scope["path"].startswith(NO_STORE_PREFIXES):
+                    headers.setdefault("Cache-Control", "no-store")
                 # Not "no-referrer": under it the Fetch spec sends "Origin: null" on
                 # same-origin POSTs (Chromium does for the login form), which would
                 # defeat the Origin-based CSRF checks. same-origin never leaks off-site.

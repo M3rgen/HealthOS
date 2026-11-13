@@ -3,7 +3,7 @@
 import asyncio
 from contextlib import asynccontextmanager
 from copy import deepcopy
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from derived_records import (
@@ -23,17 +23,19 @@ from derived_records import (
 )
 from sqlalchemy import select, update
 from sqlalchemy.exc import DataError, InterfaceError, OperationalError
+from support.invalidation import drain_invalidations
 
 from app.google_health.data_types import REGISTRY
 from app.models.derived import DerivedDay
 from app.models.health import SleepSession, Steps
 from app.models.state import RawHealthData
-from app.services import derived
-from app.services.canonical_daily import METHOD
-from app.services.derived import DerivedRefresh, register_range
-from app.services.manual_flags import record_flag
-from app.services.storage import store_records
-from app.sync.deletions import mark_source_deletions
+from app.services.archive.manual_flags import record_flag
+from app.services.archive.source_deletions import mark_source_deletions
+from app.services.archive.storage import store_records
+from app.services.identities.identity_options import SourceDecision
+from app.services.interpretation import derived
+from app.services.interpretation.canonical_daily import METHOD
+from app.services.interpretation.derived import DerivedRefresh, register_range
 
 
 async def test_refetch_only_changes_seen_time_and_never_recalculates(sessions):
@@ -78,7 +80,13 @@ async def test_deletion_service_and_revival_refresh_values_without_deleting_arch
     await read(sessions)
     async with sessions() as session, session.begin():
         count = await mark_source_deletions(
-            session, REGISTRY["steps"], T0, T0 + timedelta(days=1), T0 + timedelta(days=365)
+            # Any fetch instant after the record was stored; a fixed date failed once the
+            # calendar overtook T0 + 365 days.
+            session,
+            REGISTRY["steps"],
+            T0,
+            T0 + timedelta(days=1),
+            datetime(9999, 1, 1, tzinfo=UTC),
         )
         assert count == 1
     assert streams(await read(sessions)) == []
@@ -146,6 +154,7 @@ async def test_rollback_reverts_source_revision_flags_and_partial_build(sessions
         async with sessions() as session, session.begin():
             await store_records(session, REGISTRY["steps"], [steps(count=999)])
             await record_flag(session, identifier, "test", True)
+            await drain_invalidations(session)
             assert streams(await derived.derived_range(session, DAY, DAY, "UTC"))[0]["value"] == 999
             raise RuntimeError("synthetic rollback")
     assert await read(sessions) == original
@@ -164,6 +173,7 @@ async def test_change_during_build_stays_pending_and_is_not_returned_current(ses
         if not changed:
             changed = True
             await store_records(session, REGISTRY["steps"], [steps(count=999)])
+            await drain_invalidations(session)
         return result
 
     monkeypatch.setattr(derived, "canonical_day", changing)
@@ -350,9 +360,8 @@ async def test_range_build_commits_each_day_before_the_next(sessions, monkeypatc
 async def test_cold_day_failure_is_recorded_and_a_daily_read_still_answers(sessions, monkeypatch):
     from sqlalchemy.exc import DataError
 
-    from app.services import codex_health
+    from app.services.umay import codex_health
 
-    monkeypatch.setattr(codex_health, "SessionLocal", sessions)
     first = DAY - timedelta(days=1)
     for offset in range(2):
         await store(sessions, "steps", steps(f"day{offset}", start=T0 - timedelta(days=offset)))
@@ -365,11 +374,11 @@ async def test_cold_day_failure_is_recorded_and_a_daily_read_still_answers(sessi
 
     monkeypatch.setattr(derived, "canonical_day", fail_first)
     args = {"action": "daily", "start_date": str(first), "end_date": str(DAY), "timezone": "UTC"}
-    result = await codex_health.read_health(args)
+    result = await codex_health.read_health(sessions, args)
     assert [item["state"] for item in result["derived"]["days"]] == ["error", "current"]
     assert result["days"][0]["steps"] == 120  # legacy scalars are unaffected
     # Interpretation actions refuse explicitly instead of failing the whole tool call.
-    refused = await codex_health.read_health(dict(args, action="sleep"))
+    refused = await codex_health.read_health(sessions, dict(args, action="sleep"))
     assert refused["code"] == derived.BUILD_FAILED
 
 
@@ -400,8 +409,8 @@ async def test_identity_link_and_owner_undo_invalidate_existing_results(sessions
     from identity_records import store as identity_store
 
     from app.parsers.identity import source_fingerprint
-    from app.services.identity_backfill import identity_backfill
-    from app.services.identity_decisions import decide_sources
+    from app.services.identities.identity_backfill import identity_backfill
+    from app.services.identities.identity_decisions import decide_sources
 
     first, second = fitbit("Synthetic A"), fitbit("Synthetic B")
     for minute in range(2):
@@ -412,16 +421,16 @@ async def test_identity_link_and_owner_undo_invalidate_existing_results(sessions
     await identity_backfill(sessions)
     assert len(streams(await read(sessions))) == 2
     a, b = source_fingerprint(first), source_fingerprint(second)
-    await decide_sources(sessions, "steps", "link", a[:12], b[:12])
+    await decide_sources(sessions, "steps", request=SourceDecision("link", a[:12], b[:12]))
     assert (await cache(sessions)).revision > (await cache(sessions)).built_revision
     assert sum(row["value"] for row in streams(await read(sessions))) == 20
-    await decide_sources(sessions, "steps", "reject", a[:12], b[:12])
+    await decide_sources(sessions, "steps", request=SourceDecision("reject", a[:12], b[:12]))
     assert (await cache(sessions)).revision > (await cache(sessions)).built_revision
     assert sorted(row["value"] for row in streams(await read(sessions))) == [20, 20]
 
 
 async def test_deleted_holder_invalidates_a_held_record_on_another_day(sessions):
-    from app.models.identity import RawHealthDataSupersession
+    from app.models.identity_tables import RawHealthDataSupersession
 
     await store(sessions, "steps", steps("old"), steps("new", start=T0 + timedelta(days=1)))
     async with sessions() as session, session.begin():

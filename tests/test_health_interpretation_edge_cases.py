@@ -17,13 +17,78 @@ from derived_records import (
     summary,
 )
 from interpretation_records import call, resting
-from interpretation_records import production_reader as production_reader
 from sqlalchemy import select
 
 from app.models.derived import DerivedDay
-from app.services import codex_health, health_interpretation, interpretation_inputs
-from app.services.interpretation_types import ACTIONS, Interpretation, Refusal
-from app.services.manual_flags import record_flag
+from app.services.archive.manual_flags import record_flag
+from app.services.interpretation import health_interpretation, interpretation_inputs
+from app.services.interpretation.interpretation_measures import FRESH_DAYS, VO2_FRESH_DAYS
+from app.services.interpretation.interpretation_stats import COLD_START_DAYS, MIN_BASELINE_DAYS
+from app.services.interpretation.interpretation_types import ACTIONS, Interpretation, Refusal
+from app.services.umay import codex_health
+
+
+@pytest.mark.parametrize(
+    "kind,field,threshold",
+    [
+        ("daily-respiratory-rate", "breathsPerMinute", FRESH_DAYS),
+        ("daily-vo2-max", "vo2Max", VO2_FRESH_DAYS),
+    ],
+)
+@pytest.mark.parametrize("extra,freshness", [(0, "recent"), (1, "stale")])
+async def test_measurement_freshness_includes_threshold_day(
+    sessions, kind, field, threshold, extra, freshness
+):
+    age = threshold + extra
+    measured = DAY - timedelta(days=age)
+    await store(sessions, kind, summary(kind, day=measured, **{field: 42}))
+    row = (await call(sessions, "physiology", data_type=kind, start_date=str(measured)))[
+        "summaries"
+    ][0]
+    assert row["state"] == "available" and row["statistics"]["count"] == 1
+    assert row["age_days"] == age and row["last_date"] == str(measured)
+    assert row["freshness"] == freshness
+
+
+async def test_vo2_keeps_its_longer_freshness_window(sessions):
+    age = FRESH_DAYS + 1
+    assert FRESH_DAYS < age <= VO2_FRESH_DAYS
+    measured = DAY - timedelta(days=age)
+    for kind, field in [
+        ("daily-vo2-max", "vo2Max"),
+        ("daily-respiratory-rate", "breathsPerMinute"),
+    ]:
+        await store(sessions, kind, summary(kind, day=measured, **{field: 42}))
+    rows = (await call(sessions, "physiology", start_date=str(measured)))["summaries"]
+    present = {row["metric"]: row for row in rows if row["state"] == "available"}
+    assert set(present) == {"daily-vo2-max", "daily-respiratory-rate"}
+    assert all(row["age_days"] == age for row in present.values())
+    assert present["daily-vo2-max"]["freshness"] == "recent"
+    assert present["daily-respiratory-rate"]["freshness"] == "stale"
+
+
+@pytest.mark.parametrize(
+    "count,reasons",
+    [
+        (COLD_START_DAYS - 1, {"cold_start", "insufficient_baseline_days"}),
+        (COLD_START_DAYS, {"insufficient_baseline_days"}),
+        (MIN_BASELINE_DAYS - 1, {"insufficient_baseline_days"}),
+        (MIN_BASELINE_DAYS, set()),
+    ],
+)
+async def test_baseline_support_boundaries_have_exact_reasons(sessions, count, reasons):
+    await resting(sessions, [50] * count, start=DAY - timedelta(days=count))
+    await resting(sessions, [90])
+    result = await call(sessions, "analyze", metric="resting_bpm")
+    row = result["summaries"][0]
+    assert row["support_days"] == row["statistics"]["count"] == count
+    assert set(row["reason_codes"]) == reasons | {
+        "insufficient_calendar_support",
+        "missing_comparable_days",
+        "zero_mad",
+    }
+    assert not row["eligible"] and row["percentile"] is None
+    assert not result["candidates"]
 
 
 @pytest.mark.parametrize("action", sorted(ACTIONS))
@@ -36,9 +101,9 @@ async def test_unrepresentable_interpretation_window_refuses_before_any_database
     day = date.min + timedelta(days=max(0, history + extra))
     sessions = Mock(side_effect=AssertionError("must validate before opening a session"))
     build = AsyncMock(side_effect=AssertionError("must validate before building derived days"))
-    monkeypatch.setattr(codex_health, "SessionLocal", sessions)
     monkeypatch.setattr(codex_health, "build_range", build)
     result = await call(
+        sessions,
         action,
         start_date=str(day),
         end_date=str(day),
@@ -66,6 +131,7 @@ async def test_first_representable_baseline_keeps_entire_history_and_separate_ze
     async with sessions() as session:
         before = await snapshot(session)
     result = await call(
+        sessions,
         action,
         start_date=str(day),
         end_date=str(day),
@@ -97,6 +163,7 @@ async def test_other_interpretations_accept_first_representable_padded_day(
     async with sessions() as session:
         before = await snapshot(session)
     result = await call(
+        sessions,
         action,
         start_date=str(day),
         end_date=str(day),
@@ -131,8 +198,10 @@ async def test_unrelated_intraday_records_do_not_consume_daily_input_budget(sess
         ],
     )
     monkeypatch.setattr(interpretation_inputs, "MAX_INPUT_RECORDS", 5)
-    assert "error" not in await call("baseline", metric="resting_bpm")
-    assert (await call("intraday", data_type="heart-rate"))["code"] == "input_budget_exceeded"
+    assert "error" not in await call(sessions, "baseline", metric="resting_bpm")
+    assert (await call(sessions, "intraday", data_type="heart-rate"))[
+        "code"
+    ] == "input_budget_exceeded"
 
 
 async def test_change_during_calculation_is_refused_instead_of_mixing_snapshots(
@@ -155,7 +224,9 @@ async def test_change_during_calculation_is_refused_instead_of_mixing_snapshots(
         return await original(*args, **kwargs)
 
     monkeypatch.setattr(health_interpretation, "load_inputs", changing)
-    assert (await call("longitudinal", data_type="weight"))["code"] == "inputs_changed_retry"
+    assert (await call(sessions, "longitudinal", data_type="weight"))[
+        "code"
+    ] == "inputs_changed_retry"
 
 
 @pytest.mark.parametrize("source", [None, "opaque", []])
@@ -176,7 +247,7 @@ async def test_unknown_intraday_sources_are_not_implicitly_one_device(sessions, 
             for i in range(2)
         ],
     )
-    rows = (await call("intraday", data_type="heart-rate"))["summaries"]
+    rows = (await call(sessions, "intraday", data_type="heart-rate"))["summaries"]
     assert len(rows) == 2 and all(row["supported_seconds"] == 0 for row in rows)
 
 
@@ -203,7 +274,9 @@ async def test_numeric_strings_are_missing_evidence_alongside_measured_zero(
     async with sessions() as session, session.begin():
         await record_flag(session, flagged, "test", True)
         before = await snapshot(session)
-    result = await call("physiology", data_type=kind, start_date=str(DAY - timedelta(days=1)))
+    result = await call(
+        sessions, "physiology", data_type=kind, start_date=str(DAY - timedelta(days=1))
+    )
     row = result["summaries"][0]
     assert row["state"] == "available" and row["statistics"]["count"] == 1
     assert row["statistics"]["median"] == 0
@@ -211,7 +284,7 @@ async def test_numeric_strings_are_missing_evidence_alongside_measured_zero(
     assert [e["value"] for e in row["evidence"]] == [0, None]
     Interpretation.model_validate(result)
     json.dumps(result, allow_nan=False)
-    await call("longitudinal", data_type="weight")
+    await call(sessions, "longitudinal", data_type="weight")
     async with sessions() as session:
         assert await snapshot(session) == before
 
@@ -242,7 +315,7 @@ async def test_finite_extremes_keep_representable_statistics_and_explain_change(
         )
     async with sessions() as session:
         before = await snapshot(session)
-    result = await call("longitudinal", data_type="body-fat")
+    result = await call(sessions, "longitudinal", data_type="body-fat")
     row = result["summaries"][0]
     stats = row["statistics"]
     assert stats["median"] == center and stats["mad"] == mad
@@ -253,7 +326,7 @@ async def test_finite_extremes_keep_representable_statistics_and_explain_change(
         assert row["change"] is None and "numeric_overflow:change" in row["reason_codes"]
     else:
         assert row["change"] == 0
-    assert result == await call("longitudinal", data_type="body-fat", limit=1)
+    assert result == await call(sessions, "longitudinal", data_type="body-fat", limit=1)
     Interpretation.model_validate(result)
     json.dumps(result, allow_nan=False)
     async with sessions() as session:
@@ -269,7 +342,7 @@ async def test_robust_ratio_overflow_never_creates_a_candidate(sessions, scale, 
     )
     async with sessions() as session:
         before = await snapshot(session)
-    result = await call("analyze")
+    result = await call(sessions, "analyze")
     row = next(r for r in result["summaries"] if r["metric"] == "resting_bpm")
     assert row["statistics"]["count"] == 28 and row["statistics"]["mad"] == scale
     if expected_z is None:
@@ -294,7 +367,7 @@ async def test_intraday_unrepresentable_rate_is_a_gap_with_sound_zero_retained(s
     )
     async with sessions() as session:
         before = await snapshot(session)
-    result = await call("intraday", data_type="steps")
+    result = await call(sessions, "intraday", data_type="steps")
     row = result["summaries"][0]
     assert row["supported_seconds"] == 3600 and row["time_weighted_mean"] == 0
     assert row["gap_seconds"] == 86400 - 3600
@@ -327,7 +400,7 @@ async def test_unit_conversion_underflow_does_not_invent_a_measured_zero(session
         )
     async with sessions() as session:
         before = await snapshot(session)
-    result = await call("longitudinal", data_type="distance")
+    result = await call(sessions, "longitudinal", data_type="distance")
     row = result["summaries"][0]
     assert {e["value"] for e in row["evidence"]} == {None, 0}
     assert row["statistics"]["count"] == 1 and row["statistics"]["median"] == 0
@@ -357,7 +430,7 @@ async def test_intraday_interpolation_and_weighted_mean_retry_intermediate_overf
             for i, value in enumerate(values)
         ],
     )
-    result = await call("intraday", data_type="heart-rate")
+    result = await call(sessions, "intraday", data_type="heart-rate")
     row = result["summaries"][0]
     assert row["supported_seconds"] == 60 and row["time_weighted_mean"] == mean
     assert next(c for c in row["cells"] if c["state"] == "supported")["value"] == mean

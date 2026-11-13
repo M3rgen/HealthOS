@@ -18,6 +18,7 @@ from app.db.session import get_session
 from app.google_health.client import GoogleHealthError, Page
 from app.google_health.data_types import REGISTRY
 from app.models.state import BackfillJob, JobStatus
+from app.services.providers.ingestion import GoogleSource
 from app.sync.backfill import BackfillService
 
 NOW = datetime.now(UTC)
@@ -34,7 +35,9 @@ class PoisonClient:
     async def list_data_points(self, spec, start, end, page_token=None):
         self.starts.append(start.replace(tzinfo=UTC))
         if start.replace(tzinfo=UTC) == POISON_START:
-            raise GoogleHealthError("Google Health API returned HTTP 403: PERMISSION_DENIED")
+            raise GoogleHealthError(
+                "Google Health API returned HTTP 403: PERMISSION_DENIED", http_status=403
+            )
         return Page([], None)
 
 
@@ -64,7 +67,7 @@ def service(sessions, client):
     # Backfill boundaries already cover the configured start, so no new windows appear
     # except the trailing range up to now, which the healthy client serves.
     settings = Settings(backfill_start_date=HEALTHY_START.date(), backfill_window_days=31)
-    return BackfillService(settings, sessions, client, {"steps": REGISTRY["steps"]})
+    return BackfillService(settings, sessions, GoogleSource(client), {"steps": REGISTRY["steps"]})
 
 
 async def jobs_by_start(sessions, data_type="steps"):

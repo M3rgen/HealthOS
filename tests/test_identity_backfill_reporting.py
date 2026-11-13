@@ -1,4 +1,4 @@
-"""Import compatibility for the extracted evidence and reporting helpers."""
+"""The shared reporting interface imports independently of the backfill executor."""
 
 import importlib
 import subprocess
@@ -12,10 +12,10 @@ def test_reporting_import_does_not_load_the_backfill_executor() -> None:
         [
             sys.executable,
             "-c",
-            "from app.services import identity_backfill_reporting as reporting; "
-            "from app.services.identity_backfill_stats import BackfillStats; "
+            "from app.services.identities import identity_backfill_reporting as reporting; "
+            "from app.services.identities.identity_backfill_stats import BackfillStats; "
             "import sys; "
-            "assert 'app.services.identity_backfill' not in sys.modules; "
+            "assert 'app.services.identities.identity_backfill' not in sys.modules; "
             "assert reporting.BackfillStats is BackfillStats",
         ],
         capture_output=True,
@@ -25,11 +25,9 @@ def test_reporting_import_does_not_load_the_backfill_executor() -> None:
     assert result.returncode == 0, result.stderr
 
 
-@pytest.mark.parametrize("name", ["_Timeline", "_together", "_full", "_report"])
-def test_legacy_exports_are_the_extracted_implementations(name: str) -> None:
-    reporting = importlib.import_module("app.services.identity_backfill_reporting")
-    legacy = importlib.import_module("app.services.identity_backfill")
+@pytest.mark.parametrize("name", ["Timeline", "together", "full", "report"])
+def test_shared_reporting_helpers_belong_to_the_reporting_module(name: str) -> None:
+    reporting = importlib.import_module("app.services.identities.identity_backfill_reporting")
     helper = getattr(reporting, name)
 
-    assert getattr(legacy, name) is helper
     assert helper.__module__ == reporting.__name__

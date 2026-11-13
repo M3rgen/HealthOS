@@ -56,7 +56,10 @@ async def test_valid_lifetime_and_access_token_are_preserved(
     ) as http:
         client = OAuthClient(Settings(_env_file=None), http)
         token = await client.refresh("synthetic-refresh")
-        assert await client.exchange_code("synthetic-code") == payload
+        assert (
+            await client.exchange_code("synthetic-code", code_verifier="synthetic-verifier")
+            == payload
+        )
         assert (await http.get("https://example.test/page")).json() == payload
     assert hook.await_count == 4
     assert all(stream.closed.is_set() and stream.close_calls == 1 for stream in streams)
@@ -104,7 +107,10 @@ async def test_invalid_token_field_is_rejected_without_retry(field, value, reaso
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
         client = OAuthClient(Settings(_env_file=None), http, sleep=sleep)
         with pytest.raises(OAuthError, match=f"^OAuth response contained {reason} token$") as err:
-            await getattr(client, grant)("synthetic")
+            await getattr(client, grant)(
+                "synthetic",
+                **({"code_verifier": "synthetic-verifier"} if grant == "exchange_code" else {}),
+            )
     assert not err.value.transient
     assert err.value.__cause__ is err.value.__context__ is None
     assert handler.await_count == 1
@@ -133,11 +139,11 @@ async def test_invalidated_inflight_response_cannot_restore_old_access_or_refres
 
     provider = TokenProvider(SimpleNamespace(refresh=refresh), load, save)
     pending = asyncio.create_task(provider.get())
-    await asyncio.wait_for(entered.wait(), 2)
+    await asyncio.wait_for(entered.wait(), 30)
     stored["refresh"] = "B"
     provider.invalidate()
     release.set()
-    assert await asyncio.wait_for(pending, 2) == "new-access"
+    assert await asyncio.wait_for(pending, 30) == "new-access"
     assert await provider.get() == "new-access"
     assert saved == ["rotated-B"]
     assert stored["refresh"] == "rotated-B"
@@ -194,7 +200,9 @@ async def test_deeply_nested_token_json_is_rejected_as_invalid(grant):
     sleep = AsyncMock()
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
         with pytest.raises(OAuthError) as caught:
-            await getattr(OAuthClient(Settings(_env_file=None), http, sleep=sleep), grant)("x")
+            await getattr(OAuthClient(Settings(_env_file=None), http, sleep=sleep), grant)(
+                "x", **({"code_verifier": "synthetic-verifier"} if grant == "exchange_code" else {})
+            )
     assert str(caught.value) == "OAuth token endpoint returned invalid JSON"
     assert not caught.value.transient and handler.await_count == 1
     assert caught.value.__cause__ is caught.value.__context__ is None

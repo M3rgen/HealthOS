@@ -20,9 +20,9 @@ from app.cli import main as cli
 from app.core.config import Settings
 from app.models.raw_rejections import RawRejectionAck
 from app.models.state import JobStatus, SyncState
-from app.services import raw_rejections
-from app.services.pipeline_health import PipelineHealthService, PipelineStatus
-from app.services.storage import store_records
+from app.services.archive import raw_rejections
+from app.services.archive.storage import store_records
+from app.services.synchronization.pipeline_health import PipelineHealthService, PipelineStatus
 
 NOW = datetime(2026, 11, 2, 12, tzinfo=UTC)
 RUNNER = CliRunner()

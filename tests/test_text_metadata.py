@@ -9,8 +9,8 @@ from app.google_health.data_types import REGISTRY
 from app.models.raw_versions import RawApiResponse, RawHealthDataVersion
 from app.models.state import BackfillJob, JobStatus, RawHealthData, SyncState
 from app.parsers.common import canonical_json
-from app.parsers.normalize import normalize
-from app.services.storage import store_page
+from app.services.archive.normalization import normalize
+from app.services.archive.storage import store_page
 
 
 @pytest.mark.parametrize("kind,path,column", TEXT_FIELDS)

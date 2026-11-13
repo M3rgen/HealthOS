@@ -1,0 +1,20 @@
+title = "HealthOS secret policy"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Explicit synthetic fixture values, never whole files or commits"
+regexTarget = "secret"
+regexes = [
+  '''^ci-only-[A-Za-z0-9_-]+$''',
+  '''^synthetic-[A-Za-z0-9_-]+$''',
+  '''^(wrong-token|candidate-access|short-123456789)$''',
+]
+
+[[allowlists]]
+description = "Empty Apple installer variable is not a credential"
+regexTarget = "line"
+regexes = [
+  '''^\s*(?:export\s+)?APPLE_TOKEN_NEW=(?:""|'')\s*$''',
+]

@@ -3,14 +3,16 @@ HealthOS installer for Windows 10/11 with Docker Desktop (WSL 2 backend).
 Windows PowerShell 5.1 and PowerShell 7. The Windows counterpart of install.sh: same options,
 same questions, same .env rules.
 
-  irm https://raw.githubusercontent.com/M3rgen/HealthOS/main/install.ps1 | iex
-  & ([scriptblock]::Create((irm https://raw.githubusercontent.com/M3rgen/HealthOS/v0.2.2/install.ps1))) -Ref v0.2.2
+  irm https://raw.githubusercontent.com/M3rgen/HealthOS/v0.2.2.1/install.ps1 | iex
+  & ([scriptblock]::Create((irm https://raw.githubusercontent.com/M3rgen/HealthOS/v0.2.2.1/install.ps1))) -Ref main
   powershell -ExecutionPolicy Bypass -File .\install.ps1 [-DryRun] [-Help]
 
-Safety: .env is never overwritten (it is copied to .env.bak-<UTC stamp> first and existing
-secrets are never replaced), no volume, backup or file is ever deleted, `docker compose down -v`
-is never run. Running it again is safe. Exit codes: 0 ok, 1 a step failed, 2 bad arguments or
-unsupported environment.
+A bootstrap clones the release tag of this installer (v0.2.2.1 here); -Ref main follows main.
+
+Safety: .env is never overwritten (a copy goes to %LOCALAPPDATA%\HealthOS\env-backups first,
+readable only by you, and existing secrets are never replaced), no volume, backup or file is
+ever deleted, `docker compose down -v` is never run. Running it again is safe. Exit codes: 0 ok,
+1 a step failed, 2 bad arguments or unsupported environment.
 
 This file is ASCII-only (Windows PowerShell 5.1 reads scripts without a byte order mark in the
 ANSI code page): Turkish text is written with \uXXXX escapes and decoded at run time.
@@ -40,16 +42,27 @@ param(
 # process only: no administrator rights, nothing is stored. (A policy set by Group Policy still
 # wins; PowerShell 7 on macOS/Linux has no execution policy.)
 try { Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force -ErrorAction Stop } catch { $null = $_ }
-$HEALTHOS_INSTALLER_VERSION = "0.2.2"
+# Uninitialized variables, missing properties and failing cmdlets stop the installer instead of
+# going on with an empty value. Native commands keep their own exit codes: each one runs inside a
+# narrow ErrorActionPreference = 'Continue' block (Windows PowerShell 5.1 turns redirected stderr
+# into errors) that is restored in `finally`.
+$HealthOSPreviousErrorAction = $ErrorActionPreference
+Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
+$HEALTHOS_INSTALLER_VERSION = "0.2.2.1"
 
 $HealthOSRepoUrl = 'https://github.com/M3rgen/HealthOS.git'
 $HealthOSRawUrl = 'https://raw.githubusercontent.com/M3rgen/HealthOS'
-$HealthOSInstallerFile = $MyInvocation.MyCommand.Path
+# Empty for `irm | iex` and a scriptblock (no file; their command has no Path property).
+$HealthOSInstallerFile = ''
+if ($MyInvocation.MyCommand.PSObject.Properties['Path']) { $HealthOSInstallerFile = $MyInvocation.MyCommand.Path }
 $HealthOSExtraArgs = @($args)
 $HealthOSPlatforms = @('linux', 'raspberrypi', 'nas', 'macos', 'windows', 'vps')
 # COMPOSE_FILE entries the installer manages; every other entry is the user's and is kept.
+# docker-compose.windows.yml and docker-compose.linux.example.yml are no longer in the repository:
+# an older COMPOSE_FILE loses their entries.
 $HealthOSManagedCompose = @('docker-compose.yml', 'docker-compose.dev.yml', 'docker-compose.garmin.yml',
-    'docker-compose.apple.yml', 'docker-compose.windows.yml')
+    'docker-compose.apple.yml', 'docker-compose.windows.yml', 'docker-compose.linux.example.yml')
 
 # ---------------------------------------------------------------------------------------------
 # Output and questions
@@ -139,20 +152,23 @@ function Show-Usage {
 HealthOS installer for Windows 10/11 (Docker Desktop, WSL 2 backend)
 
 Usage: .\install.ps1 [options]
-  irm https://raw.githubusercontent.com/M3rgen/HealthOS/main/install.ps1 | iex
+  irm https://raw.githubusercontent.com/M3rgen/HealthOS/v0.2.2.1/install.ps1 | iex
 
 Options (the same as install.sh):
   -Lang en|tr                  language (asked; English preselected)
   -Platform linux|raspberrypi|nas|macos|windows|vps
                                target platform; this script installs `windows`, the others are
                                set up on that machine with install.sh (default: windows)
-  -Mode trial|full             trial: local look, no Google needed (default)
-                               full: production mode, needs Google and webhook values
-  -Sources google,garmin,apple data sources, comma separated, or `none`
-                               (default: google in full mode, none in trial)
+  -Mode full|trial             full (default): keeps your data, daily backups; Google only if
+                               you choose it as a source
+                               trial: only to look around and leave; do not keep data in it,
+                               there are no backups
+  -Sources google,garmin,apple data sources, comma separated, or `none` (default: none);
+                               written to .env as HEALTHOS_SOURCES
   -Dir PATH                    checkout directory (default: this checkout, else %USERPROFILE%\healthos;
                                an existing %USERPROFILE%\healtos checkout is reused)
-  -Ref REF                     git ref to clone when bootstrapping (default: main)
+  -Ref REF                     git ref to clone when bootstrapping (default: the release tag
+                               v<VERSION> of this installer; main only with -Ref main)
   -GarminKeyFile PATH          Garmin Connect Personal API key file
   -GoogleClientId ID           Google OAuth client ID
   -GoogleClientSecret S        Google OAuth client secret
@@ -167,28 +183,31 @@ Options (the same as install.sh):
   -NoStart                     configure only, do not start the stack
   -Help                        this help
 
-Never deleted or overwritten: .env (copied to .env.bak-<UTC stamp> first), secrets, volumes,
-backups. Exit codes: 0 ok, 1 a step failed, 2 bad arguments or unsupported environment.
+Never deleted or overwritten: .env (copied first to %LOCALAPPDATA%\HealthOS\env-backups,
+readable only by you), secrets, volumes, backups. Exit codes: 0 ok, 1 a step failed, 2 bad arguments or unsupported environment.
 Linux server is the recommended platform for an always-on install.
 '@
     $turkish = @'
 Windows 10/11 i\u00e7in HealthOS kurulumu (Docker Desktop, WSL 2 altyap\u0131s\u0131)
 
 Kullan\u0131m: .\\install.ps1 [se\u00e7enekler]
-  irm https://raw.githubusercontent.com/M3rgen/HealthOS/main/install.ps1 | iex
+  irm https://raw.githubusercontent.com/M3rgen/HealthOS/v0.2.2.1/install.ps1 | iex
 
 Se\u00e7enekler (install.sh ile ayn\u0131):
   -Lang en|tr                  dil (sorulur; \u0130ngilizce \u00f6nse\u00e7ili)
   -Platform linux|raspberrypi|nas|macos|windows|vps
                                hedef platform; bu betik `windows` kurar, di\u011ferleri o makinede
                                install.sh ile kurulur (varsay\u0131lan: windows)
-  -Mode trial|full             trial: yerel deneme, Google gerekmez (varsay\u0131lan)
-                               full: \u00fcretim kipi, Google ve webhook de\u011ferleri gerekir
-  -Sources google,garmin,apple veri kaynaklar\u0131, virg\u00fclle ya da `none`
-                               (varsay\u0131lan: full kipte google, trial kipte none)
+  -Mode full|trial             full (varsay\u0131lan): verilerinizi saklar, g\u00fcnl\u00fck yedek; Google
+                               yaln\u0131z kaynak olarak se\u00e7erseniz gerekir
+                               trial: yaln\u0131z bak\u0131p \u00e7\u0131kmak i\u00e7in; veri saklamay\u0131n,
+                               yedek yok
+  -Sources google,garmin,apple veri kaynaklar\u0131, virg\u00fclle ya da `none` (varsay\u0131lan: none);
+                               .env'e HEALTHOS_SOURCES olarak yaz\u0131l\u0131r
   -Dir YOL                     kurulum klas\u00f6r\u00fc (varsay\u0131lan: bu klon, yoksa %USERPROFILE%\\healthos;
                                var olan %USERPROFILE%\\healtos klonu kullan\u0131l\u0131r)
-  -Ref REF                     klonlanacak git ref'i (varsay\u0131lan: main)
+  -Ref REF                     klonlanacak git ref'i (varsay\u0131lan: bu kurulumun s\u00fcr\u00fcm
+                               etiketi v<VERSION>; main yaln\u0131z -Ref main ile)
   -GarminKeyFile YOL           Garmin Connect Personal API anahtar dosyas\u0131
   -GoogleClientId ID           Google OAuth istemci kimli\u011fi
   -GoogleClientSecret S        Google OAuth istemci s\u0131rr\u0131
@@ -203,12 +222,14 @@ Se\u00e7enekler (install.sh ile ayn\u0131):
   -NoStart                     yaln\u0131z yap\u0131land\u0131r, y\u0131\u011f\u0131n\u0131 ba\u015flatma
   -Help                        bu yard\u0131m
 
-Asla silinmez ve \u00fczerine yaz\u0131lmaz: .env (\u00f6nce .env.bak-<UTC damgas\u0131> olarak kopyalan\u0131r),
-s\u0131rlar, birimler, yedekler. \u00c7\u0131k\u0131\u015f kodlar\u0131: 0 tamam, 1 bir ad\u0131m ba\u015far\u0131s\u0131z,
+Asla silinmez ve \u00fczerine yaz\u0131lmaz: .env (\u00f6nce %LOCALAPPDATA%\\HealthOS\\env-backups i\u00e7ine
+kopyalan\u0131r, yaln\u0131z siz okuyabilirsiniz), s\u0131rlar, birimler, yedekler. \u00c7\u0131k\u0131\u015f kodlar\u0131: 0 tamam, 1 bir ad\u0131m ba\u015far\u0131s\u0131z,
 2 hatal\u0131 se\u00e7enek ya da desteklenmeyen ortam.
 S\u00fcrekli a\u00e7\u0131k bir kurulum i\u00e7in \u00f6nerilen platform Linux sunucudur.
 '@
     # Both languages unless -Lang picked one.
+    $english = $english.Replace('<VERSION>', $HEALTHOS_INSTALLER_VERSION)
+    $turkish = $turkish.Replace('<VERSION>', $HEALTHOS_INSTALLER_VERSION)
     $chosen = ([string]$Lang).ToLowerInvariant()
     if ($chosen -ne 'tr') { Write-Host $english }
     if ($chosen -ne 'en') {
@@ -289,7 +310,8 @@ function Test-IsWindowsHost {
 
 function Get-HostLabel {
     if (Test-IsWindowsHost) { return 'Windows' }
-    if ($IsMacOS) { return 'macOS' }
+    # $IsMacOS does not exist in Windows PowerShell 5.1 (StrictMode would stop on it).
+    if (Get-Variable -Name IsMacOS -ValueOnly -ErrorAction SilentlyContinue) { return 'macOS' }
     return 'Linux'
 }
 
@@ -351,8 +373,10 @@ function Resolve-Checkout {
 
 function Invoke-Bootstrap {
     param([string]$Target)
+    # The release tag of this installer, so the clone matches the script that was reviewed;
+    # main only when asked for with -Ref main.
     $ref = $Ref
-    if (-not $ref) { $ref = 'main' }
+    if (-not $ref) { $ref = Get-DefaultRef }
     Say-Step (M 'Getting HealthOS' 'HealthOS indiriliyor')
     if ((Test-Path -LiteralPath $Target) -and @(Get-ChildItem -LiteralPath $Target -Force).Count -gt 0) {
         Stop-Installer 2 ((M '{0} exists, is not empty and is not a HealthOS checkout; nothing was changed. Choose another -Dir.' '{0} var, bo\u015f de\u011fil ve bir HealthOS klonu de\u011fil; hi\u00e7bir \u015fey de\u011fi\u015ftirilmedi. Ba\u015fka bir -Dir se\u00e7in.') -f $Target)
@@ -369,7 +393,9 @@ function Invoke-Bootstrap {
         Stop-Installer 2 (M 'git is required to download HealthOS. Install it with: winget install -e --id Git.Git (or https://git-scm.com/download/win), open a new PowerShell window and run the installer again.' 'HealthOS''u indirmek i\u00e7in git gerekli. \u015eununla kurun: winget install -e --id Git.Git (ya da https://git-scm.com/download/win), yeni bir PowerShell penceresi a\u00e7\u0131p kurulumu yeniden \u00e7al\u0131\u015ft\u0131r\u0131n.')
     }
     Say ((M 'Cloning {0} ({1}) into {2}' '{0} ({1}) {2} klas\u00f6r\u00fcne klonlan\u0131yor') -f $HealthOSRepoUrl, $ref, $Target)
-    & $git clone --branch $ref $HealthOSRepoUrl $Target
+    $previous = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try { & $git clone --branch $ref $HealthOSRepoUrl $Target } finally { $ErrorActionPreference = $previous }
     if ($LASTEXITCODE -ne 0) { Stop-Installer 1 (M 'git clone failed.' 'git clone ba\u015far\u0131s\u0131z oldu.') }
     $cloned = Join-Path $Target 'install.ps1'
     if (-not (Test-Path -LiteralPath $cloned -PathType Leaf)) {
@@ -379,8 +405,18 @@ function Invoke-Bootstrap {
     foreach ($key in $script:BoundParameters.Keys) { $forward[$key] = $script:BoundParameters[$key] }
     $forward['Dir'] = $Target
     $forward['Lang'] = $script:InstallLang
+    $global:LASTEXITCODE = 0
     & $cloned @forward
     Stop-Installer $LASTEXITCODE ''
+}
+
+function Get-DefaultRef {
+    return "v$HEALTHOS_INSTALLER_VERSION"
+}
+
+function Get-InstallShUrl {
+    # The install.sh of the same release.
+    return "$HealthOSRawUrl/$(Get-DefaultRef)/install.sh"
 }
 
 # ---------------------------------------------------------------------------------------------
@@ -463,7 +499,7 @@ function Select-Platform {
 
 function Show-OtherPlatform {
     param([string]$Chosen)
-    $oneLiner = "curl -fsSL $HealthOSRawUrl/main/install.sh | bash"
+    $oneLiner = "curl -fsSL $(Get-InstallShUrl) | bash"
     switch ($Chosen) {
         'nas' {
             Say (M 'A NAS is set up through its own web interface: follow the NAS section of docs/INSTALL.md. Over SSH on the NAS you can run:' 'NAS kendi web aray\u00fcz\u00fcyle kurulur: docs/INSTALL.tr.md i\u00e7indeki NAS b\u00f6l\u00fcm\u00fcn\u00fc izleyin. NAS''ta SSH ile \u015funu \u00e7al\u0131\u015ft\u0131rabilirsiniz:')
@@ -481,9 +517,9 @@ function Show-OtherPlatform {
 }
 
 function Get-DefaultMode {
-    # A re-run keeps the mode of the existing .env: COMPOSE_FILE without the development
-    # override is a full install. No .env or no COMPOSE_FILE: trial.
-    if (-not $script:EnvExisted -or -not (Get-EnvValue 'COMPOSE_FILE')) { return 'trial' }
+    # Full for a new install (IP-2). A re-run keeps the mode of the existing .env: its
+    # COMPOSE_FILE with the development override is a trial install.
+    if (-not (Get-EnvValue 'COMPOSE_FILE')) { return 'full' }
     foreach ($entry in (Get-ComposeEntries)) {
         if ((ConvertTo-ComposeName $entry) -eq 'docker-compose.dev.yml') { return 'trial' }
     }
@@ -491,23 +527,34 @@ function Get-DefaultMode {
 }
 
 function Select-Mode {
-    if ($Mode) { $script:InstallMode = $Mode.ToLowerInvariant(); return }
-    $default = Get-DefaultMode
-    $preselected = 1
-    if ($default -eq 'full') {
-        $preselected = 2
-        Say (M 'The existing .env is a full install (COMPOSE_FILE without docker-compose.dev.yml); full mode is preselected. -Mode trial changes it.' 'Var olan .env tam kurulum (COMPOSE_FILE i\u00e7inde docker-compose.dev.yml yok); tam kip \u00f6nse\u00e7ili. -Mode trial ile de\u011fi\u015fir.')
+    if ($Mode) {
+        $script:InstallMode = $Mode.ToLowerInvariant()
+    } else {
+        $default = Get-DefaultMode
+        $preselected = 1
+        if ($default -eq 'trial') { $preselected = 2 }
+        if ($default -eq 'full' -and $script:EnvExisted -and (Get-EnvValue 'COMPOSE_FILE')) {
+            Say (M 'The existing .env is a full install (COMPOSE_FILE without docker-compose.dev.yml); full mode is preselected. -Mode trial changes it.' 'Var olan .env tam kurulum (COMPOSE_FILE i\u00e7inde docker-compose.dev.yml yok); tam kip \u00f6nse\u00e7ili. -Mode trial ile de\u011fi\u015fir.')
+        }
+        $index = Read-Menu 'Mode' 'Kip' $preselected @(
+            'Full - keep your data: production settings, daily encrypted backups; Google only if you choose it as a source',
+            'Tam - verilerinizi saklay\u0131n: \u00fcretim ayarlar\u0131, g\u00fcnl\u00fck \u015fifreli yedek; Google yaln\u0131z kaynak olarak se\u00e7erseniz',
+            'Trial - only to look around and leave: do not keep data in it, there are no backups',
+            'Deneme - yaln\u0131z bak\u0131p \u00e7\u0131kmak i\u00e7in: veri saklamay\u0131n, yedek yok')
+        $script:InstallMode = 'full'
+        if ($index -eq 2) { $script:InstallMode = 'trial' }
     }
-    $index = Read-Menu 'Mode' 'Kip' $preselected @(
-        'Trial - look around locally; development override; no Google account needed',
-        'Deneme - yerelde g\u00f6z at\u0131n; geli\u015ftirme ayar\u0131; Google hesab\u0131 gerekmez',
-        'Full - production mode; needs Google OAuth and webhook values; daily backups',
-        'Tam - \u00fcretim kipi; Google OAuth ve webhook de\u011ferleri gerekir; g\u00fcnl\u00fck yedek')
-    $script:InstallMode = 'trial'
-    if ($index -eq 2) { $script:InstallMode = 'full' }
+    Show-TrialWarning
+}
+
+function Show-TrialWarning {
+    if ($script:InstallMode -ne 'trial') { return }
+    Say-Warn (M 'Trial mode is only for looking around: do not keep data in it, there are no backups (development settings; the database listens on 127.0.0.1:5432). For real use re-run with -Mode full.' 'Deneme kipi yaln\u0131z bak\u0131p \u00e7\u0131kmak i\u00e7indir: veri saklamay\u0131n, yedek yok (geli\u015ftirme ayarlar\u0131; veritaban\u0131 127.0.0.1:5432''de dinler). Ger\u00e7ek kullan\u0131m i\u00e7in -Mode full ile yeniden \u00e7al\u0131\u015ft\u0131r\u0131n.')
 }
 
 function Select-Sources {
+    # No source unless one is chosen, in both modes: Google is never assumed (IP-2). A source
+    # the existing .env has on stays on through HEALTHOS_SOURCES (Update-EnvSettings).
     $list = @()
     if ($Sources) {
         $list = ConvertTo-SourceList $Sources $true
@@ -515,10 +562,9 @@ function Select-Sources {
         $list = @()
     } elseif (-not $script:Unattended) {
         $default = '4'
-        if ($script:InstallMode -eq 'full') { $default = '1' }
         Write-Host ''
-        Write-Host (M 'Data sources (wearables) - pick one or more, e.g. 1,3' 'Veri kaynaklar\u0131 (giyilebilirler) - bir ya da daha fazla se\u00e7in, \u00f6rn. 1,3') -ForegroundColor Cyan
-        Say ('  1) ' + (M 'Google Health API v4 (Fitbit, Pixel Watch, Google Health app) - OAuth client; required in full mode' 'Google Health API v4 (Fitbit, Pixel Watch, Google Health uygulamas\u0131) - OAuth istemcisi; tam kipte \u015fart'))
+        Write-Host (M 'Data sources (wearables) - pick one or more, e.g. 2,3' 'Veri kaynaklar\u0131 (giyilebilirler) - bir ya da daha fazla se\u00e7in, \u00f6rn. 2,3') -ForegroundColor Cyan
+        Say ('  1) ' + (M 'Google Health API v4 (Fitbit, Pixel Watch, Google Health app) - needs an approved Google OAuth project and a public webhook' 'Google Health API v4 (Fitbit, Pixel Watch, Google Health uygulamas\u0131) - onayl\u0131 bir Google OAuth projesi ve herkese a\u00e7\u0131k webhook gerekir'))
         Say ('  2) ' + (M 'Garmin Connect Personal API - read-only pull; needs your Personal API key file' 'Garmin Connect Personal API - salt okunur \u00e7ekme; Personal API anahtar dosyan\u0131z gerekir'))
         Say ('  3) ' + (M 'Apple Watch / Apple Health - export.zip upload works as is; optional Health Auto Export receiver' 'Apple Watch / Apple Sa\u011fl\u0131k - export.zip y\u00fckleme haz\u0131r; iste\u011fe ba\u011fl\u0131 Health Auto Export al\u0131c\u0131s\u0131'))
         Say ('  4) ' + (M 'None for now - manual entries, empty dashboard' '\u015eimdilik hi\u00e7biri - elle giri\u015fler, bo\u015f panel'))
@@ -528,14 +574,55 @@ function Select-Sources {
             if ($null -ne $parsed) { $list = $parsed; break }
             Say (M 'Enter numbers 1-4 separated by commas (4 alone for none).' '1-4 aras\u0131 numaralar\u0131 virg\u00fclle girin (hi\u00e7biri i\u00e7in yaln\u0131z 4).') Yellow
         }
-    } elseif ($script:InstallMode -eq 'full') {
-        $list = @('google')
     }
     # Flags imply their source.
     if ($GarminKeyFile -and $list -notcontains 'garmin') { $list += 'garmin' }
     if (($GoogleClientId -or $GoogleClientSecret) -and $list -notcontains 'google') { $list += 'google' }
     if ($AppleReceiver -eq 'yes' -and $list -notcontains 'apple') { $list += 'apple' }
     $script:InstallSources = @($list)
+}
+
+function Join-SourceList {
+    # HEALTHOS_SOURCES form: google,garmin,apple order, or none.
+    param([string[]]$Items)
+    $ordered = @(foreach ($name in @('google', 'garmin', 'apple')) { if (@($Items) -contains $name) { $name } })
+    if ($ordered.Count -eq 0) { return 'none' }
+    return ($ordered -join ',')
+}
+
+function Get-ExistingSourceList {
+    # The sources the existing .env has on (install.sh existing_sources). HEALTHOS_SOURCES when
+    # set; before that key existed the app always ran Google, so Google counts as on when it is
+    # configured or the install runs in full mode; Garmin and the Apple receiver count when
+    # still switched on with their key file set. Read before anything is changed.
+    if (-not $script:EnvExisted) { return , @() }
+    $current = Get-EnvValue 'HEALTHOS_SOURCES'
+    if ($current) {
+        $parsed = ConvertTo-SourceList $current $false
+        if ($null -eq $parsed) { return , @() }
+        return , $parsed
+    }
+    $list = @()
+    if ((Get-EnvValue 'GOOGLE_CLIENT_ID') -or (Get-DefaultMode) -eq 'full') { $list += 'google' }
+    if ((Test-EnvOn (Get-EnvValue 'GARMIN_ENABLED')) -and (Get-EnvValue 'GARMIN_API_KEY_HOST_FILE')) { $list += 'garmin' }
+    if ((Test-EnvOn (Get-EnvValue 'APPLE_RECEIVER_ENABLED')) -and (Get-EnvValue 'APPLE_RECEIVER_TOKEN_HOST_FILE')) { $list += 'apple' }
+    return , $list
+}
+
+function Test-UsesSource {
+    # A source in the HEALTHOS_SOURCES value being written (chosen or kept).
+    param([string]$Name)
+    return (@($script:SourcesSetting -split ',') -contains $Name)
+}
+
+function Add-DroppedSourceNote {
+    # A source left on in .env although it was not chosen this time: kept, and said so.
+    param([string[]]$Kept)
+    if (-not $script:EnvExisted) { return }
+    foreach ($item in @($Kept)) {
+        if (@($script:InstallSources) -contains $item) { continue }
+        Add-Note ((M '{0} was not selected but stays in HEALTHOS_SOURCES (nothing is switched off silently). To stop it, remove it from HEALTHOS_SOURCES in .env by hand.' '{0} se\u00e7ilmedi ama HEALTHOS_SOURCES i\u00e7inde kal\u0131yor (hi\u00e7bir kaynak sessizce kapat\u0131lmaz). Durdurmak i\u00e7in .env i\u00e7indeki HEALTHOS_SOURCES de\u011ferinden elle \u00e7\u0131kar\u0131n.') -f $item)
+    }
 }
 
 function Select-SourceDetails {
@@ -591,7 +678,8 @@ function Select-SourceDetails {
     if ($script:AppleReceiverChoice -eq 'yes' -and -not $script:Unattended -and -not (Get-EnvValue 'APPLE_RECEIVER_ENDPOINT_URI')) {
         $script:AppleEndpoint = Read-Answer (M 'Receiver https URL ending in /webhooks/apple-health (empty: later)' 'Al\u0131c\u0131n\u0131n /webhooks/apple-health ile biten https adresi (bo\u015f: sonra)') ''
     }
-    if ($script:InstallMode -eq 'full' -and -not $script:Unattended -and -not (Get-EnvValue 'GOOGLE_HEALTH_WEBHOOK_ENDPOINT_URI')) {
+    if ($script:InstallMode -eq 'full' -and $script:InstallSources -contains 'google' -and -not $script:Unattended -and
+            -not (Get-EnvValue 'GOOGLE_HEALTH_WEBHOOK_ENDPOINT_URI')) {
         $answer = Read-Answer (M 'Public webhook host name, e.g. webhook.example.com (empty: later)' 'Herkese a\u00e7\u0131k webhook ana makine ad\u0131, \u00f6rn. webhook.example.com (bo\u015f: sonra)') ''
         $script:WebhookHost = (($answer -replace '^https://', '') -split '/')[0]
     }
@@ -729,8 +817,7 @@ function Test-Docker {
     if ($wsl) {
         $previous = $ErrorActionPreference
         $ErrorActionPreference = 'Continue'
-        try { & $wsl --status 2>$null | Out-Null; $wslOk = ($LASTEXITCODE -eq 0) } catch { $wslOk = $false }
-        $ErrorActionPreference = $previous
+        try { & $wsl --status 2>$null | Out-Null; $wslOk = ($LASTEXITCODE -eq 0) } catch { $wslOk = $false } finally { $ErrorActionPreference = $previous }
     }
     if (-not $wslOk) {
         Say-Warn (M 'WSL 2 does not answer (wsl --status). Docker Desktop needs it: run "wsl --install" (or "wsl --update") as administrator and restart Windows.' 'WSL 2 yan\u0131t vermiyor (wsl --status). Docker Desktop i\u00e7in gerekli: y\u00f6netici olarak "wsl --install" (ya da "wsl --update") \u00e7al\u0131\u015ft\u0131r\u0131p Windows''u yeniden ba\u015flat\u0131n.')
@@ -746,6 +833,8 @@ function Test-Docker {
         }
     }
     $docker = Find-Tool 'docker'
+    $kernel = ''
+    $composeOk = $false
     $previous = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
     try {
@@ -860,14 +949,14 @@ function Set-EnvSecret {
 }
 
 function Set-EnvManaged {
-    # Installer-managed keys (COMPOSE_FILE and its separator) follow the chosen mode and
-    # sources; the old value stays in .env.bak-<stamp>.
+    # Installer-managed keys (COMPOSE_FILE and its separator, HEALTHOS_SOURCES) follow the
+    # chosen mode and sources; a copy of the old .env stays in the .env backup directory.
     param([string]$Name, [string]$Value)
     $current = Get-EnvValue $Name
     if ($current -cne $Value) {
         Write-EnvKey $Name $Value
         if ($current -and $script:EnvExisted) {
-            Add-Note ((M '{0} changed from ''{1}'' to ''{2}'' (the old .env is kept as .env.bak-<stamp>).' '{0} ''{1}'' de\u011ferinden ''{2}'' de\u011ferine de\u011fi\u015fti (eski .env, .env.bak-<damga> olarak sakl\u0131).') -f $Name, $current, $Value)
+            Add-Note ((M '{0} changed from ''{1}'' to ''{2}'' (a copy of the old .env is kept in {3}).' '{0} ''{1}'' de\u011ferinden ''{2}'' de\u011ferine de\u011fi\u015fti (eski .env''in bir kopyas\u0131 {3} i\u00e7inde sakl\u0131).') -f $Name, $current, $Value, (Get-EnvBackupDir))
         }
     }
 }
@@ -930,13 +1019,15 @@ function ConvertTo-ComposeName {
 
 function Get-ComposeFiles {
     # The files the installer manages (base file, the trial override, each source mount whose
-    # ..._ENABLED is on and whose host path is set, so `up` cannot fail on a missing mount),
+    # source is on and whose host path is set, so `up` cannot fail on a missing mount),
     # then every other file of the existing COMPOSE_FILE in its original order (kept, never
     # dropped). Without a COMPOSE_FILE, Compose loaded docker-compose.override.yml by itself, so
     # it is kept as well. Joined with ';' (Windows separator).
     $files = @('docker-compose.yml')
     if ($script:InstallMode -ne 'full') { $files += 'docker-compose.dev.yml' }
-    if ((Test-EnvOn (Get-EnvValue 'GARMIN_ENABLED')) -and (Get-EnvValue 'GARMIN_API_KEY_HOST_FILE')) {
+    # Garmin follows the HEALTHOS_SOURCES being written (chosen, or kept from the existing .env, where
+    # an .env older than that key counts the older GARMIN_ENABLED switch); GARMIN_ENABLED is never written.
+    if ((Test-UsesSource 'garmin') -and (Get-EnvValue 'GARMIN_API_KEY_HOST_FILE')) {
         $files += 'docker-compose.garmin.yml'
     }
     if ((Test-EnvOn (Get-EnvValue 'APPLE_RECEIVER_ENABLED')) -and (Get-EnvValue 'APPLE_RECEIVER_TOKEN_HOST_FILE')) {
@@ -958,14 +1049,24 @@ function Get-ComposeFiles {
 
 function Update-EnvSettings {
     Read-EnvLines
+    # HEALTHOS_SOURCES (IP-2): the chosen sources plus every source the existing .env still has
+    # on; a source is never switched off silently.
+    $kept = Get-ExistingSourceList
+    $script:SourcesSetting = Join-SourceList (@($script:InstallSources) + @($kept))
     Set-EnvSecret 'POSTGRES_PASSWORD' (New-HexSecret)
+    # The app's non-superuser role (provision-app-role stops without its password). An older
+    # .env without POSTGRES_APP_USER keeps connecting as the owner: it gets no unusable password.
+    if (-not $script:EnvExisted -or (Get-EnvValue 'POSTGRES_APP_USER')) {
+        Set-EnvSecret 'POSTGRES_APP_PASSWORD' (New-HexSecret)
+    }
     Set-EnvSecret 'APP_UI_TOKEN' (New-UrlSafeSecret)
-    if ($script:InstallSources -contains 'google' -or $script:InstallMode -eq 'full') {
+    # Google values only when Google is one of the sources: full mode runs without Google.
+    if (Test-UsesSource 'google') {
         Set-EnvSecret 'GOOGLE_TOKEN_ENCRYPTION_KEY' (New-FernetKey)
         Set-EnvGiven 'GOOGLE_CLIENT_ID' $script:GoogleId
         Set-EnvGiven 'GOOGLE_CLIENT_SECRET' $script:GoogleSecret
     }
-    if ($script:InstallMode -eq 'full') {
+    if ($script:InstallMode -eq 'full' -and (Test-UsesSource 'google')) {
         Set-EnvSecret 'GOOGLE_HEALTH_WEBHOOK_AUTHORIZATION' ('Bearer ' + (New-UrlSafeSecret))
         if ($script:WebhookHost) {
             Set-EnvGiven 'GOOGLE_HEALTH_WEBHOOK_ENDPOINT_URI' "https://$($script:WebhookHost)/webhooks/google-health"
@@ -978,7 +1079,6 @@ function Update-EnvSettings {
         } else {
             Set-EnvGiven 'GARMIN_API_KEY_HOST_FILE' $script:GarminKey
         }
-        Set-EnvEnable 'GARMIN_ENABLED'
     }
     if ($script:AppleReceiverChoice -eq 'yes') {
         Set-EnvGiven 'APPLE_RECEIVER_TOKEN_HOST_FILE' (Get-AppleTokenPath)
@@ -989,12 +1089,14 @@ function Update-EnvSettings {
         # Written here once (only when missing or empty), never by the bridge task: the task
         # reads them and never rewrites .env.
         Set-EnvSecret 'CODEX_BRIDGE_TOKEN' (New-UrlSafeSecret)
-        Set-EnvSecret 'CODEX_BRIDGE_URL' 'ws://host.docker.internal:8766'
+        Set-EnvSecret 'CODEX_BRIDGE_URL' 'wss://host.docker.internal:8766'
     }
     # Read the old list with the old separator before the separator becomes ';'.
     $composeFiles = Get-ComposeFiles
     Set-EnvManaged 'COMPOSE_PATH_SEPARATOR' ';'
     Set-EnvManaged 'COMPOSE_FILE' $composeFiles
+    Set-EnvManaged 'HEALTHOS_SOURCES' $script:SourcesSetting
+    Add-DroppedSourceNote $kept
 }
 
 function Write-EnvFile {
@@ -1007,6 +1109,9 @@ function Write-EnvFile {
         if (-not $out) { $out = Join-Path $script:RepoDir '.env.dry-run' }
         $out = Resolve-UserPath $out
         if ($out -eq $envFile) { Stop-Installer 2 (M '-EnvOut must not be the real .env.' '-EnvOut ger\u00e7ek .env olamaz.') }
+        if ((Split-Path -Leaf $out) -like '*.env.bak-*') {
+            Stop-Installer 2 ((M '-EnvOut must not be a .env.bak-* copy: {0}' '-EnvOut bir .env.bak-* kopyas\u0131 olamaz: {0}') -f $out)
+        }
         $marker = '# install.ps1 -DryRun: the .env it would write. Not used by Docker.'
         if (Test-Path -LiteralPath $out) {
             $first = ''
@@ -1018,8 +1123,9 @@ function Write-EnvFile {
         if (-not $script:EnvExisted) {
             Say-Plan ((M 'would create {0} from .env.example (readable only by you)' '.env.example''dan {0} olu\u015fturulurdu (yaln\u0131z siz okuyabilirsiniz)') -f $envFile)
         } elseif ($script:EnvSet.Count -gt 0) {
-            Say-Plan (M 'would copy .env to .env.bak-<UTC stamp> (readable only by you), then fill only missing or empty keys' '.env, .env.bak-<UTC damga> olarak kopyalan\u0131r (yaln\u0131z siz okuyabilirsiniz), sonra yaln\u0131z eksik veya bo\u015f anahtarlar doldurulurdu')
+            Say-Plan ((M 'would copy .env to {0} (readable only by you), then fill only missing or empty keys and update the selections' '.env, {0} olarak kopyalan\u0131r (yaln\u0131z siz okuyabilirsiniz), sonra yaln\u0131z eksik veya bo\u015f anahtarlar doldurulup se\u00e7imler g\u00fcncellenirdi') -f (Join-Path (Get-EnvBackupDir) ((Get-EnvBackupPrefix) + '<UTC stamp>')))
         }
+        Copy-LegacyEnvBackup
         if ($script:EnvExisted) { Protect-EnvFiles }
         # The preview holds the same secrets: it is readable only by you as well.
         Write-PrivateBytes -Path $out -Bytes $utf8.GetBytes($marker + "`n" + $text) -Existing
@@ -1027,16 +1133,21 @@ function Write-EnvFile {
         Say ((M '  Preview written to {0} (readable only by you; the real .env is untouched).' '  \u00d6nizleme {0} dosyas\u0131na yaz\u0131ld\u0131 (yaln\u0131z siz okuyabilirsiniz; ger\u00e7ek .env''e dokunulmad\u0131).') -f $out)
         return
     }
+    $script:EnvResult = $envFile
+    Copy-LegacyEnvBackup
     if (-not $script:EnvExisted) {
         $temporary = Join-Path $script:RepoDir ('.env.install-' + [System.IO.Path]::GetRandomFileName().Replace('.', ''))
         Write-PrivateBytes -Path $temporary -Bytes $utf8.GetBytes($text)
         [System.IO.File]::Move($temporary, $envFile)
         Say (M '  Created .env from .env.example (readable only by you).' '  .env, .env.example''dan olu\u015fturuldu (yaln\u0131z siz okuyabilirsiniz).')
     } elseif ($script:EnvSet.Count -gt 0) {
+        # The copy goes outside the checkout (IP-8/5), into a directory readable only by you.
+        Initialize-EnvBackupDir
         $stamp = [System.DateTime]::UtcNow.ToString("yyyyMMdd'T'HHmmss'Z'", [System.Globalization.CultureInfo]::InvariantCulture)
-        $backup = "$envFile.bak-$stamp"
+        $base = Join-Path (Get-EnvBackupDir) ((Get-EnvBackupPrefix) + $stamp)
+        $backup = $base
         $n = 1
-        while (Test-Path -LiteralPath $backup) { $n++; $backup = "$envFile.bak-$stamp-$n" }
+        while (Test-Path -LiteralPath $backup) { $n++; $backup = "$base-$n" }
         # A byte-for-byte copy, created new (never over an existing file), readable only by you.
         Write-PrivateBytes -Path $backup -Bytes ([System.IO.File]::ReadAllBytes($envFile))
         $script:EnvBackup = $backup
@@ -1056,6 +1167,86 @@ function Write-EnvFile {
     }
 }
 
+function Get-EnvBackupDir {
+    # New .env copies live outside the checkout, in a per-user directory (install.sh uses
+    # ~/.local/state/healthos/env-backups, as does PowerShell 7 on macOS/Linux here).
+    if ((Test-IsWindowsHost) -and $env:LOCALAPPDATA) {
+        return (Join-Path (Join-Path $env:LOCALAPPDATA 'HealthOS') 'env-backups')
+    }
+    return (Join-Path (Join-Path (Join-Path (Join-Path $HOME '.local') 'state') 'healthos') 'env-backups')
+}
+
+function Get-EnvBackupPrefix {
+    # <slug>.env.bak- where the slug is this checkout's full path with the drive colon and the
+    # separators turned into '_' (leading separators dropped; install.sh: /srv/healthos ->
+    # srv_healthos), so the copies of several checkouts never mix.
+    $path = [System.IO.Path]::GetFullPath($script:RepoDir)
+    $slug = (($path -replace '^[\\/]+', '') -replace '[:\\/]+', '_').TrimEnd('_')
+    return ($slug + '.env.bak-')
+}
+
+function Initialize-EnvBackupDir {
+    # Created readable only by you; an existing directory readable by others is narrowed.
+    $dir = Get-EnvBackupDir
+    if (-not (Test-Path -LiteralPath $dir -PathType Container)) {
+        Initialize-PrivateDirectory $dir
+    } elseif (Get-HealthOSAclProblem $dir) {
+        Set-HealthOSPrivateAcl -Path $dir -Directory
+    }
+}
+
+function Test-SameContent {
+    param([string]$Path, [byte[]]$Bytes)
+    $existing = [System.IO.File]::ReadAllBytes($Path)
+    if ($existing.Length -ne $Bytes.Length) { return $false }
+    return ([System.Convert]::ToBase64String($existing) -ceq [System.Convert]::ToBase64String($Bytes))
+}
+
+function Get-LegacyEnvBackupList {
+    # The .env.bak-* copies earlier versions left next to .env.
+    return , @(Get-ChildItem -LiteralPath $script:RepoDir -Filter '.env.bak-*' -Force -File -ErrorAction SilentlyContinue |
+            Sort-Object Name)
+}
+
+function Copy-LegacyEnvBackup {
+    # Each .env.bak-* next to .env is copied into the backup directory under this checkout's
+    # prefix, readable only by you. The original is never moved, changed or deleted, and no
+    # file is overwritten: the same name with the same bytes is already there (skipped), the
+    # same name with other bytes gets -2, -3, ...
+    $legacy = Get-LegacyEnvBackupList
+    if ($legacy.Count -eq 0) { return }
+    $prefix = Get-EnvBackupPrefix
+    foreach ($item in $legacy) {
+        $bytes = [System.IO.File]::ReadAllBytes($item.FullName)
+        $base = Join-Path (Get-EnvBackupDir) ($prefix + $item.Name.Substring('.env.bak-'.Length))
+        $target = $base
+        $n = 1
+        $present = $false
+        while (Test-Path -LiteralPath $target) {
+            if (Test-SameContent $target $bytes) { $present = $true; break }
+            $n++
+            $target = "$base-$n"
+        }
+        if ($present) { continue }
+        if ($DryRun) {
+            Say-Plan ((M 'would copy {0} to {1} (readable only by you; the original next to .env is kept)' '{0}, {1} olarak kopyalan\u0131rd\u0131 (yaln\u0131z siz okuyabilirsiniz; .env yan\u0131ndaki as\u0131l dosya korunur)') -f $item.FullName, $target)
+            continue
+        }
+        Initialize-EnvBackupDir
+        Write-PrivateBytes -Path $target -Bytes $bytes
+        Say ((M '  Copied {0} to {1} (readable only by you; the original next to .env is kept).' '  {0}, {1} olarak kopyaland\u0131 (yaln\u0131z siz okuyabilirsiniz; .env yan\u0131ndaki as\u0131l dosya korunur).') -f $item.FullName, $target)
+    }
+}
+
+function Get-EnvBackupCount {
+    # .env copies of this checkout in the backup directory.
+    $dir = Get-EnvBackupDir
+    if (-not (Test-Path -LiteralPath $dir -PathType Container)) { return 0 }
+    $prefix = Get-EnvBackupPrefix
+    return @(Get-ChildItem -LiteralPath $dir -Force -File |
+            Where-Object { $_.Name.StartsWith($prefix, [System.StringComparison]::OrdinalIgnoreCase) }).Count
+}
+
 function Protect-EnvFiles {
     # .env and every .env.bak-* hold the secrets: readable only by you (content unchanged).
     $files = @(Join-Path $script:RepoDir '.env')
@@ -1065,16 +1256,21 @@ function Protect-EnvFiles {
 }
 
 function Get-MissingProduction {
-    # What the app (production mode, no development override) or a chosen override needs.
+    # What the app (production mode, no development override) or a chosen override needs. The
+    # Google values only when Google is one of HEALTHOS_SOURCES (IP-2).
     $missing = New-Object System.Collections.Generic.List[string]
     $files = @((Get-EnvValue 'COMPOSE_FILE') -split '[;:]')
     if ($files -notcontains 'docker-compose.dev.yml') {
-        foreach ($name in @('APP_UI_TOKEN', 'GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET', 'GOOGLE_TOKEN_ENCRYPTION_KEY',
-                'GOOGLE_HEALTH_WEBHOOK_AUTHORIZATION')) {
-            if (-not (Get-EnvValue $name)) { $missing.Add(((M '{0} is empty' '{0} bo\u015f') -f $name)) }
-        }
-        if (-not (Get-EnvValue 'GOOGLE_HEALTH_WEBHOOK_ENDPOINT_URI').StartsWith('https://')) {
-            $missing.Add((M 'GOOGLE_HEALTH_WEBHOOK_ENDPOINT_URI must be https://<your webhook host>/webhooks/google-health' 'GOOGLE_HEALTH_WEBHOOK_ENDPOINT_URI https://<webhook-adresiniz>/webhooks/google-health olmal\u0131'))
+        if (-not (Get-EnvValue 'APP_UI_TOKEN')) { $missing.Add(((M '{0} is empty' '{0} bo\u015f') -f 'APP_UI_TOKEN')) }
+        $sources = @((Get-EnvValue 'HEALTHOS_SOURCES') -split '[,\s]+')
+        if ($sources -contains 'google') {
+            foreach ($name in @('GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET', 'GOOGLE_TOKEN_ENCRYPTION_KEY',
+                    'GOOGLE_HEALTH_WEBHOOK_AUTHORIZATION')) {
+                if (-not (Get-EnvValue $name)) { $missing.Add(((M '{0} is empty' '{0} bo\u015f') -f $name)) }
+            }
+            if (-not (Get-EnvValue 'GOOGLE_HEALTH_WEBHOOK_ENDPOINT_URI').StartsWith('https://')) {
+                $missing.Add((M 'GOOGLE_HEALTH_WEBHOOK_ENDPOINT_URI must be https://<your webhook host>/webhooks/google-health' 'GOOGLE_HEALTH_WEBHOOK_ENDPOINT_URI https://<webhook-adresiniz>/webhooks/google-health olmal\u0131'))
+            }
         }
     }
     if ($files -contains 'docker-compose.garmin.yml') {
@@ -1192,7 +1388,7 @@ function Get-AppleTokenPath {
 }
 
 function Initialize-AppleToken {
-    # Same file format as `health-mirror apple-token`: token_urlsafe(32) and a newline.
+    # Same file format as `healthos apple-token`: token_urlsafe(32) and a newline.
     if ($script:AppleReceiverChoice -ne 'yes') { return }
     $file = Get-EnvValue 'APPLE_RECEIVER_TOKEN_HOST_FILE'
     if (-not $file) { return }
@@ -1203,10 +1399,12 @@ function Initialize-AppleToken {
         return
     }
     if ($DryRun) {
-        Say-Plan ((M 'would create the receiver token {0} (43 characters, like ''health-mirror apple-token'')' 'al\u0131c\u0131 belirteci {0} olu\u015fturulurdu (43 karakter, ''health-mirror apple-token'' gibi)') -f $file)
+        Say-Plan ((M 'would create the receiver token {0} (43 characters, like ''healthos apple-token'')' 'al\u0131c\u0131 belirteci {0} olu\u015fturulurdu (43 karakter, ''healthos apple-token'' gibi)') -f $file)
         return
     }
     $token = New-UrlSafeSecret
+    # Masked in a GitHub Actions log before any line could show it.
+    Write-CiMask $token
     New-PrivateFile -Path $file -Content ($token + "`n")
     $script:AppleTokenNew = $token
     Say ((M '  Created the Apple receiver token file {0}.' '  Apple al\u0131c\u0131 belirte\u00e7 dosyas\u0131 {0} olu\u015fturuldu.') -f $file)
@@ -1231,6 +1429,7 @@ function Initialize-BackupKey {
         Initialize-PrivateDirectory (Get-ConfigDir)
         $previous = $ErrorActionPreference
         $ErrorActionPreference = 'Continue'
+        $global:LASTEXITCODE = 0
         try { & $keygen -o $script:BackupKey 2>$null } finally { $ErrorActionPreference = $previous }
         if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $script:BackupKey -PathType Leaf)) {
             Stop-Installer 1 ((M 'Could not create the backup key {0}.' 'Yedek anahtar\u0131 {0} olu\u015fturulamad\u0131.') -f $script:BackupKey)
@@ -1250,6 +1449,8 @@ function Initialize-BackupKey {
 
 function Invoke-ChildScript {
     param([string]$Path, [hashtable]$Parameters)
+    # A script that ends without `exit` leaves $LASTEXITCODE as it was: start from 0.
+    $global:LASTEXITCODE = 0
     & $Path @Parameters | Out-Host
     return $LASTEXITCODE
 }
@@ -1279,6 +1480,7 @@ function Install-HostJobs {
     }
     if ($script:UmayChoice -eq 'yes') {
         Say-Step (M 'Umay bridge' 'Umay k\u00f6pr\u00fcs\u00fc')
+        Say (M '  Privacy: your questions and the records Umay requests are sent to OpenAI.' '  Gizlilik: sorular\u0131n\u0131z ve Umay''\u0131n istedi\u011fi kay\u0131tlar OpenAI''a g\u00f6nderilir.')
         if ($DryRun) {
             Say-Plan ('uv sync --frozen --no-dev --python "{0}"' -f (Get-HealthOSBridgePython))
             Say-Plan ((M 'start the bridge now: {0}' 'k\u00f6pr\u00fc \u015fimdi ba\u015flat\u0131l\u0131r: {0}') -f (Join-Path $windowsDir 'start-umay-bridge.ps1'))
@@ -1291,7 +1493,10 @@ function Install-HostJobs {
             # cmd.exe as redirections.
             $previousPython = $env:UV_PYTHON
             $env:UV_PYTHON = Get-HealthOSBridgePython
+            $previous = $ErrorActionPreference
+            $ErrorActionPreference = 'Continue'
             try { & $uv sync --frozen --no-dev | Out-Host } finally {
+                $ErrorActionPreference = $previous
                 Pop-Location
                 $env:UV_PYTHON = $previousPython
             }
@@ -1318,21 +1523,25 @@ function Start-Stack {
     $statusDir = Resolve-HealthOSPath -Path $statusDir -Base $script:RepoDir
     if (-not (Test-Path -LiteralPath $statusDir -PathType Container)) { New-Item -ItemType Directory -Path $statusDir -Force | Out-Null }
     Say (M 'The first build downloads and builds the images; this takes a few minutes.' '\u0130lk derleme imajlar\u0131 indirip olu\u015fturur; birka\u00e7 dakika s\u00fcrer.')
-    Push-Location $script:RepoDir
-    $previous = $ErrorActionPreference
-    $ErrorActionPreference = 'Continue'
     # Compose must read COMPOSE_FILE from .env; a value in this shell would override it.
     $savedFile = $env:COMPOSE_FILE
     $savedSeparator = $env:COMPOSE_PATH_SEPARATOR
+    $code = 1
+    Push-Location $script:RepoDir
     [System.Environment]::SetEnvironmentVariable('COMPOSE_FILE', $null, 'Process')
     [System.Environment]::SetEnvironmentVariable('COMPOSE_PATH_SEPARATOR', $null, 'Process')
     try {
-        & $docker compose up -d --build | Out-Host
-        $code = $LASTEXITCODE
+        $previous = $ErrorActionPreference
+        $ErrorActionPreference = 'Continue'
+        try {
+            & $docker compose up -d --build | Out-Host
+            $code = $LASTEXITCODE
+        } finally {
+            $ErrorActionPreference = $previous
+        }
     } finally {
         if ($savedFile) { $env:COMPOSE_FILE = $savedFile }
         if ($savedSeparator) { $env:COMPOSE_PATH_SEPARATOR = $savedSeparator }
-        $ErrorActionPreference = $previous
         Pop-Location
     }
     if ($code -ne 0) {
@@ -1354,6 +1563,42 @@ function Start-Stack {
 
 # ---------------------------------------------------------------------------------------------
 # Summary
+
+function Test-OnTerminal {
+    # Secrets (UI token, a new receiver token) are printed only to an interactive console.
+    try { return (-not [Console]::IsOutputRedirected) } catch { return $false }
+}
+
+function Write-CiMask {
+    # GitHub Actions: hide a secret value in every later line of the job log (the workflow
+    # command itself is not shown).
+    param([string]$Value)
+    if ($env:GITHUB_ACTIONS -eq 'true' -and $Value) { Write-Host ('::add-mask::' + $Value) }
+}
+
+function Get-EnvResultPath {
+    if ($script:EnvResult) { return $script:EnvResult }
+    return (Join-Path $script:RepoDir '.env')
+}
+
+function Test-DetachedCheckout {
+    # True when the checkout is on a tag (detached HEAD): `git symbolic-ref -q HEAD` exits 1.
+    # No git or not a git checkout (exit 128): false.
+    $git = Find-Tool 'git'
+    if (-not $git) { return $false }
+    $code = 0
+    $previous = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        & $git -C $script:RepoDir symbolic-ref -q HEAD 2>$null | Out-Null
+        $code = $LASTEXITCODE
+    } catch {
+        $code = 0
+    } finally {
+        $ErrorActionPreference = $previous
+    }
+    return ($code -eq 1)
+}
 
 function Show-Summary {
     param([bool]$Started, [string[]]$Missing)
@@ -1380,25 +1625,45 @@ function Show-Summary {
     if ($DryRun) {
         Say (M '  UI token: APP_UI_TOKEN in .env (printed once after the real run).' '  Aray\u00fcz anahtar\u0131: .env i\u00e7indeki APP_UI_TOKEN (ger\u00e7ek kurulumdan sonra bir kez yaz\u0131l\u0131r).')
     } else {
-        Say ((M '  UI token: {0}' '  Aray\u00fcz anahtar\u0131: {0}') -f (Get-EnvValue 'APP_UI_TOKEN')) Green
+        # The token only to an interactive console; a pipe, a log file or a CI log gets where
+        # to read it instead (IP-11/4).
+        if (Test-OnTerminal) {
+            Say ((M '  UI token: {0}' '  Aray\u00fcz anahtar\u0131: {0}') -f (Get-EnvValue 'APP_UI_TOKEN')) Green
+        } else {
+            Say ((M '  UI token: not printed (no terminal); it is APP_UI_TOKEN in {0}: Select-String APP_UI_TOKEN "{0}"' '  Aray\u00fcz anahtar\u0131: yazd\u0131r\u0131lmad\u0131 (terminal yok); {0} i\u00e7indeki APP_UI_TOKEN: Select-String APP_UI_TOKEN "{0}"') -f (Get-EnvResultPath))
+        }
         Say (M '  Keep the token private (password manager); it is the dashboard password.' '  Anahtar\u0131 gizli tutun (parola y\u00f6neticisi); panelin parolas\u0131d\u0131r.')
     }
     if ($script:EnvBackup) { Say ((M '  Previous .env: {0}' '  \u00d6nceki .env: {0}') -f $script:EnvBackup) }
+    if (-not $DryRun) {
+        $count = Get-EnvBackupCount
+        if ($count -gt 0) {
+            Say ((M '  .env backups of this checkout: {0} in {1} (readable only by you).' '  Bu kurulumun .env yedekleri: {1} i\u00e7inde {0} dosya (yaln\u0131z siz okuyabilirsiniz).') -f $count, (Get-EnvBackupDir))
+        }
+        if ((Get-LegacyEnvBackupList).Count -gt 0) {
+            Say (M '  The older .env.bak-* copies next to .env are kept as they are.' '  .env yan\u0131ndaki eski .env.bak-* kopyalar\u0131 oldu\u011fu gibi korunur.')
+        }
+    }
     Say ''
     Say (M '  Next steps:' '  Sonraki ad\u0131mlar:')
     Say ((M '  - Open the URL and sign in with the UI token. Manage: cd "{0}"; docker compose ps; docker compose logs -f app' '  - Adresi a\u00e7\u0131p aray\u00fcz anahtar\u0131yla giri\u015f yap\u0131n. Y\u00f6netim: cd "{0}"; docker compose ps; docker compose logs -f app') -f $script:RepoDir)
-    Say (M '  - Update later: git pull; docker compose up -d --build. Add a source: re-run with -Sources ...' '  - G\u00fcncelleme: git pull; docker compose up -d --build. Kaynak eklemek: -Sources ... ile yeniden \u00e7al\u0131\u015ft\u0131r\u0131n')
+    if (Test-DetachedCheckout) {
+        # A release tag checkout (the default since IP-8/1): `git pull` has no branch to follow.
+        Say (M '  - Update later: git fetch --tags; git checkout <new release tag, e.g. vX.Y.Z>; docker compose up -d --build. Add a source: re-run with -Sources ...' '  - G\u00fcncelleme: git fetch --tags; git checkout <yeni s\u00fcr\u00fcm etiketi, \u00f6rn. vX.Y.Z>; docker compose up -d --build. Kaynak eklemek: -Sources ... ile yeniden \u00e7al\u0131\u015ft\u0131r\u0131n')
+    } else {
+        Say (M '  - Update later: git pull; docker compose up -d --build. Add a source: re-run with -Sources ...' '  - G\u00fcncelleme: git pull; docker compose up -d --build. Kaynak eklemek: -Sources ... ile yeniden \u00e7al\u0131\u015ft\u0131r\u0131n')
+    }
     if ($script:InstallSources -contains 'google') {
         Say ((M '  - Google: redirect URI in your OAuth client: {0}' '  - Google: OAuth istemcinizdeki y\u00f6nlendirme URI''si: {0}') -f (Get-RedirectUri))
-        Say ((M '    Connect: {0}/auth/google/start, then: docker compose exec app health-mirror backfill' '    Ba\u011flan: {0}/auth/google/start, sonra: docker compose exec app health-mirror backfill') -f $url)
+        Say ((M '    Connect: {0}/auth/google/start, then: docker compose exec app healthos backfill' '    Ba\u011flan: {0}/auth/google/start, sonra: docker compose exec app healthos backfill') -f $url)
         Say (M '    GOOGLE_TOKEN_ENCRYPTION_KEY in .env: store it in a password manager too (a restore needs it).' '    .env i\u00e7indeki GOOGLE_TOKEN_ENCRYPTION_KEY: parola y\u00f6neticisinde de saklay\u0131n (geri y\u00fckleme ister).')
     }
     if ($script:InstallSources -contains 'garmin') {
-        Say (M '  - Garmin: status: docker compose exec app health-mirror garmin-status; history: health-mirror garmin-backfill' '  - Garmin: durum: docker compose exec app health-mirror garmin-status; ge\u00e7mi\u015f: health-mirror garmin-backfill')
+        Say (M '  - Garmin: status: docker compose exec app healthos garmin-status; history: healthos garmin-backfill' '  - Garmin: durum: docker compose exec app healthos garmin-status; ge\u00e7mi\u015f: healthos garmin-backfill')
     }
     if ($script:InstallSources -contains 'apple') {
         Say (M '  - Apple Health: iPhone Health app > profile > Export All Health Data; upload export.zip on the System page' '  - Apple Sa\u011fl\u0131k: iPhone Sa\u011fl\u0131k > profil > T\u00fcm Sa\u011fl\u0131k Verilerini D\u0131\u015fa Aktar; export.zip''i Sistem sayfas\u0131ndan y\u00fckleyin')
-        Say (M ([regex]::Unescape('    (Sistem > Apple Sa\u011fl\u0131k i\u00e7e aktar). Status: docker compose exec app health-mirror apple-status')) '    (Sistem > Apple Sa\u011fl\u0131k i\u00e7e aktar). Durum: docker compose exec app health-mirror apple-status')
+        Say (M ([regex]::Unescape('    (Sistem > Apple Sa\u011fl\u0131k i\u00e7e aktar). Status: docker compose exec app healthos apple-status')) '    (Sistem > Apple Sa\u011fl\u0131k i\u00e7e aktar). Durum: docker compose exec app healthos apple-status')
     }
     if ($script:AppleReceiverChoice -eq 'yes') {
         $endpoint = Get-EnvValue 'APPLE_RECEIVER_ENDPOINT_URI'
@@ -1407,7 +1672,7 @@ function Show-Summary {
         } else {
             Say (M '    Receiver: set APPLE_RECEIVER_ENDPOINT_URI=https://<your host>/webhooks/apple-health in .env' '    Al\u0131c\u0131: .env i\u00e7inde APPLE_RECEIVER_ENDPOINT_URI=https://<adresiniz>/webhooks/apple-health ayarlay\u0131n')
         }
-        if ($script:AppleTokenNew) {
+        if ($script:AppleTokenNew -and (Test-OnTerminal)) {
             Say (M '    Add this header to the Health Auto Export REST API automation (shown once):' '    Bu ba\u015fl\u0131\u011f\u0131 Health Auto Export REST API otomasyonuna ekleyin (bir kez g\u00f6sterilir):')
             Say ('      Authorization: Bearer ' + $script:AppleTokenNew) Green
         } else {
@@ -1442,11 +1707,44 @@ function Show-Summary {
 # ---------------------------------------------------------------------------------------------
 # Main
 
-function Invoke-HealthOSInstaller {
+function Initialize-InstallerState {
+    # Every script-wide value starts defined (StrictMode stops on an unset variable).
     $script:InstallLang = 'en'
     if ($Lang -and @('en', 'tr') -contains $Lang.ToLowerInvariant()) { $script:InstallLang = $Lang.ToLowerInvariant() }
     $script:Unattended = [bool]$NonInteractive
     $script:Notes = New-Object System.Collections.Generic.List[string]
+    $script:InstallPlatform = ''
+    $script:InstallMode = ''
+    $script:InstallSources = @()
+    $script:SourcesSetting = 'none'
+    $script:RepoDir = ''
+    $script:EnvExisted = $false
+    $script:EnvLines = $null
+    $script:EnvSet = New-Object System.Collections.Generic.List[string]
+    $script:EnvAppendedHeader = $false
+    $script:EnvResult = ''
+    $script:EnvBackup = ''
+    $script:GoogleId = ''
+    $script:GoogleSecret = ''
+    $script:GarminKey = ''
+    $script:GarminPasted = ''
+    $script:GarminMissingKey = ''
+    $script:AppleReceiverChoice = 'no'
+    $script:AppleEndpoint = ''
+    $script:AppleTokenFile = ''
+    $script:AppleTokenNew = ''
+    $script:WebhookHost = ''
+    $script:BackupsChoice = 'no'
+    $script:AutostartChoice = 'no'
+    $script:UmayChoice = 'no'
+    $script:BackupsExplicit = $false
+    $script:UmayExplicit = $false
+    $script:BackupKey = ''
+    $script:BackupPubKey = ''
+}
+
+function Invoke-HealthOSInstaller {
+    Initialize-InstallerState
     $noTerminal = $false
     if (-not $script:Unattended) {
         try { if ([Console]::IsInputRedirected) { $script:Unattended = $true; $noTerminal = $true } } catch { $null = $_ }
@@ -1462,7 +1760,7 @@ function Invoke-HealthOSInstaller {
     if ($noTerminal) { Say (M 'No terminal for questions: continuing with options and defaults.' 'Soru i\u00e7in terminal yok: se\u00e7enekler ve varsay\u0131lanlarla devam ediliyor.') }
     if ($DryRun) { Say (M 'Dry run: every action is printed, nothing is changed.' 'Deneme \u00e7al\u0131\u015fmas\u0131: her ad\u0131m yaz\u0131l\u0131r, hi\u00e7bir \u015fey de\u011fi\u015ftirilmez.') }
     if (-not (Test-IsWindowsHost) -and -not $DryRun) {
-        Stop-Installer 2 ((M 'install.ps1 installs HealthOS on Windows. On {0} use install.sh: curl -fsSL {1}/main/install.sh | bash' 'install.ps1 HealthOS''u Windows''a kurar. {0} \u00fczerinde install.sh kullan\u0131n: curl -fsSL {1}/main/install.sh | bash') -f (Get-HostLabel), $HealthOSRawUrl)
+        Stop-Installer 2 ((M 'install.ps1 installs HealthOS on Windows. On {0} use install.sh: curl -fsSL {1} | bash' 'install.ps1 HealthOS''u Windows''a kurar. {0} \u00fczerinde install.sh kullan\u0131n: curl -fsSL {1} | bash') -f (Get-HostLabel), (Get-InstallShUrl))
     }
     Select-Platform
     $script:RepoDir = Resolve-Checkout
@@ -1479,12 +1777,14 @@ function Invoke-HealthOSInstaller {
     Test-HostJobTools
     Update-EnvSettings
     Write-EnvFile
+    # GitHub Actions: masked before any later line could show the token.
+    Write-CiMask (Get-EnvValue 'APP_UI_TOKEN')
     Save-GarminKey
     Initialize-AppleToken
     Install-HostJobs
     $missing = Get-MissingProduction
     $started = $false
-    if ($missing.Count -eq 0 -and -not $NoStart) { $started = Start-Stack }
+    if ($missing.Count -eq 0 -and -not $NoStart) { $started = [bool](@(Start-Stack)[-1]) }
     Show-Summary -Started $started -Missing $missing
     return 0
 }
@@ -1493,14 +1793,17 @@ function Confirm-Plan {
     if ($script:Unattended) { return }
     $sources = @($script:InstallSources) -join ','
     if (-not $sources) { $sources = 'none' }
+    $modeLabel = $script:InstallMode
+    if ($modeLabel -eq 'trial') { $modeLabel += (M ' (look around only: no backups, do not keep data)' ' (yaln\u0131z g\u00f6z atmak i\u00e7in: yedek yok, veri saklamay\u0131n)') }
     Say ''
-    Say ((M 'Plan: platform windows, mode {0}, sources {1}, backups {2}, autostart {3}, Umay {4}; checkout {5}.' 'Plan: platform windows, kip {0}, kaynaklar {1}, yedek {2}, otomatik ba\u015flatma {3}, Umay {4}; klas\u00f6r {5}.') -f $script:InstallMode, $sources, (ConvertTo-YesNoLabel $script:BackupsChoice), (ConvertTo-YesNoLabel $script:AutostartChoice), (ConvertTo-YesNoLabel $script:UmayChoice), $script:RepoDir)
+    Say ((M 'Plan: platform windows, mode {0}, sources {1}, backups {2}, autostart {3}, Umay {4}; checkout {5}.' 'Plan: platform windows, kip {0}, kaynaklar {1}, yedek {2}, otomatik ba\u015flatma {3}, Umay {4}; klas\u00f6r {5}.') -f $modeLabel, $sources, (ConvertTo-YesNoLabel $script:BackupsChoice), (ConvertTo-YesNoLabel $script:AutostartChoice), (ConvertTo-YesNoLabel $script:UmayChoice), $script:RepoDir)
     if ((Read-YesNo (M 'Go ahead?' 'Devam edilsin mi?') 'yes') -ne 'yes') {
         Stop-Installer 0 (M 'Nothing was changed.' 'Hi\u00e7bir \u015fey de\u011fi\u015ftirilmedi.')
     }
 }
 
 $script:BoundParameters = $PSBoundParameters
+$script:InstallLang = 'en'
 $HealthOSExitCode = 0
 try {
     # Last value: stray output of a native command must never become the exit code.
@@ -1518,4 +1821,8 @@ try {
     }
 }
 if ($HealthOSInstallerFile) { exit $HealthOSExitCode }
+# `irm | iex` ran in the caller's session: leave its error preference and strict mode as they
+# were (the strict mode of an interactive session is off).
+$ErrorActionPreference = $HealthOSPreviousErrorAction
+Set-StrictMode -Off
 $global:LASTEXITCODE = $HealthOSExitCode

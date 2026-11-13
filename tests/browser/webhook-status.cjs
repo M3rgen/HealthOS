@@ -63,7 +63,7 @@ run(async () => {
       state.pause=false; state.releases.splice(0).forEach(resolve => resolve());
       await page.waitForFunction(() => document.querySelector('#webhook-status-summary').textContent.includes('Bildirim gelmiyor'));
       assert.match(await page.locator('#webhook-status-details').textContent(),/Bilinmiyor/);
-      assert.match(await page.locator('#webhook-status-details').textContent(),/İmzada süre sonu alanı yok/);
+      assert.match(await page.locator('#webhook-status-details').textContent(),/son geçerlilik bilgisi yok/);
       assert.match(await page.locator('#webhook-status-details').textContent(),/İmza anahtarları alınamadı/);
       // The normal full detail is longer than every supported viewport and stays reachable.
       const body = page.getByRole('region',{name:'Bildirim tanılama içeriği'});

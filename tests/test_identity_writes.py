@@ -38,10 +38,11 @@ from identity_records import (
 )
 from sqlalchemy import select
 
-from app.models.identity import RawHealthDataIdentity, RawHealthDataSupersession
+from app.models.identity_tables import RawHealthDataIdentity, RawHealthDataSupersession
 from app.models.raw_versions import RawHealthDataVersion
 from app.parsers.common import source_id, temporal
-from app.services.identity_backfill import identity_backfill
+from app.services.identities.identity_backfill import identity_backfill
+from app.services.identities.identity_options import BackfillOptions
 
 WATCH = "Example Watch"
 HOUR = timedelta(hours=1)
@@ -280,7 +281,7 @@ async def test_an_old_name_coming_back_keeps_the_chain_and_counts_once(sessions,
     """Review B3: the old name returns after the chain was decided. That is no contradiction
     (a name can change back): the chain stays in use, each record Google returns in either
     form with the same value is counted once, and verify stays green without notes."""
-    from app.services.identity import verify_identities
+    from app.services.identities.identity_verification import verify_identities
 
     old = await legacy(sessions, HEART, heart(60), T0, last=T0 + HOUR)
     await identity_backfill(sessions)
@@ -371,7 +372,7 @@ async def test_marking_reads_candidates_in_chunks_and_skips_superseded_rows(
     sessions, clock, monkeypatch
 ) -> None:
     """Bounded memory; a superseded row is history and is never marked."""
-    from app.sync import deletions
+    from app.services.archive import source_deletions as deletions
 
     monkeypatch.setattr(deletions, "CHUNK", 2)
     old = await legacy(sessions, HEART, heart(60), T0, last=T0 + HOUR)
@@ -401,7 +402,7 @@ async def test_a_stale_stored_start_is_kept_by_marking_and_linked_by_the_backfil
     await store(sessions, SWIM, swim(12, civil=True))
     assert len(await raw_rows(sessions, SWIM)) == 2
     assert await mark(sessions, SWIM, T0, T0 + HOUR, fetched_since) == 0
-    report = await identity_backfill(sessions, batch_size=1)
+    report = await identity_backfill(sessions, options=BackfillOptions(batch_size=1))
     assert report["swim-lengths-data"].start_mismatches == 1
     async with sessions() as session:
         link = await session.scalar(
@@ -423,7 +424,7 @@ async def test_last_seen_is_stamped_after_the_lock_and_never_moves_back(
     """A writer that waited for the data type's lock stamps the time it got it, and a writer
     that stamps an older time never moves ``last_seen_at`` backwards: a fetch that started
     meanwhile does not see the record as unseen (no false deletion mark)."""
-    from app.services import identity
+    from app.services.identities import identity
 
     original = identity.lock_data_type
 

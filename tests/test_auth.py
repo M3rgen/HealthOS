@@ -1,8 +1,7 @@
 import base64
 import hashlib
 import hmac
-from types import SimpleNamespace
-from unittest.mock import AsyncMock
+import re
 from urllib.parse import parse_qs, urlsplit
 
 import httpx
@@ -10,47 +9,18 @@ import pytest
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 from starlette.websockets import WebSocketDisconnect
+from support.auth import BASE, TOKEN, build
+from support.fixture_keys import SYNTHETIC_FERNET_KEY
 
-from app import main
+from app.api import login as login_routes
 from app.core import auth
 from app.core.config import Settings
-
-TOKEN = "t" * 20 + "-test-ui-token-0123456789"
-BASE = "http://localhost:8000"
-
-
-def build(monkeypatch, token=TOKEN, **overrides):
-    settings = Settings(
-        _env_file=None,
-        app_env="test",
-        app_ui_token=token,
-        codex_bridge_token=None,
-        google_health_webhook_endpoint_uri="https://hooks.example/webhooks/google-health",
-        google_health_webhook_authorization="Bearer webhook-secret",
-        **overrides,
-    )
-    monkeypatch.setattr(main, "get_settings", lambda: settings)
-    monkeypatch.setattr(
-        main,
-        "build_runtime",
-        lambda *_: SimpleNamespace(webhook_status=SimpleNamespace(record=AsyncMock())),
-    )
-    application = main.create_app()
-
-    @application.get("/api/probe")
-    async def api_probe():
-        return {"reached": True}
-
-    @application.get("/page-probe")
-    async def page_probe():
-        return {"reached": True}
-
-    return application
 
 
 @pytest.fixture
 def application(monkeypatch):
-    return build(monkeypatch)
+    # Explicit legacy interface: the shared-host session policy remains supported.
+    return build(monkeypatch, app_public_url=BASE)
 
 
 # What the old login set: HMAC-SHA256(token, "healthos-ui-cookie-v1"), valid forever.
@@ -132,11 +102,16 @@ async def test_wrong_token_is_rejected(application, headers):
     assert response.status_code == 401
 
 
-async def test_duplicate_authorization_headers_are_rejected(application):
+@pytest.mark.parametrize(
+    "credentials",
+    [("x", TOKEN), (TOKEN, "x")],
+    ids=["valid-last", "valid-first"],
+)
+async def test_duplicate_authorization_headers_are_rejected(application, credentials):
     async with client(application) as http:
         response = await http.get(
             "/api/probe",
-            headers=[("Authorization", f"Bearer {TOKEN}"), ("Authorization", "Bearer x")],
+            headers=[("Authorization", f"Bearer {value}") for value in credentials],
         )
     assert response.status_code == 401
 
@@ -146,7 +121,8 @@ async def test_duplicate_authorization_headers_are_rejected(application):
     [{"Accept": "text/html,application/xhtml+xml"}, {"Sec-Fetch-Mode": "navigate"}],
 )
 async def test_html_navigation_redirects_to_login(application, headers):
-    async with client(application) as http:
+    # The interface's own host; plain localhost moves there first (test_canonical_host.py).
+    async with client(application, "http://healthos.localhost:8000") as http:
         response = await http.get("/page-probe?x=1&y=2", headers=headers)
     assert response.status_code == 303
     location = urlsplit(response.headers["location"])
@@ -172,7 +148,7 @@ async def test_liveness_and_webhook_work_without_token(application):
         hook = await http.post(
             "/webhooks/google-health",
             json={"type": "verification"},
-            headers={"Authorization": "Bearer webhook-secret"},
+            headers={"Authorization": "Bearer webhook-secret-0123456789"},
         )
     assert live.status_code == 200
     assert hook.status_code == 201
@@ -183,7 +159,7 @@ async def test_public_webhook_host_still_reaches_receiver(application):
         hook = await http.post(
             "/webhooks/google-health",
             json={"type": "verification"},
-            headers={"Authorization": "Bearer webhook-secret"},
+            headers={"Authorization": "Bearer webhook-secret-0123456789"},
         )
         other = await http.get("/health/live")
     assert hook.status_code == 201
@@ -206,7 +182,9 @@ async def test_login_page_renders_without_token(application):
     assert "default-src 'none'" in csp and "'sha256-" in csp
     assert "frame-ancestors 'none'" in csp
     assert response.headers["cache-control"] == "no-store"
-    assert "http://" not in response.text and "https://" not in response.text
+    # Self-contained: the only absolute URL is the same login on the isolated local host.
+    urls = re.findall(r"https?://[^\"'<>\s]+", response.text)
+    assert urls == ["http://healthos.localhost:8000/login?next=%2Fapi%2Fprobe"]
 
 
 async def test_login_sets_strict_httponly_cookie_and_redirects(application):
@@ -221,7 +199,8 @@ async def test_login_sets_strict_httponly_cookie_and_redirects(application):
         cookie = response.headers["set-cookie"]
         attributes = {part.strip().lower() for part in cookie.split(";")}
         assert cookie.startswith(f"{auth.COOKIE_NAME}=")
-        assert f"max-age={auth.COOKIE_MAX_AGE}" in attributes
+        # Plain localhost cannot isolate the cookie from other local servers; a day, not a month.
+        assert f"max-age={login_routes.UNISOLATED_HOST_SESSION_SECONDS}" in attributes
         assert {"httponly", "samesite=strict", "path=/"} <= attributes
         assert "secure" not in attributes
         assert TOKEN not in cookie
@@ -359,12 +338,12 @@ async def test_empty_token_disables_auth_outside_production(monkeypatch):
 def production(**overrides):
     values = {
         "app_env": "production",
-        "database_url": "postgresql+asyncpg://health:random-password@postgres:5432/health",
+        "database_url": "postgresql+asyncpg://health:synthetic-db-Q3v8Lr2Xk9Tw5Zp7Nm4Hc6Jd@postgres:5432/health",
         "google_client_id": "client-id",
         "google_client_secret": "client-secret",
-        "google_token_encryption_key": "encryption-key",
+        "google_token_encryption_key": SYNTHETIC_FERNET_KEY,
         "google_health_webhook_endpoint_uri": "https://health.example/webhooks/google-health",
-        "google_health_webhook_authorization": "Bearer webhook-secret",
+        "google_health_webhook_authorization": "Bearer webhook-secret-0123456789-abcdefgh",
         "_env_file": None,
     }
     return Settings(**{**values, **overrides})
@@ -408,7 +387,7 @@ async def test_sessions_expire_after_the_cookie_lifetime(application):
     session = await login_session(application)
     cookie = {"Cookie": f"{auth.COOKIE_NAME}={session}"}
     async with client(application) as http:
-        now[0] += auth.COOKIE_MAX_AGE - 1
+        now[0] += login_routes.UNISOLATED_HOST_SESSION_SECONDS - 1
         assert (await http.get("/api/probe", headers=cookie)).status_code == 200
         now[0] += 2
         assert (await http.get("/api/probe", headers=cookie)).status_code == 401

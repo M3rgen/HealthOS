@@ -239,17 +239,23 @@ run(async () => {
           };
         });
         assert.equal(geometry.fits, true);
-        assert.equal(geometry.attached, true, JSON.stringify(geometry));
+        if (await modalLayout()) assert.ok(geometry.panel[1] - geometry.panel[0] >= innerHeightOf(geometry) - 16.5, JSON.stringify(geometry));
+        else assert.equal(geometry.attached, true, JSON.stringify(geometry));
         assert.equal(geometry.overflow, false);
       }
+      // Phones use the panel as a modal: it fills the screen and the bubble waits underneath.
+      const modalLayout = () => page.evaluate(() => document.querySelector('#assistant-dialog').getAttribute('aria-modal') === 'true');
+      const innerHeightOf = geometry => geometry.panel[1] + 8;
       await checkGeometry();
-      const bubble = await page.locator('#assistant-open').boundingBox();
-      await page.mouse.move(bubble.x + bubble.width / 2, bubble.y + bubble.height / 2);
-      await page.mouse.down();
-      await page.mouse.move(width / 2, 420, {steps: 10});
-      await page.mouse.up();
-      assert.equal(await page.locator('#assistant-dialog').isVisible(), true);
-      await checkGeometry();
+      if (!(await modalLayout())) {
+        const bubble = await page.locator('#assistant-open').boundingBox();
+        await page.mouse.move(bubble.x + bubble.width / 2, bubble.y + bubble.height / 2);
+        await page.mouse.down();
+        await page.mouse.move(width / 2, 420, {steps: 10});
+        await page.mouse.up();
+        assert.equal(await page.locator('#assistant-dialog').isVisible(), true);
+        await checkGeometry();
+      }
       await page.setViewportSize({width, height: 568});
       await checkGeometry();
       await page.setViewportSize({width, height: 900});
@@ -260,10 +266,11 @@ run(async () => {
         Object.defineProperty(window.visualViewport, 'height', {value: 350, configurable: true});
         window.visualViewport.dispatchEvent(new Event('resize'));
       });
-      assert.equal(await page.evaluate(() => ['assistant-dialog', 'assistant-open'].every(id => {
+      const visibleIds = await modalLayout() ? ['assistant-dialog'] : ['assistant-dialog', 'assistant-open'];
+      assert.equal(await page.evaluate(ids => ids.every(id => {
         const rect = document.getElementById(id).getBoundingClientRect();
         return rect.top >= 0 && rect.bottom <= 350;
-      })), true);
+      }), visibleIds), true);
       await checkGeometry();
       await page.evaluate(() => {
         delete window.visualViewport.height;

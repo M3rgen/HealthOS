@@ -2,7 +2,7 @@
 
 from datetime import date, datetime
 
-from sqlalchemy import JSON, Date, DateTime, Index, Integer, String, text
+from sqlalchemy import JSON, BigInteger, Date, DateTime, Index, Integer, String, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -25,3 +25,18 @@ class DerivedDay(Base):
     build_count: Mapped[int] = mapped_column(Integer, server_default=text("0"), nullable=False)
     result: Mapped[dict | None] = mapped_column(JSON)
     computed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class DerivedDayPending(Base):
+    """Days a transaction dirtied, written by the row triggers and drained at its commit.
+
+    PostgreSQL only (app/models/derived_invalidation.py); rows never outlive the writing
+    transaction, so nothing here is ever visible to another one.
+    """
+
+    __tablename__ = "derived_day_pending"
+
+    xact: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    day: Mapped[date] = mapped_column(Date, primary_key=True)
+    timezone: Mapped[str] = mapped_column(String(128), primary_key=True)
+    method: Mapped[str] = mapped_column(String(64), primary_key=True)

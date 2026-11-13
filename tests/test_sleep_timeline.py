@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import pytest
 from derived_records import BAND, DAY, PHONE, T0, read, sleep, stage, store, streams
 
-from app.services.sleep_timeline import sleep_timeline
+from app.services.interpretation.sleep_timeline import sleep_timeline
 
 
 def test_timeline_matches_original_cell_scan():

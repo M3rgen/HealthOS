@@ -1,5 +1,6 @@
 from datetime import UTC, date, datetime, timedelta
 
+import garmin_records as garmin_payloads
 import httpx
 import pytest
 import pytest_asyncio
@@ -7,10 +8,15 @@ from derived_records import sleep, steps
 from fastapi import FastAPI
 
 import app.api.dashboard as dashboard_api
-import app.services.dashboard as dashboard_service
+import app.services.dashboard_views.dashboard as dashboard_service
 from app.db.session import get_session
 from app.models.health import SleepSession, Steps
 from app.models.state import RawHealthData
+
+GARMIN_STEPS = garmin_payloads.daily_steps(date(2000, 1, 1))["totalSteps"]
+GARMIN_HEART = garmin_payloads.heart_rate(date(2000, 1, 1))["restingHeartRate"]
+GARMIN_SLEEP = garmin_payloads.sleep(date(2000, 1, 1))
+GARMIN_ASLEEP = GARMIN_SLEEP["sleepTimeSeconds"] - GARMIN_SLEEP["awakeSleepSeconds"]
 
 
 class FixedDateTime(datetime):
@@ -259,3 +265,187 @@ async def test_history_clock_boundary(dashboard_dates, monkeypatch, today, zone,
     else:
         assert response.json()["start_date"] == "0001-01-01"
         assert response.json()["days"][-1]["value"] == 240
+
+
+def garmin_records(metric, day, identifier=None, *, quarantined=False, wake=None):
+    """Synthetic normalized Garmin rows with the same calendar keys as ingestion."""
+    from app.models.health import RestingHeartRate
+
+    stamp = datetime.combine(day, datetime.min.time(), UTC)
+    kind = {"steps": "steps", "sleep": "sleep", "heart": "resting-heart-rate"}[metric]
+    common = {
+        "google_data_point_id": identifier or f"garmin:{kind}:{day}",
+        "source_record_id": f"{kind}:{day}",
+        "provider": "GARMIN",
+        "is_quarantined": quarantined,
+    }
+    if metric == "heart":
+        return [RestingHeartRate(**common, timestamp=stamp, bpm=GARMIN_HEART)]
+    end = wake or stamp + timedelta(hours=6)
+    start = end - timedelta(seconds=GARMIN_SLEEP["sleepTimeSeconds"])
+    if metric == "steps":
+        return [
+            Steps(
+                **common, start_time=stamp, end_time=stamp + timedelta(days=1), count=GARMIN_STEPS
+            )
+        ]
+    return [
+        SleepSession(
+            **common,
+            start_time=start,
+            end_time=end,
+            duration_seconds=GARMIN_SLEEP["sleepTimeSeconds"],
+            awake_seconds=GARMIN_SLEEP["awakeSleepSeconds"],
+        )
+    ]
+
+
+@pytest.mark.parametrize(
+    "metric,expected", [("steps", GARMIN_STEPS), ("sleep", GARMIN_ASLEEP), ("heart", GARMIN_HEART)]
+)
+async def test_garmin_only_archive_exposes_every_page(client, sessions, metric, expected):
+    today = date(2026, 9, 30)
+    oldest = today - timedelta(days=65)
+    async with sessions.begin() as session:
+        session.add_all(garmin_records(metric, today) + garmin_records(metric, oldest))
+    params = {"metric": metric}
+    first = await client.get("/api/dashboard/history", params=params)
+    assert first.status_code == 200, first.text
+    data = first.json()
+    assert data["total_pages"] == 3
+    assert data["earliest_date"] == oldest.isoformat()
+    assert data["latest_date"] == today.isoformat()
+    assert data["days"][0]["value"] == expected
+    third = await client.get("/api/dashboard/history", params={**params, "page": 3})
+    assert third.status_code == 200, third.text
+    assert next(row for row in third.json()["days"] if row["date"] == oldest.isoformat()) == {
+        "date": oldest.isoformat(),
+        "value": expected,
+        "partial": False,
+    }
+    assert third.json()["earliest_date"] == data["earliest_date"]
+    assert third.json()["latest_date"] == data["latest_date"]
+    assert (
+        await client.get("/api/dashboard/history", params={**params, "page": 4})
+    ).status_code == 422
+
+
+@pytest.mark.parametrize("metric,expected", [("steps", 600), ("sleep", 27000), ("heart", 71)])
+async def test_union_bounds_keep_same_day_source_precedence(client, sessions, metric, expected):
+    today = date(2026, 9, 30)
+    oldest, middle = today - timedelta(days=65), today - timedelta(days=10)
+    async with sessions.begin() as session:
+        google = records(metric, middle, "google")
+        google[0].raw_json = {**google[0].raw_json, "dataSource": {"platform": "FITBIT"}}
+        session.add_all(
+            google
+            + garmin_records(metric, oldest)
+            + garmin_records(metric, middle)
+            + garmin_records(metric, today)
+        )
+    first = (await client.get("/api/dashboard/history", params={"metric": metric})).json()
+    assert first["earliest_date"] == oldest.isoformat()
+    assert first["latest_date"] == today.isoformat()
+    assert first["total_pages"] == 3
+    assert (
+        next(row for row in first["days"] if row["date"] == middle.isoformat())["value"] == expected
+    )
+    response = await client.get("/api/dashboard/history", params={"metric": metric, "page": 3})
+    assert response.status_code == 200, response.text
+    assert any(
+        row["date"] == oldest.isoformat() and row["value"] is not None
+        for row in response.json()["days"]
+    )
+
+
+@pytest.mark.parametrize("metric", ["steps", "sleep", "heart"])
+async def test_garmin_bounds_exclude_quarantine_superseded_versions_and_future(
+    client, sessions, metric
+):
+    current = date(2026, 9, 29)
+    async with sessions.begin() as session:
+        session.add_all(
+            garmin_records(metric, date(2010, 1, 1), "replaced")
+            + garmin_records(metric, current, "replaced:v2")
+            + garmin_records(metric, date(2011, 1, 1), "bad", quarantined=True)
+            + garmin_records(metric, date(2012, 1, 1), "held")
+            + garmin_records(metric, current, "held:v2", quarantined=True)
+            + garmin_records(metric, date(2026, 9, 30), "latest-bad", quarantined=True)
+            + garmin_records(metric, date(2026, 10, 1), "future")
+        )
+    data = (await client.get("/api/dashboard/history", params={"metric": metric})).json()
+    assert data["earliest_date"] == data["latest_date"] == current.isoformat()
+    assert data["total_pages"] == 1
+    assert sum(row["value"] is not None for row in data["days"]) == 1
+
+
+@pytest.mark.parametrize("metric,expected", [("steps", GARMIN_STEPS), ("heart", GARMIN_HEART)])
+async def test_garmin_daily_bounds_keep_record_calendar_day_in_west(
+    client, sessions, metric, expected
+):
+    day = date(2026, 9, 29)
+    async with sessions.begin() as session:
+        session.add_all(
+            garmin_records(metric, day) + garmin_records(metric, day + timedelta(days=1))
+        )
+    response = await client.get(
+        "/api/dashboard/history", params={"metric": metric, "timezone": "America/Los_Angeles"}
+    )
+    assert response.status_code == 200, response.text
+    data = response.json()
+    assert data["earliest_date"] == data["latest_date"] == day.isoformat()
+    assert data["days"][0]["date"] == day.isoformat()
+    assert data["days"][0]["value"] == expected
+
+
+@pytest.mark.parametrize(
+    "wake,local_day",
+    [
+        ("2026-03-08T07:30:00+00:00", date(2026, 3, 7)),  # UTC day differs, before midnight.
+        ("2026-03-08T08:00:00+00:00", date(2026, 3, 8)),  # Local midnight.
+        ("2026-03-08T09:30:00+00:00", date(2026, 3, 8)),  # Before spring DST jump.
+        ("2026-03-08T10:30:00+00:00", date(2026, 3, 8)),  # After spring DST jump.
+        ("2026-11-01T08:30:00+00:00", date(2026, 11, 1)),  # First 01:30 in autumn.
+        ("2026-11-01T09:30:00+00:00", date(2026, 11, 1)),  # Second 01:30 in autumn.
+    ],
+)
+async def test_garmin_sleep_bounds_use_requested_wake_day(sessions, wake, local_day):
+    from app.services.dashboard_views.dashboard_history import history_data
+
+    wake = datetime.fromisoformat(wake)
+    async with sessions.begin() as session:
+        # Calendar keys deliberately differ from the local wake day.
+        session.add_all(garmin_records("sleep", wake.date() - timedelta(days=1), wake=wake))
+        session.add_all(
+            garmin_records(
+                "sleep", local_day + timedelta(days=1), "future", wake=wake + timedelta(days=2)
+            )
+        )
+    async with sessions() as session:
+        data = await history_data(session, "sleep", 1, "America/Los_Angeles", local_day)
+    assert data["earliest_date"] == data["latest_date"] == local_day
+    assert data["days"][0]["date"] == local_day.isoformat()
+    assert data["days"][0]["value"] == GARMIN_ASLEEP
+
+
+async def test_invalid_garmin_sleep_interval_cannot_establish_archive_day(client, sessions):
+    invalid = garmin_records("sleep", date(2010, 1, 1))[0]
+    invalid.start_time = invalid.end_time
+    async with sessions.begin() as session:
+        session.add(invalid)
+    response = await client.get("/api/dashboard/history", params={"metric": "sleep"})
+    assert response.status_code == 200, response.text
+    data = response.json()
+    assert data["earliest_date"] is data["latest_date"] is None
+    assert data["total_pages"] == 1
+    assert all(row["value"] is None for row in data["days"])
+
+
+async def test_garmin_sleep_archive_date_conversion_overflow(client, sessions):
+    async with sessions.begin() as session:
+        session.add_all(garmin_records("sleep", date.min, wake=datetime(1, 1, 1, 8, tzinfo=UTC)))
+    response = await client.get(
+        "/api/dashboard/history", params={"metric": "sleep", "timezone": "Etc/GMT+12"}
+    )
+    assert response.status_code == 422, response.text
+    assert response.json() == {"detail": "Seçilen tarih aralığı bu saat diliminde hesaplanamıyor."}

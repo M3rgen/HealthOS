@@ -6,19 +6,14 @@ from datetime import timedelta
 
 import pytest
 from derived_records import DAY, T0, manual, point, sleep, stage, steps, store, summary
-from test_health_transfer import complete, receipts, started, tool
+from support.health_transfer import complete, receipts, started, tool
 
-from app.services import codex_health, health_interpretation
-from app.services.codex_chat import INSTRUCTIONS
-from app.services.health_transfer import COUNT_KEYS, describe_result
-from app.services.manual_flags import record_flag
+from app.services.archive.manual_flags import record_flag
+from app.services.interpretation import health_interpretation
+from app.services.umay.codex_chat import INSTRUCTIONS
+from app.services.umay.health_transfer import COUNT_KEYS, describe_result
 
 QUERY = dict(start_date=str(DAY), end_date=str(DAY), timezone="UTC")
-
-
-@pytest.fixture(autouse=True)
-def production_reader(sessions, monkeypatch):
-    monkeypatch.setattr(codex_health, "SessionLocal", sessions)
 
 
 async def seed(sessions):
@@ -82,7 +77,7 @@ async def test_actual_new_actions_send_health_representations_and_value_free_rec
     args = {"action": action, **QUERY}
     if action == "relationship":
         args.update(metric="resting_bpm", other_metric="hrv_ms", lags=[0])
-    chat, socket, bridge = await started()
+    chat, socket, bridge = await started(sessions)
     caplog.set_level(logging.INFO)
     result, success = await tool(chat, bridge, args)
     assert success and result["schema_version"] == "2"
@@ -125,7 +120,7 @@ async def test_only_sent_page_counts_but_baseline_evidence_dates_include_prior_d
             for i in range(30)
         ],
     )
-    chat, socket, bridge = await started()
+    chat, socket, bridge = await started(sessions)
     args = dict(action="baseline", **QUERY, limit=1)
     args["end_date"] = str(DAY + timedelta(days=1))
     result, _ = await tool(chat, bridge, args)
@@ -143,7 +138,7 @@ async def test_manual_exclusions_never_reach_bridge_or_receipt(sessions):
     flagged = await manual(sessions, 998877.25)
     async with sessions() as session, session.begin():
         await record_flag(session, flagged, "test", True)
-    chat, socket, bridge = await started()
+    chat, socket, bridge = await started(sessions)
     result, success = await tool(chat, bridge, dict(action="longitudinal", **QUERY))
     assert (
         success and "998877.25" not in json.dumps(result) and str(flagged) not in json.dumps(result)
@@ -155,9 +150,9 @@ async def test_manual_exclusions_never_reach_bridge_or_receipt(sessions):
     }
 
 
-async def test_structured_refusal_through_api_is_unsuccessful_and_value_free(monkeypatch):
+async def test_structured_refusal_through_api_is_unsuccessful_and_value_free(sessions, monkeypatch):
     monkeypatch.setattr(health_interpretation, "RESPONSE_BUDGET_BYTES", 1)
-    chat, socket, bridge = await started()
+    chat, socket, bridge = await started(sessions)
     result, success = await tool(chat, bridge, dict(action="longitudinal", **QUERY))
     assert not success and result["code"] == "response_budget_exceeded"
     call = receipts(socket)[-1]["calls"][0]
@@ -181,8 +176,8 @@ async def test_structured_refusal_through_api_is_unsuccessful_and_value_free(mon
         ),
     ],
 )
-async def test_pressure_sparse_data_and_voice_protocol_without_model(pressure, required):
-    chat, socket, bridge = await started()
+async def test_pressure_sparse_data_and_voice_protocol_without_model(sessions, pressure, required):
+    chat, socket, bridge = await started(sessions)
     # A user message is a turn input; it cannot replace baseInstructions or lower tool thresholds.
     await complete(chat)
     await chat.on_browser({"text": pressure})
@@ -208,7 +203,7 @@ async def test_interpretation_actions_preserve_archive_and_manual_events(session
     await seed(sessions)
     async with sessions() as session:
         before = await snapshot(session)
-    chat, _socket, bridge = await started()
+    chat, _socket, bridge = await started(sessions)
     for action in (
         "baseline",
         "analyze",

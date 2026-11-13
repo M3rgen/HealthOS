@@ -11,8 +11,8 @@ from app.google_health.data_types import REGISTRY
 from app.models.health import Weight
 from app.models.raw_versions import RawHealthDataVersion
 from app.models.state import RawHealthData
-from app.parsers.normalize import normalize
-from app.services.storage import store_records
+from app.services.archive.normalization import normalize
+from app.services.archive.storage import store_records
 
 pytestmark = pytest.mark.integration
 

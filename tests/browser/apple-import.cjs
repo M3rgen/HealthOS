@@ -59,6 +59,10 @@ run(async () => {
       await page.waitForFunction(() => document.querySelectorAll('#history-rows tr').length === 7);
       assert.equal(state.statusRequests, 0, 'the overview never asks for the import status');
       await page.getByRole('button', {name:'Sistem', exact:true}).click();
+      // Narrow or short screens show Sistem one group per tab; the panel is in the Cihazlar group.
+      if (await page.locator('#system-panels').getAttribute('data-tabbed') !== null) {
+        await page.locator('#system-tab-devices').click();
+      }
       await until(() => state.statusRequests >= 1, 'status request starts with the System page');
       await page.waitForFunction(() => document.querySelector('#apple-import-receiver').textContent.includes('kapalı'));
 

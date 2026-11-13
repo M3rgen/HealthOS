@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {
   KEYS_MIGRATED, LEGACY_KEYS, LEGACY_UPLOAD_DB, UPLOADS_MIGRATED, migrateLegacyKeys, migrateLegacyUploads,
 } from '../../frontend/src/legacy-names.js';
-import { createLocalAppearanceStore } from '../../frontend/src/appearance.js';
+import { createLocalAppearanceStore } from '../../frontend/src/appearance-store.js';
 
 function memoryStorage(entries = {}) {
   const items = new Map(Object.entries(entries));

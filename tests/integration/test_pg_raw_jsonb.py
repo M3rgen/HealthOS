@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import uuid
 from argparse import Namespace
+from types import SimpleNamespace
 
 import pytest
 from alembic import command
@@ -14,8 +15,8 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from app.google_health.data_types import REGISTRY
 from app.models.state import RawHealthData, WebhookEvent, WebhookNotification
 from app.parsers.common import payload_hash, source_id
-from app.services.storage import store_records
-from app.services.webhook_processing import WebhookBatchProcessor
+from app.services.archive.storage import store_records
+from app.sync.webhook_processing import WebhookBatchProcessor
 
 pytestmark = pytest.mark.integration
 
@@ -126,7 +127,7 @@ async def _assert_app_reads_unchanged(
             ).all()
             assert {row.google_data_point_id: row.raw_json for row in rows} == expected
             for row in rows:
-                # What `health-mirror verify` checks for every archived record.
+                # What `healthos verify` checks for every archived record.
                 assert payload_hash(row.raw_json) == row.payload_hash
             batch = await session.get(WebhookEvent, "batch-1")
             assert batch is not None and batch.raw_json == WEBHOOK_BATCH
@@ -144,7 +145,8 @@ async def _assert_app_reads_unchanged(
 
         # Rebuilding a legacy batch from its stored raw_json yields the same element
         # hashes, so no notification is duplicated.
-        processor = WebhookBatchProcessor(sessions, None, {"steps", "sleep"})  # type: ignore[arg-type]
+        incremental = SimpleNamespace(specs=dict(REGISTRY))
+        processor = WebhookBatchProcessor(sessions, incremental, {"steps", "sleep"})  # type: ignore[arg-type]
         await processor.prepare_existing_batch("batch-1")
         async with sessions() as session:
             hashes = (await session.scalars(select(WebhookNotification.element_hash))).all()

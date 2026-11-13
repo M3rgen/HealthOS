@@ -8,14 +8,13 @@ from unittest.mock import Mock
 import pytest
 from derived_records import BAND, DAY, PHONE, T0, sleep, snapshot, steps, store, summary
 from interpretation_records import SCOPE_ERROR, call
-from interpretation_records import production_reader as production_reader
 
 from app.parsers.common import canonical_json, payload_hash
-from app.services import health_interpretation
-from app.services import interpretation_baseline_index as indexing
-from app.services import interpretation_stats as stats
-from app.services.interpretation_inputs import MAX_INPUT_BYTES, MAX_INPUT_RECORDS
-from app.services.interpretation_types import Interpretation, Refusal
+from app.services.interpretation import health_interpretation
+from app.services.interpretation import interpretation_baseline_index as indexing
+from app.services.interpretation import interpretation_stats as stats
+from app.services.interpretation.interpretation_inputs import MAX_INPUT_BYTES, MAX_INPUT_RECORDS
+from app.services.interpretation.interpretation_types import Interpretation, Refusal
 
 KIND = "daily-oxygen-saturation"
 
@@ -132,12 +131,12 @@ async def test_series_and_day_visits_are_linear_through_production_reader(
             for limit in (1, 200):
                 visits.clear()
                 assert_refusal(
-                    await call("baseline", limit=limit, **args), "summary_budget_exceeded"
+                    await call(sessions, "baseline", limit=limit, **args), "summary_budget_exceeded"
                 )
             blocked.assert_not_called()
         monkeypatch.setattr(health_interpretation, "MAX_SUMMARIES", count)
     visits.clear()
-    result = await call("baseline", limit=1, **args)
+    result = await call(sessions, "baseline", limit=1, **args)
     assert result["total_summaries"] == (count if shape == "sources" else 90)
     assert result["next_cursor"] and result["summaries"][0]["statistics"]["count"] == (
         0 if shape == "sources" else 56
@@ -154,7 +153,7 @@ async def test_filtered_summary_boundaries_precede_statistics_and_models(
     await resting(sessions, [40, 50, 60], source=PHONE)
     await store(sessions, KIND, summary(KIND, averagePercentage=95))
     args = dict(end_date=str(DAY + timedelta(days=2)))
-    whole = (await call(action, **args))["summaries"]
+    whole = (await call(sessions, action, **args))["summaries"]
     chosen = next(r for r in whole if r["metric"] == "resting_bpm")
     filters = [
         {},
@@ -175,12 +174,12 @@ async def test_filtered_summary_boundaries_precede_statistics_and_models(
             counted = Mock(wraps=stats.statistics)
             with monkeypatch.context() as patch:
                 patch.setattr(stats, "statistics", counted)
-                page = await call(action, limit=1, **args, **selection)
+                page = await call(sessions, action, limit=1, **args, **selection)
             assert counted.call_count == len(expected)
             assert page["total_summaries"] == len(expected)
             if page["next_cursor"]:
                 rest = await call(
-                    action, cursor=page["next_cursor"], limit=200, **args, **selection
+                    sessions, action, cursor=page["next_cursor"], limit=200, **args, **selection
                 )
                 assert page["summaries"] + rest["summaries"] == expected
             else:
@@ -192,12 +191,17 @@ async def test_filtered_summary_boundaries_precede_statistics_and_models(
                 for limit in (1, 200):
                     assert_refusal(
                         await call(
-                            action, limit=limit, cursor=page["next_cursor"], **args, **selection
+                            sessions,
+                            action,
+                            limit=limit,
+                            cursor=page["next_cursor"],
+                            **args,
+                            **selection,
                         ),
                         "summary_budget_exceeded",
                     )
             else:
-                assert (await call(action, **args, **selection))["summaries"] == []
+                assert (await call(sessions, action, **args, **selection))["summaries"] == []
             blocked.assert_not_called()
     async with sessions() as session:
         assert await snapshot(session) == before
@@ -218,7 +222,7 @@ async def test_repeated_history_evidence_budget_counts_full_filtered_query(
     await store(sessions, KIND, *records)
     await resting(sessions, [50, 60, 70], source=PHONE)
     args = dict(end_date=str(DAY + timedelta(days=2)))
-    whole = await call(action, **args)
+    whole = await call(sessions, action, **args)
     chosen = next(r for r in whole["summaries"] if r["metric"] == "spo2")
     selection = {key: chosen[key] for key in ("metric", "source", "definition")}
     expected = [r for r in whole["summaries"] if r["metric"] == "spo2"]
@@ -228,9 +232,11 @@ async def test_repeated_history_evidence_budget_counts_full_filtered_query(
         before = await snapshot(session)
     for budget in (evidence_count + 1, evidence_count):
         monkeypatch.setattr(indexing, "MAX_BASELINE_EVIDENCE", budget)
-        page = await call(action, limit=1, **args, **selection)
+        page = await call(sessions, action, limit=1, **args, **selection)
         assert page["summaries"] == expected[:1] and page["next_cursor"]
-        rest = await call(action, cursor=page["next_cursor"], limit=200, **args, **selection)
+        rest = await call(
+            sessions, action, cursor=page["next_cursor"], limit=200, **args, **selection
+        )
         assert page["summaries"] + rest["summaries"] == expected
     monkeypatch.setattr(indexing, "MAX_BASELINE_EVIDENCE", evidence_count - 1)
     with monkeypatch.context() as patch:
@@ -238,12 +244,12 @@ async def test_repeated_history_evidence_budget_counts_full_filtered_query(
         for limit in (1, 200):
             for cursor in (None, page["next_cursor"]):
                 assert_refusal(
-                    await call(action, limit=limit, cursor=cursor, **args, **selection),
+                    await call(sessions, action, limit=limit, cursor=cursor, **args, **selection),
                     "baseline_evidence_budget_exceeded",
                 )
         # The unfiltered query also exceeds the ceiling.
-        assert_refusal(await call(action, **args), "baseline_evidence_budget_exceeded")
-        assert (await call(action, source="absent", **args))["summaries"] == []
+        assert_refusal(await call(sessions, action, **args), "baseline_evidence_budget_exceeded")
+        assert (await call(sessions, action, source="absent", **args))["summaries"] == []
         blocked.assert_not_called()
     async with sessions() as session:
         assert await snapshot(session) == before
@@ -266,6 +272,7 @@ async def test_default_evidence_budget_rejects_small_input_with_large_repeated_h
         for limit in (1, 200):
             assert_refusal(
                 await call(
+                    sessions,
                     "analyze",
                     start_date=str(DAY - timedelta(days=89)),
                     lookback_days=90,
@@ -286,7 +293,7 @@ async def test_method_index_keeps_half_open_history_and_unselected_missing_evide
     await store(
         sessions, KIND, summary(KIND, "current", averagePercentage=95, measurementMethod="A")
     )
-    row = (await call("baseline"))["summaries"][0]
+    row = (await call(sessions, "baseline"))["summaries"][0]
     if other == "metric":
         await resting(sessions, [None], start=DAY + timedelta(days=offset))
     else:
@@ -303,12 +310,12 @@ async def test_method_index_keeps_half_open_history_and_unselected_missing_evide
             ),
         )
     selection = {key: row[key] for key in ("metric", "source", "definition")}
-    selected = (await call("baseline", lookback_days=14, **selection))["summaries"][0]
+    selected = (await call(sessions, "baseline", lookback_days=14, **selection))["summaries"][0]
     assert ("definition_or_method_break" in selected["reason_codes"]) == (
         breaks and other == "method"
     )
     assert selected["statistics"]["count"] == 0 and len(selected["evidence"]) == 1
-    whole = (await call("baseline", lookback_days=14))["summaries"]
+    whole = (await call(sessions, "baseline", lookback_days=14))["summaries"]
     assert selected == next(r for r in whole if all(r[k] == v for k, v in selection.items()))
 
 
@@ -331,7 +338,7 @@ async def test_indexed_windows_keep_robust_statistics_evidence_and_absolute_cand
         return captured
 
     monkeypatch.setattr(health_interpretation, "daily_series", capture)
-    result = await call("analyze", **args)
+    result = await call(sessions, "analyze", **args)
     Interpretation.model_validate(result)
     for row in result["summaries"]:
         key = next(
@@ -376,20 +383,21 @@ async def test_indexed_windows_keep_robust_statistics_evidence_and_absolute_cand
     for candidate in result["candidates"]:
         row = result["summaries"][candidate["summary_index"]]
         assert candidate["evidence_dates"] == [row["date"], *row["comparison_dates"]]
-    page = await call("analyze", limit=1, **args)
-    rest = await call("analyze", limit=200, cursor=page["next_cursor"], **args)
+    page = await call(sessions, "analyze", limit=1, **args)
+    rest = await call(sessions, "analyze", limit=200, cursor=page["next_cursor"], **args)
     assert page["summaries"] + rest["summaries"] == result["summaries"]
     assert page["candidates"] == rest["candidates"] == result["candidates"]
     # An unselected method still changes the snapshot and the historical break.
     selection = dict(metric="resting_bpm", source="kaynak-" + payload_hash(BAND))
-    page = await call("analyze", limit=1, **args, **selection)
+    page = await call(sessions, "analyze", limit=1, **args, **selection)
     await resting(sessions, [50], start=DAY - timedelta(days=1), method="different")
     assert_refusal(
-        await call("analyze", cursor=page["next_cursor"], **args, **selection), "stale_cursor"
+        await call(sessions, "analyze", cursor=page["next_cursor"], **args, **selection),
+        "stale_cursor",
     )
     assert (
         "definition_or_method_break"
-        in (await call("analyze", **args, **selection))["summaries"][0]["reason_codes"]
+        in (await call(sessions, "analyze", **args, **selection))["summaries"][0]["reason_codes"]
     )
 
 
@@ -425,7 +433,9 @@ async def test_default_evidence_budget_allows_full_range_of_daily_metrics(
     first = DAY - timedelta(days=89)
     await daily_metrics(sessions, first - timedelta(days=lookback), 90 + lookback, metrics == 5)
     # Every summary repeats its full history: metrics * 90 * (lookback + 1) references.
-    result = await call("baseline", start_date=str(first), lookback_days=lookback, limit=1)
+    result = await call(
+        sessions, "baseline", start_date=str(first), lookback_days=lookback, limit=1
+    )
     assert "code" not in result, result["code"]
     assert result["total_summaries"] == metrics * 90
     assert len(result["summaries"][0]["evidence"]) == lookback + 1

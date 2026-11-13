@@ -3,7 +3,7 @@
 #
 #   bash scripts/check_no_extension.sh [--github-only] [rev ...]     # default: main dev
 #
-# Two kinds of extension exist (see docs/BRANCHES.md), configured once per clone and kept out
+# Two kinds of extension exist, configured once per clone and kept out
 # of the repository so that the public tree never names them:
 #   git config --add healthos.extensionMarker <word>          # private extensions (eklenti/*)
 #   git config --add healthos.githubExtension <branch>        # GitHub-only extension branches
@@ -20,8 +20,8 @@
 # (healthos.githubBranch, default github-main) and for the GitHub-only extension branches
 # themselves, where that code belongs; revisions are matched by branch name.
 #
-#   --github-only   run only the GitHub-only checks; `--github-only live` proves that no
-#                   GitHub-only extension reached the VM (private markers belong in live)
+#   --github-only   run only the GitHub-only checks; use a deployment revision to check
+#                   that no GitHub-only extension reached the maintainer's server
 #
 # Set EXTENSION_BASE to compare against another branch than main.
 #

@@ -4,7 +4,7 @@
 (``RecordIdentity.specific_key``, app/parsers/identity.py) to the raw row that holds it, for
 rows whose own id does not say so: a raw row's ``google_data_point_id`` can never change (the
 frozen identity trigger of 0011), so rows stored under a v1 id are not re-keyed; the reconciler
-(``health-mirror identity-backfill``) gives each of them an alias, and ``store_records`` finds
+(``healthos identity-backfill``) gives each of them an alias, and ``store_records`` finds
 a returning record through it. Rows stored since 0012 need none: their id
 (``synthetic:v2s:<hash>``) is computed from the key and the fingerprint.
 
@@ -25,7 +25,7 @@ link no longer in force, then another holder); the newest in-force link names it
 a change (a ``displayName`` rename, a dropped package suffix): one row per link ``from -> to``,
 decided per data type and source family by the reconciler from the sources' sighting
 timelines (app/services/source_chains.py), with the spans it was decided on as ``evidence``,
-or by the owner (``health-mirror identity-decide link``). A link joins the two forms into one
+or by the owner (``healthos identity-decide link``). A link joins the two forms into one
 device in both directions: the old form coming back later does not undo it.
 ``raw_source_chain_events`` records when a link was *refuted* (the two forms turned out to be
 two devices). A link is *live* unless the owner's latest decision about it is ``reject`` or
@@ -58,7 +58,7 @@ These eight tables are append-only (no ``UPDATE``, ``DELETE`` or ``TRUNCATE``; t
 seen, by the database clock, and the newest record time it returned - may only widen: no
 ``DELETE`` or ``TRUNCATE``, and an ``UPDATE`` may only move ``first_seen_at`` earlier,
 ``last_seen_at`` and ``newest_record_at`` later and ``complete`` to true (its key, class, label
-and ``dataSource`` never change). ``health-mirror verify`` checks all of these triggers like
+and ``dataSource`` never change). ``healthos verify`` checks all of these triggers like
 the ones of 0011.
 
 ``identity_reconcile_state`` is bookkeeping: per data type, how far the reconciler got, the
@@ -72,55 +72,10 @@ the two.
 
 
 Implementations live in identity_constants, identity_tables, identity_queries and
-identity_guards. This module preserves the existing import path with shared objects.
+identity_guards. Only the exports still consumed by the protected deletion lane remain here.
 """
 
-from app.db.base import Base as Base
-from app.models.identity_constants import AGREEMENT_TABLE as AGREEMENT_TABLE
-from app.models.identity_constants import CHAIN_DECISIONS as CHAIN_DECISIONS
-from app.models.identity_constants import CHAIN_EVENT_TABLE as CHAIN_EVENT_TABLE
-from app.models.identity_constants import CHAIN_TABLE as CHAIN_TABLE
-from app.models.identity_constants import DECIDERS as DECIDERS
-from app.models.identity_constants import DECISION_TABLE as DECISION_TABLE
-from app.models.identity_constants import DECISIONS as DECISIONS
-from app.models.identity_constants import DEFERRAL_TABLE as DEFERRAL_TABLE
-from app.models.identity_constants import DEVICE_TABLE as DEVICE_TABLE
-from app.models.identity_constants import GUARDED_TABLES as GUARDED_TABLES
-from app.models.identity_constants import IDENTITY_TABLE as IDENTITY_TABLE
-from app.models.identity_constants import IDENTITY_TABLES as IDENTITY_TABLES
-from app.models.identity_constants import MERGED_EVENT as MERGED_EVENT
-from app.models.identity_constants import PAIR_DECISIONS as PAIR_DECISIONS
-from app.models.identity_constants import PAIR_TABLE as PAIR_TABLE
-from app.models.identity_constants import REASONS as REASONS
-from app.models.identity_constants import RECONCILE_TABLE as RECONCILE_TABLE
-from app.models.identity_constants import REFUTED as REFUTED
-from app.models.identity_constants import SIGHTING_TABLE as SIGHTING_TABLE
-from app.models.identity_constants import SUPERSESSION_TABLE as SUPERSESSION_TABLE
-from app.models.identity_guards import FUNCTION_BODIES as FUNCTION_BODIES
-from app.models.identity_guards import PG_TRIGGER_SQL as PG_TRIGGER_SQL
-from app.models.identity_guards import POSTGRESQL_DDL as POSTGRESQL_DDL
-from app.models.identity_guards import PROTECTIVE_TRIGGERS as PROTECTIVE_TRIGGERS
-from app.models.identity_guards import SIGHTINGS_FUNCTION as SIGHTINGS_FUNCTION
-from app.models.identity_guards import SQLITE_DDL as SQLITE_DDL
-from app.models.identity_guards import SQLITE_TRIGGER_SQL as SQLITE_TRIGGER_SQL
-from app.models.identity_queries import held_elsewhere as held_elsewhere
-from app.models.identity_queries import holds_live as holds_live
 from app.models.identity_queries import in_force as in_force
-from app.models.identity_queries import in_force_sql as in_force_sql
-from app.models.identity_queries import joined_pairs as joined_pairs
-from app.models.identity_queries import key_held_elsewhere as key_held_elsewhere
 from app.models.identity_queries import plan_each_query as plan_each_query
-from app.models.identity_queries import superseded as superseded
 from app.models.identity_tables import IdentityDeferredDeletion as IdentityDeferredDeletion
-from app.models.identity_tables import IdentityReconcileState as IdentityReconcileState
-from app.models.identity_tables import RawHealthDataIdentity as RawHealthDataIdentity
 from app.models.identity_tables import RawHealthDataSupersession as RawHealthDataSupersession
-from app.models.identity_tables import RawSourceAgreement as RawSourceAgreement
-from app.models.identity_tables import RawSourceChain as RawSourceChain
-from app.models.identity_tables import RawSourceChainEvent as RawSourceChainEvent
-from app.models.identity_tables import RawSourceDecision as RawSourceDecision
-from app.models.identity_tables import RawSourceDevice as RawSourceDevice
-from app.models.identity_tables import RawSourcePair as RawSourcePair
-from app.models.identity_tables import RawSourceSighting as RawSourceSighting
-from app.models.state import RawHealthData as RawHealthData
-from app.models.state import RawJSON as RawJSON

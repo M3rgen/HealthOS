@@ -5,35 +5,20 @@ from uuid import UUID
 
 import httpx
 import pytest
-from derived_records import point, snapshot, store
+from derived_records import snapshot, store
 from fastapi import FastAPI
 from sqlalchemy import select
+from support.workouts import START, exercise
 
 from app.api.dashboard import router
 from app.db.session import get_session
 from app.models.health import ExerciseSession
-from app.models.identity import RawHealthDataSupersession
+from app.models.identity_tables import RawHealthDataSupersession
 from app.models.manual import ManualWorkout
 from app.models.raw_versions import RawHealthDataVersion
 from app.models.state import RawHealthData
 
-START = datetime(2026, 8, 31, 21, 30, tzinfo=UTC)
 VALUES = ("exercise_type", "duration_seconds", "calories_kcal", "distance_meters")
-
-
-def exercise(name="one", start=START, **fields):
-    payload = {
-        "interval": {
-            "startTime": start.isoformat(),
-            "endTime": (start + timedelta(hours=1)).isoformat(),
-        },
-        "exerciseType": "RUNNING",
-        "activeDuration": "3500s",
-        "duration": "3600s",
-        "metricsSummary": {"caloriesKcal": 123, "distanceMillimeters": 4567000},
-        **fields,
-    }
-    return point("exercise", name, payload)
 
 
 @pytest.fixture

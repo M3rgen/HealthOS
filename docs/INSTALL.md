@@ -32,37 +32,40 @@ as root it installs system units, as a normal user it installs user units, and a
 `sudo` is printed for you to run:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/M3rgen/HealthOS/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/M3rgen/HealthOS/v0.2.2.1/install.sh | bash
 ```
 
 **Windows 10/11** (PowerShell, as your normal user):
 
 ```powershell
-irm https://raw.githubusercontent.com/M3rgen/HealthOS/main/install.ps1 | iex
+irm https://raw.githubusercontent.com/M3rgen/HealthOS/v0.2.2.1/install.ps1 | iex
 ```
 
-**A fixed release** instead of the current `main` (here v0.2.2):
+Both commands install a release (here v0.2.2.1): the installer clones its own tag
+(`HEALTHOS_INSTALLER_VERSION`), never the moving `main` branch, unless you ask for it.
+
+**The development version** (`main`, not a release):
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/M3rgen/HealthOS/v0.2.2/install.sh | bash -s -- --ref v0.2.2
+curl -fsSL https://raw.githubusercontent.com/M3rgen/HealthOS/main/install.sh | bash -s -- --ref main
 ```
 
 ```powershell
-& ([scriptblock]::Create((irm https://raw.githubusercontent.com/M3rgen/HealthOS/v0.2.2/install.ps1))) -Ref v0.2.2
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/M3rgen/HealthOS/main/install.ps1))) -Ref main
 ```
 
 **Prefer to read the script before running it?** Clone first, read `install.sh` or `install.ps1`,
 then run it from the checkout; it then uses that checkout and clones nothing:
 
 ```sh
-git clone https://github.com/M3rgen/HealthOS.git
+git clone --branch v0.2.2.1 https://github.com/M3rgen/HealthOS.git
 cd HealthOS
 less install.sh
 ./install.sh            # or: ./install.sh --dry-run   to see every action first
 ```
 
 ```powershell
-git clone https://github.com/M3rgen/HealthOS.git
+git clone --branch v0.2.2.1 https://github.com/M3rgen/HealthOS.git
 cd HealthOS
 notepad .\install.ps1
 powershell -ExecutionPolicy Bypass -File .\install.ps1     # or add -DryRun
@@ -74,14 +77,14 @@ A coding agent with shell access (Claude Code, OpenAI Codex CLI or similar) can 
 installation for you by following [AI_INSTALL.md](AI_INSTALL.md). Give it this prompt:
 
 ```text
-Install HealthOS on this computer by following https://raw.githubusercontent.com/M3rgen/HealthOS/main/docs/AI_INSTALL.md — ask me before any step that needs admin rights or my accounts, and never delete data.
+Install HealthOS on this computer by following https://raw.githubusercontent.com/M3rgen/HealthOS/v0.2.2.1/docs/AI_INSTALL.md — ask me before any step that needs admin rights or my accounts, and never delete data.
 ```
 
 Ready to run in a terminal:
 
 ```sh
-claude "Install HealthOS on this computer by following https://raw.githubusercontent.com/M3rgen/HealthOS/main/docs/AI_INSTALL.md — ask me before any step that needs admin rights or my accounts, and never delete data."
-codex "Install HealthOS on this computer by following https://raw.githubusercontent.com/M3rgen/HealthOS/main/docs/AI_INSTALL.md — ask me before any step that needs admin rights or my accounts, and never delete data."
+claude "Install HealthOS on this computer by following https://raw.githubusercontent.com/M3rgen/HealthOS/v0.2.2.1/docs/AI_INSTALL.md — ask me before any step that needs admin rights or my accounts, and never delete data."
+codex "Install HealthOS on this computer by following https://raw.githubusercontent.com/M3rgen/HealthOS/v0.2.2.1/docs/AI_INSTALL.md — ask me before any step that needs admin rights or my accounts, and never delete data."
 ```
 
 Or paste the prompt into Claude Code, Codex or any other agent that can run commands. The agent
@@ -96,10 +99,11 @@ In order:
    missing it says how to install it on your OS and stops (exit code 2); it installs no system
    packages by itself.
 2. If it is not running inside a HealthOS checkout, clones `https://github.com/M3rgen/HealthOS.git`
-   at `--ref` (default `main`) into the checkout directory.
+   at `--ref` (default: the installer's own release tag; `main` only with `--ref main`) into the
+   checkout directory.
 3. Asks the questions below (or takes them from flags).
 4. Writes `.env`: new secrets only where a value is missing, an existing `.env` is copied to
-   `.env.bak-<UTC stamp>` first; a re-run may change only the few values listed in
+   `~/.local/state/healthos/env-backups/` (Windows: `%LOCALAPPDATA%\HealthOS\env-backups\`) first; a re-run may change only the few values listed in
    [What the installer changes](#what-the-installer-changes-and-what-it-never-does).
    Secrets are never replaced.
 5. Optionally creates the backup key and schedules the daily backup, autostart and the Umay bridge
@@ -130,12 +134,16 @@ Every question has a preselected answer; Enter accepts it. The questions are in 
    | 5 | Windows 10/11 | Docker Desktop with the WSL 2 backend |
    | 6 | Cloud VPS | same as Linux, plus the SSH-tunnel note |
 
-3. **Mode.** `trial` or `full`; see [Trial and full mode](#trial-and-full-mode). On a first run `trial`
-   is preselected. On a re-run the preselected answer (and the default with `--yes`) comes from the
-   existing `.env`: a `COMPOSE_FILE` without `docker-compose.dev.yml` means `full`, one with it means
-   `trial`, and no `.env` or no `COMPOSE_FILE` means `trial`. `--mode` always wins.
+3. **Mode.** `full` or `trial`; see [Trial and full mode](#trial-and-full-mode). On a first run `full`
+   is preselected; Google is not needed for it. On a re-run the preselected answer (and the default
+   with `--yes`) comes from the existing `.env`: a `COMPOSE_FILE` without `docker-compose.dev.yml`
+   means `full`, one with it means `trial`, and no `.env` or no `COMPOSE_FILE` means `full`. `--mode`
+   always wins. `trial` is only for looking around and leaving; the installer says so every time:
+   do not keep data in it, there are no backups.
 4. **Data sources.** Any combination of Google Health API v4, Garmin Connect Personal API and Apple
-   Health, or none; each is described under [Data sources](#data-sources). For Google it asks for
+   Health, or none (the default); each is described under [Data sources](#data-sources). The choice
+   is written to `.env` as `HEALTHOS_SOURCES` (for example `garmin,apple`, or `none`); a source the
+   existing `.env` already has on stays in it (remove it there by hand). For Google it asks for
    the OAuth client ID and secret (Enter leaves them empty for later) and, in full mode, the public
    webhook host name; for Garmin, the path of the key file (if the file does not exist yet, you can
    paste the key and it is saved there); for Apple, whether to enable the Health Auto Export
@@ -155,10 +163,11 @@ for confirmation; answering no changes nothing.
 
 | | `trial` | `full` |
 | --- | --- | --- |
-| Purpose | A first local look, development, the empty dashboard and manual entries | Unattended operation |
+| Purpose | Only to look around and leave (development): do not keep data in it, no backups | Real use: keeps your data, unattended operation, daily encrypted backups by default |
 | Compose files | `docker-compose.yml` + `docker-compose.dev.yml` | `docker-compose.yml` |
 | `APP_ENV` (set by the Compose files, not in `.env`) | `development` (the production secret guard is skipped) | `production` |
-| Google | optional | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_TOKEN_ENCRYPTION_KEY`, `GOOGLE_HEALTH_WEBHOOK_ENDPOINT_URI` (HTTPS) and `GOOGLE_HEALTH_WEBHOOK_AUTHORIZATION` |
+| Google | optional | optional; only with `google` in `HEALTHOS_SOURCES`: `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_TOKEN_ENCRYPTION_KEY`, `GOOGLE_HEALTH_WEBHOOK_ENDPOINT_URI` (HTTPS) and `GOOGLE_HEALTH_WEBHOOK_AUTHORIZATION` |
+| `HEALTHOS_SOURCES` | the chosen sources | the chosen sources |
 | PostgreSQL port | published on `127.0.0.1:5432` | not published |
 | API docs at `/docs` | yes | no |
 
@@ -167,9 +176,11 @@ the Apple receiver is chosen.
 
 **Re-runs keep the mode.** Without `--mode`, a re-run reads the existing `.env`: a `COMPOSE_FILE`
 that lacks `docker-compose.dev.yml` means `full`, one that has it means `trial`, and no `.env` or no
-`COMPOSE_FILE` means `trial`. The wizard preselects the same answer. Pass `--mode` to switch.
+`COMPOSE_FILE` means `full`. The wizard preselects the same answer. Pass `--mode` to switch.
 
-In full mode the app refuses to start until every production value is set. The installer lists
+In full mode the app refuses to start until every production value of the chosen sources is set:
+`APP_UI_TOKEN` always, the Google values only with `google` in `HEALTHOS_SOURCES`, a readable key
+file with `garmin`. The installer lists
 what is still missing and then configures without starting, instead of letting the container
 fail later; fill the values into `.env` and run the installer again (or
 `docker compose up -d --build`).
@@ -188,10 +199,10 @@ are still missing. Your data stays in the same database volume.
 | --- | --- | --- |
 | `--lang en\|tr` | `-Lang en\|tr` | Language of the questions and messages. Interactive default: ask, English preselected. |
 | `--platform linux\|raspberrypi\|nas\|macos\|windows\|vps` | `-Platform …` | Target platform (see the table above). |
-| `--mode trial\|full` | `-Mode trial\|full` | Default `trial` on a first run; on a re-run the mode of the existing `.env` (see [Trial and full mode](#trial-and-full-mode)). An explicit value always wins. |
-| `--sources google,garmin,apple` or `none` | `-Sources …` | Comma-separated data sources. |
+| `--mode full\|trial` | `-Mode full\|trial` | Default `full` on a first run; on a re-run the mode of the existing `.env` (see [Trial and full mode](#trial-and-full-mode)). An explicit value always wins. `trial` is only for looking around: no backups, do not keep data in it. |
+| `--sources google,garmin,apple` or `none` | `-Sources …` | Comma-separated data sources (default `none`). Written to `.env` as `HEALTHOS_SOURCES`, together with any source the existing `.env` still has on. |
 | `--dir PATH` | `-Dir PATH` | Checkout directory. Default: the current checkout if run inside one; otherwise Linux `/opt/healthos` (root) or `~/healthos`, macOS `~/healthos`, Windows `%USERPROFILE%\healthos`. |
-| `--ref REF` | `-Ref REF` | Git branch or tag to clone when bootstrapping (default `main`). |
+| `--ref REF` | `-Ref REF` | Git branch or tag to clone when bootstrapping. Default: the release tag of the installer itself (`v` + `HEALTHOS_INSTALLER_VERSION`, e.g. `v0.2.2`); `main` only with `--ref main`. |
 | `--garmin-key-file PATH` | `-GarminKeyFile PATH` | Garmin Personal API key file on the host. An explicit path that does not exist is an error (exit code 2). Without the flag, a missing default key file leaves Garmin off with a note and exit code 0. |
 | `--google-client-id ID` | `-GoogleClientId ID` | Google OAuth client ID. |
 | `--google-client-secret S` | `-GoogleClientSecret S` | Google OAuth client secret. |
@@ -234,10 +245,16 @@ Examples:
 HealthOS keeps every record and every backup; the installer follows the same rule.
 
 - **`.env` is copied before every change.** If it exists, it is first copied to
-  `.env.bak-<UTC stamp>` (older `.bak` files are kept). Then the installer fills keys that are
+  `~/.local/state/healthos/env-backups/` (Windows: `%LOCALAPPDATA%\HealthOS\env-backups\`), a directory only you can open (700, files 600), as
+  `<checkout path>.env.bak-<UTC stamp>`; the summary says how many copies of this checkout are
+  there. Older `.env.bak-*` files next to `.env` (made by earlier versions) are copied there once
+  and stay where they are; nothing is moved or deleted. Then the installer fills keys that are
   missing or empty and may change only these existing values: `COMPOSE_FILE` and
-  `COMPOSE_PATH_SEPARATOR` (they follow your current mode and sources), `GARMIN_ENABLED` /
-  `APPLE_RECEIVER_ENABLED` from `false` to `true` when you choose that source, and the Garmin key
+  `COMPOSE_PATH_SEPARATOR` (they follow your current mode and sources), `HEALTHOS_SOURCES` (the
+  sources you choose, plus every source the existing `.env` already runs: full mode always adds
+  `google`, and an older `.env` without the key counts as Google plus Garmin while its older
+  `GARMIN_ENABLED` switch is on and a key file is set), `APPLE_RECEIVER_ENABLED` from `false` to
+  `true` when you turn the receiver on, and the Garmin key
   file path when you pass `--garmin-key-file` / `-GarminKeyFile` explicitly. Each change is
   reported. A flag is switched to `true` only when its value is empty or one of `false`, `0`, `no`,
   `off` (any case). It never turns a source off (set `…_ENABLED=false` yourself), and every other existing
@@ -252,13 +269,17 @@ HealthOS keeps every record and every backup; the installer follows the same rul
   use the same files later, without `-f` options. Example of a trial setup with Garmin:
   `COMPOSE_FILE=docker-compose.yml:docker-compose.dev.yml:docker-compose.garmin.yml`.
   The installer manages only `docker-compose.yml`, `docker-compose.dev.yml`,
-  `docker-compose.garmin.yml`, `docker-compose.apple.yml` and `docker-compose.windows.yml`. Every
-  other entry already in `COMPOSE_FILE` (your own files) is kept in its original order. If
+  `docker-compose.garmin.yml` and `docker-compose.apple.yml`. An older `COMPOSE_FILE` entry for
+  `docker-compose.windows.yml` or `docker-compose.linux.example.yml`, two empty compatibility files
+  that are no longer in the repository, is dropped. Every other entry already in `COMPOSE_FILE`
+  (your own files) is kept in its original order. If
   `COMPOSE_FILE` was not set and a `docker-compose.override.yml` exists, it is included, because
   Compose would have loaded it implicitly.
 - **Never:** `docker compose down -v`, removing a volume, deleting a backup, deleting any file.
   Running the installer again is safe.
-- The access token is printed once at the end. It stays in `.env` as `APP_UI_TOKEN`.
+- The access token is printed once at the end, on an interactive terminal only. Without one (a
+  pipe, a log file, CI) the summary prints `grep APP_UI_TOKEN <checkout>/.env` instead, and in
+  GitHub Actions the value is masked in the log. It stays in `.env` as `APP_UI_TOKEN`.
 
 ## Platforms
 
@@ -283,7 +304,7 @@ Proxmox: a VM, or an LXC container with nesting enabled for Docker.
 sudo apt install git age python3      # Fedora: sudo dnf install git age python3
 sudo systemctl enable --now docker
 docker compose version
-curl -fsSL https://raw.githubusercontent.com/M3rgen/HealthOS/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/M3rgen/HealthOS/v0.2.2.1/install.sh | bash
 ```
 
 **Root or your own user.**
@@ -302,7 +323,7 @@ as user units, `/etc/healthos` becomes `~/.config/healthos`):
 
 | Unit | What it does |
 | --- | --- |
-| `healthos-backup.timer` / `healthos-backup.service` | Runs `scripts/backup.sh` daily at 03:30, catching up after downtime. |
+| `healthos-backup.timer` / `healthos-backup.service` | Runs `scripts/backup.sh` daily at 03:30 UTC, catching up after downtime. |
 | `healthos-backup-failure.service` | Logs a failed backup at `crit` (`journalctl -p crit -t healthos-backup`). |
 | `healthos-bridge.service` | Optional Umay bridge; only with `--umay yes`. |
 
@@ -406,7 +427,7 @@ once as root and copy it off the NAS:
 sudo sh -c 'umask 077; mkdir -p /root/.config/healthos && age-keygen -o /root/.config/healthos/backup.key'
 ```
 
-Then schedule this command daily at 03:30, as root, with the NAS's own scheduler:
+Then schedule this command daily at 03:30 (the NAS's local time; the Linux timer uses UTC), as root, with the NAS's own scheduler:
 
 ```sh
 cd <checkout> && BACKUP_KEY_FILE=/root/.config/healthos/backup.key /bin/bash scripts/backup.sh
@@ -429,20 +450,20 @@ Git (`xcode-select --install` or Homebrew); for backups `brew install age` and P
 (`brew install python`; the `python3` of the Xcode command line tools is too old).
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/M3rgen/HealthOS/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/M3rgen/HealthOS/v0.2.2.1/install.sh | bash
 ```
 
 The installer detects macOS and preselects it. Checkout: `~/healthos`. Backup key:
 `~/Library/Application Support/HealthOS/backup.key`.
 
 - **Backups and the bridge** run as launchd agents of your user: `org.healthos.backup` (daily at
-  03:30) and `org.healthos.bridge` (optional), installed in `~/Library/LaunchAgents/` from the
+  03:30 local time, not UTC) and `org.healthos.bridge` (optional), installed in `~/Library/LaunchAgents/` from the
   templates in `deploy/launchd/`. List them with `launchctl list | grep -i healthos`; run a backup
   now with `launchctl kickstart gui/$(id -u)/org.healthos.backup`. Logs: `~/Library/Logs/HealthOS/`.
 - **Autostart:** Docker Desktop: *Settings* › *General* › *Start Docker Desktop when you sign in*.
   OrbStack starts at login by default. Colima: `brew services start colima`. The containers then
   come back on their own.
-- **Sleep:** a sleeping Mac neither synchronizes nor backs up. launchd runs a missed 03:30 backup
+- **Sleep:** a sleeping Mac neither synchronizes nor backs up. launchd runs a missed 03:30 (local time, not UTC) backup
   after waking, but not for a Mac that was switched off. For a Mac that should run HealthOS around
   the clock, set *System Settings* › *Energy* to prevent automatic sleep.
 
@@ -455,7 +476,7 @@ or `winget install Git.Git`; `winget install FiloSottile.age` for backups. Windo
 and PowerShell 7 both work.
 
 ```powershell
-irm https://raw.githubusercontent.com/M3rgen/HealthOS/main/install.ps1 | iex
+irm https://raw.githubusercontent.com/M3rgen/HealthOS/v0.2.2.1/install.ps1 | iex
 ```
 
 The installer detects Windows and preselects it. It lists every platform, but installs only the
@@ -465,7 +486,7 @@ account. If Git or Docker Desktop is missing or the Docker engine is not running
 `winget` command or the fix and stops with exit code 2.
 
 - **Backups** run as the Task Scheduler task `\HealthOS\HealthOS Backup` of your user, daily at
-  03:30, with `scripts\backup.ps1` (same behaviour as `scripts/backup.sh`). List the tasks with
+  03:30 local time (not UTC), with `scripts\backup.ps1` (same behaviour as `scripts/backup.sh`). List the tasks with
   `Get-ScheduledTask -TaskPath '\HealthOS\'`; run a backup now with
   `Start-ScheduledTask -TaskPath '\HealthOS\' -TaskName 'HealthOS Backup'`. Logs:
   `%LOCALAPPDATA%\HealthOS\logs\`.
@@ -503,7 +524,7 @@ fills the source's settings, turns its `…_ENABLED` switch on and adds its Comp
 | Source | Devices | What you need | Default |
 | --- | --- | --- | --- |
 | Google Health API v4 | Fitbit, Pixel Watch, Google Health app | Eligible Google Cloud project, OAuth web client | off until configured |
-| Garmin Connect Personal API | Garmin watches and devices | Personal API key file | off (`GARMIN_ENABLED=false`) |
+| Garmin Connect Personal API | Garmin watches and devices | Personal API key file | off (not in `HEALTHOS_SOURCES`) |
 | Apple Health | Apple Watch, iPhone | Nothing for `export.zip`; Health Auto Export app for automatic upload | upload available; receiver off |
 | None | — | Nothing; manual entries and the empty dashboard | — |
 
@@ -520,8 +541,8 @@ the [official setup guide](https://developers.google.com/health/setup) first.
 3. Open <http://localhost:8000/auth/google/start> and complete consent, then:
 
    ```sh
-   docker compose exec app health-mirror probe --days 30
-   docker compose exec app health-mirror backfill
+   docker compose exec app healthos probe --days 30
+   docker compose exec app healthos backfill
    ```
 
 Full mode additionally needs `GOOGLE_HEALTH_WEBHOOK_ENDPOINT_URI` (HTTPS) and
@@ -542,10 +563,19 @@ A read-only, pull-only source for your own Garmin Connect account.
    ```
 
 2. Choose Garmin in the installer (or `--sources garmin --garmin-key-file PATH`). It sets
-   `GARMIN_ENABLED=true`, `GARMIN_API_KEY_HOST_FILE` and `GARMIN_API_KEY_HOST_GID`, and adds
+   `garmin` in `HEALTHOS_SOURCES` (the only source switch it writes; an existing older
+   `GARMIN_ENABLED` line is left as it is and ignored once `HEALTHOS_SOURCES` is set),
+   `GARMIN_API_KEY_HOST_FILE` and `GARMIN_API_KEY_HOST_GID`, and adds
    `docker-compose.garmin.yml` to `COMPOSE_FILE`; that override mounts the key file read-only into
    the app. Because the app container runs as its own user (uid 10001), on Linux the installer
-   makes the file readable by it. As root it sets the group to 10001 and the mode to 640. As a normal
+   makes the file readable by it. As root it gives the file to group 10001 (or to the
+   `GARMIN_API_KEY_HOST_GID` already in `.env`) with mode 640, but only when no other account on the
+   host is in that group, neither as a listed member nor as its primary group: a host group that
+   happens to have the container's number is not trusted for that reason alone. Otherwise the file
+   keeps its permissions, Garmin stays off, and the installer explains how to give the container a
+   group of its own (create a group no account belongs to, set the `*_HOST_GID` key to it, re-run).
+   If `chgrp` or `chmod` fails, the installer stops with exit code 1 instead of reporting success,
+   and the mode is changed only after the group was. As a normal
    user whose primary group is shared (a group id below 1000 such as `users`, or a group with other
    members) it does **not** loosen the file; it prints the exact command to run
    (`sudo chgrp 10001 FILE && sudo chmod 640 FILE`) and leaves Garmin off (the flag stays
@@ -560,8 +590,8 @@ A read-only, pull-only source for your own Garmin Connect account.
    (`colima start --mount`), or switch to Docker Desktop or OrbStack. The same rules apply to the Apple
    receiver token file. On Windows the default path is
    `%USERPROFILE%\.config\garmin\connect-personal-api-key`.
-3. Check: `docker compose exec app health-mirror garmin-status`. Earlier history:
-   `docker compose exec app health-mirror garmin-backfill --since 2026-06-01`.
+3. Check: `docker compose exec app healthos garmin-status`. Earlier history:
+   `docker compose exec app healthos garmin-backfill --since 2026-06-01`.
 
 The key expires after a limited period; to renew it, replace the file's content. Details:
 [Garmin reference](REFERENCE.md#garmin-connect-personal-api).
@@ -624,12 +654,15 @@ Every platform uses the same backup semantics as [`scripts/backup.sh`](../script
 
 ## Updating
 
-Updating is the same on every platform: take a backup, pull, run the installer again.
+Updating is the same on every platform: take a backup, check out the new release tag, run the
+installer again. A checkout made by the installer sits on a release tag (no branch), so
+`git pull` does not apply; use the tag of the release you want (here the next one, v0.2.2.1):
 
 ```sh
 cd ~/healthos                 # or /opt/healthos, or %USERPROFILE%\healthos
 make backup                  # or: bash scripts/backup.sh  (Windows: .\scripts\backup.ps1)
-git pull --ff-only
+git fetch --tags
+git checkout v0.2.2.1          # a checkout on the main branch instead: git pull --ff-only
 ./install.sh                 # Windows: .\install.ps1
 ```
 
@@ -639,11 +672,10 @@ follows the choices of the latest run.
 Running the installer again is safe: it copies `.env` to a dated backup first, keeps every
 secret, fills in settings new releases add, refreshes the scheduled jobs and rebuilds the stack; the app
 migrates the database on start. Without the installer, `docker compose up -d --build` does the
-rebuild. Update outside the 03:30 backup window. Release notes: [CHANGELOG](../CHANGELOG.md);
+rebuild. Update outside the 03:30 backup window (UTC on Linux, local time on macOS and Windows). Release notes: [CHANGELOG](../CHANGELOG.md);
 migration details: [runbook](RUNBOOK.md#update-the-application).
 
-To stay on a release, check out its tag (`git fetch --tags && git checkout v0.2.2`) before
-running the installer.
+Without a new `git checkout` the installer keeps the release that is checked out.
 
 ### Updating an install from 0.2.2 or earlier (the old name "HealtOS")
 
@@ -689,7 +721,8 @@ To remove HealthOS from a host while keeping the data:
      `.plist` files in `~/Library/LaunchAgents/` can stay.
    - Windows: `Disable-ScheduledTask -TaskPath '\HealthOS\' -TaskName 'HealthOS Backup'` (and
      `'HealthOS Umay bridge'`), or *Disable* in Task Scheduler.
-4. Leave the checkout, `.env`, the `.env.bak-*` copies and the `backups` folder where they are, or
+4. Leave the checkout, `.env`, the `.env` copies (`~/.local/state/healthos/env-backups/`, older `.env.bak-*` next to `.env`) and
+   the `backups` folder where they are, or
    move them to an archive. The volume `postgres_data` stays in Docker until you decide otherwise.
 
 Re-running the installer in the same checkout later picks up the same `.env` and the same volume.
@@ -706,7 +739,7 @@ Re-running the installer in the same checkout later picks up the same `.env` and
 | Port 8000 already in use | Set `APP_PORT` in `.env` and run `docker compose up -d`. Google's redirect URI keeps port 8000, so prefer freeing the port when you use Google. |
 | `/health` lists `configuration_incomplete` | Expected until Google is linked and the webhook values are set. |
 | Backup status `failed` | Read `last-backup-status.json` in `BACKUP_HOST_DIR`; the usual causes are a missing key, `age` not installed or too little free disk space. |
-| Something looks wrong after an update | `docker compose logs --tail=200 app`. The previous `.env` is in `.env.bak-<stamp>`. |
+| Something looks wrong after an update | `docker compose logs --tail=200 app`. The previous `.env` is in `~/.local/state/healthos/env-backups/` (Windows: `%LOCALAPPDATA%\HealthOS\env-backups\`). |
 
 **Linux, Raspberry Pi, VPS**
 

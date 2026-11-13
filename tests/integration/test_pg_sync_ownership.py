@@ -6,74 +6,17 @@ import zlib
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from retrieval_records import END, START, point
+from retrieval_records import END, START
 from sqlalchemy import event, text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from support.ownership import receive, worker
+from support.waits import until
 from sync_ownership_records import service, snapshot
 
-from app.core.config import Settings
-from app.google_health.client import Page
-from app.google_health.data_types import REGISTRY
-from app.google_health.pagination import PageBudget
 from app.sync import ownership
-from app.sync.backfill import BackfillService
 from app.sync.incremental import STALE_RUNNING_AFTER
 
 pytestmark = pytest.mark.integration
-
-
-def worker(url, pipe, kind, start, job_id=None):
-    async def run():
-        # Ownership must leave this sole application connection available to OAuth and
-        # response archiving, while using its own exact connection for page writes.
-        engine = create_async_engine(
-            url,
-            pool_size=1,
-            max_overflow=0,
-            pool_timeout=1,
-            connect_args={"server_settings": {"TimeZone": "America/Los_Angeles"}},
-        )
-        sessions = async_sessionmaker(engine, expire_on_commit=False)
-
-        class Client:
-            async def list_data_points(self, spec, lower, upper, page_token=None):
-                async with sessions() as session:
-                    assert await session.scalar(text("SELECT 1")) == 1
-                pipe.send(("fetch", lower, upper, page_token))
-                action = await asyncio.to_thread(pipe.recv)
-                return Page([point(kind=kind)], "p2") if action == "more" else Page([], None)
-
-            async def keep_after(self, responses, failure):
-                pass
-
-        async def pause():
-            pipe.send(("busy",))
-            assert await asyncio.to_thread(pipe.recv) == "retry"
-
-        ownership._contended = pause
-        try:
-            if job_id is None:
-                await service(sessions, Client()).run(kind, start, start + timedelta(days=1))
-            else:
-                await BackfillService(
-                    Settings(_env_file=None), sessions, Client(), dict(REGISTRY)
-                )._run_next_window(kind, PageBudget())
-            pipe.send(("result", "completed"))
-        except Exception as exc:
-            pipe.send(("result", type(exc).__name__))
-        finally:
-            await engine.dispose()
-            pipe.close()
-
-    asyncio.run(run())
-
-
-async def receive(pipe):
-    def read():
-        assert pipe.poll(20), "worker failed to reach the next controlled event"
-        return pipe.recv()
-
-    return await asyncio.to_thread(read)
 
 
 @pytest.mark.parametrize("ending", ["completed", "terminated", "disconnected"])
@@ -110,11 +53,12 @@ async def test_process_ownership_and_restart(pg_sessions, ending):
         other.send("done")
         assert await receive(other) == ("result", "completed")
         async with pg_sessions() as session:
-            pid, transaction = (
+            pid, state = (
                 await session.execute(
                     text(
-                        "SELECT l.pid, a.xact_start FROM pg_locks l "
+                        "SELECT l.pid, a.state FROM pg_locks l "
                         "JOIN pg_stat_activity a ON a.pid = l.pid "
+                        "AND a.datname = current_database() "
                         "WHERE l.locktype = 'advisory' AND l.classid = :namespace "
                         "AND l.objid = :key AND l.objsubid = 2 AND l.granted"
                     ),
@@ -124,7 +68,9 @@ async def test_process_ownership_and_restart(pg_sessions, ending):
                     },
                 )
             ).one()
-        assert transaction is None  # Google I/O never holds a transaction open.
+        # Google I/O never holds a transaction open (state, not xact_start: see
+        # test_pg_backfill_ownership).
+        assert state == "idle"
         if ending == "terminated":
             first.terminate()
             await asyncio.to_thread(first.join, 10)
@@ -201,7 +147,12 @@ async def test_waiter_queues_on_one_backend_and_acquires_in_request_order(
     monkeypatch.setattr(
         ownership, "WAIT_SLICE", text(f"SET LOCAL lock_timeout = '{slice_timeout}'")
     )
-    pool = pg_sessions.kw["bind"].sync_engine.pool
+    engine = create_async_engine(
+        pg_sessions.kw["bind"].url,  # a second engine: another process (one gate per engine)
+        execution_options={"ownership_concurrency": 3},
+    )
+    other = async_sessionmaker(engine, expire_on_commit=False)
+    pool = engine.sync_engine.pool
     contended = asyncio.Event()
 
     async def contention():
@@ -212,7 +163,7 @@ async def test_waiter_queues_on_one_backend_and_acquires_in_request_order(
     release = asyncio.Event()
 
     async def wait():
-        async with ownership.run_ownership(pg_sessions, "heart-rate") as sessions:
+        async with ownership.run_ownership(other, "heart-rate") as sessions:
             async with sessions.begin():
                 pass
             await release.wait()
@@ -220,24 +171,33 @@ async def test_waiter_queues_on_one_backend_and_acquires_in_request_order(
 
     async with ownership.run_ownership(pg_sessions, "heart-rate") as owner:
         async with owner.begin():  # HELD_LOCK sees the session lock on this backend
-            assert pool.checkedout() == 0  # the isolated pool, never the application's
-        # A pool recreated from this one, like the waiter's, keeps its listeners.
+            assert pg_sessions.kw["bind"].sync_engine.pool.checkedout() == 1  # the shared pool
         connects = []
         event.listen(pool, "connect", lambda *args: connects.append(args))
         task = asyncio.create_task(wait())
-        await asyncio.wait_for(contended.wait(), 5)
+        await asyncio.wait_for(contended.wait(), 30)
         await waiting_backends(pg_sessions)  # the probe's own pooled connection
         opened = len(connects)
         seen = []
         for _ in range(12):  # several 100 ms slices time out and requeue
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(0.1)  # sampling over 1.2 s: one waiter across requeued slices
             seen += await waiting_backends(pg_sessions)
+
+        # On a loaded server the twelve looks above can all land between two slices; waiting
+        # to observe the queue itself keeps what this asserts (one backend, in the lock queue).
+        async def in_the_queue():
+            found = await waiting_backends(pg_sessions)
+            seen.extend(found)
+            return "Lock" in {wait for _, wait in found}
+
+        await until(in_the_queue, "the waiter in the server's lock queue")
         assert opened and len(connects) == opened
-        assert len({pid for pid, _ in seen}) == 1 and ("Lock" in {w for _, w in seen})
+        assert len({pid for pid, _ in seen}) == 1
     if slice_timeout == "2s":
         # Released while the waiter is queued: a newcomer cannot jump ahead of it.
         async with ownership.run_ownership(pg_sessions, "heart-rate", wait=False) as late:
             assert late is None
     release.set()
-    assert await asyncio.wait_for(task, 5) == "acquired"
+    assert await asyncio.wait_for(task, 30) == "acquired"
     assert await waiting_backends(pg_sessions) == []
+    await engine.dispose()

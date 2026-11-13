@@ -1,4 +1,4 @@
-"""``health-mirror identity-backfill`` against PostgreSQL, and readers skipping its links."""
+"""``healthos identity-backfill`` against PostgreSQL, and readers skipping its links."""
 
 from __future__ import annotations
 
@@ -9,14 +9,16 @@ import pytest
 from sqlalchemy import func, select, text
 
 from app.google_health.data_types import REGISTRY
-from app.models.identity import RawHealthDataIdentity, RawHealthDataSupersession
+from app.models.identity_tables import RawHealthDataIdentity, RawHealthDataSupersession
 from app.models.raw_versions import RawHealthDataEvent
 from app.models.state import RawHealthData
-from app.parsers import normalize
 from app.parsers.common import payload_hash, source_id, temporal
-from app.services.dashboard import dashboard_data
-from app.services.identity_backfill import identity_backfill
-from app.services.storage import store_records
+from app.services.archive.normalization import normalize
+from app.services.archive.storage import store_records
+from app.services.dashboard_views.dashboard import dashboard_data
+from app.services.identities.identity_backfill import identity_backfill
+from app.services.identities.identity_options import BackfillOptions
+from app.services.readers.dashboard_queries import DashboardQuery
 
 pytestmark = pytest.mark.integration
 
@@ -122,11 +124,13 @@ async def archive(pg_sessions) -> dict[str, uuid.UUID]:
 
 async def test_backfill_dry_run_idempotent_and_resumable(pg_sessions) -> None:
     ids = await archive(pg_sessions)
-    dry = await identity_backfill(pg_sessions, dry_run=True)
+    dry = await identity_backfill(pg_sessions, options=BackfillOptions(dry_run=True))
     assert await scalar(pg_sessions, select(func.count()).select_from(RawHealthDataIdentity)) == 0
     assert dry["heart-rate"].linked == {"display-name-change": 1}
     # Stopped after heart-rate (a run of one type), then resumed for the rest.
-    await identity_backfill(pg_sessions, data_types=["heart-rate"], batch_size=1)
+    await identity_backfill(
+        pg_sessions, data_types=["heart-rate"], options=BackfillOptions(batch_size=1)
+    )
     await identity_backfill(pg_sessions, data_types=["steps"], after=T0)
     async with pg_sessions() as session:
         found = {
@@ -142,7 +146,7 @@ async def test_backfill_dry_run_idempotent_and_resumable(pg_sessions) -> None:
         ids["suffixed"]: (ids["plain"], "package-suffix-change"),
     }
     assert merged == 2 and deleted is not None and deleted.source_deleted_at is not None
-    again = await identity_backfill(pg_sessions, batch_size=2)
+    again = await identity_backfill(pg_sessions, options=BackfillOptions(batch_size=2))
     assert sum(sum(s.linked.values()) + s.aliases_added for s in again.values()) == 0
     assert again["heart-rate"].already_superseded == 1
 
@@ -152,7 +156,7 @@ async def test_dashboard_and_analytics_views_skip_superseded_rows(pg_sessions) -
 
     async def counted() -> tuple:
         async with pg_sessions() as session:
-            data = await dashboard_data(session, date(2026, 10, 18), 1, "UTC")
+            data = await dashboard_data(session, query=DashboardQuery(date(2026, 10, 18), 1, "UTC"))
             view = await session.scalar(text("SELECT sum(count) FROM analytics_steps"))
         return data["days"][0]["steps"], float(view)
 

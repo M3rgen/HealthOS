@@ -10,13 +10,18 @@ import time
 from pathlib import Path
 
 import pytest
+from support.codex_bridge import FAKE_APP_SERVER, LAUNCHER_MAIN, LAUNCHER_UNDER_TEST
 
 from scripts import start_codex_bridge as bridge
 
-FAKE_CLI = """\
+FAKE_CLI = (
+    FAKE_APP_SERVER
+    + """\
 import json, os, signal, subprocess, sys, time
 from pathlib import Path
 home = Path(os.environ["CODEX_HOME"])
+serve_app_server(sys.argv, home)
+# A child that outlives the CLI unless the bridge stops it (killed long before 300 s).
 child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(300)"])
 stopping = False
 def stop(*args):
@@ -32,23 +37,42 @@ signal.signal(signal.SIGINT, stop)
 while not stopping:
     if (home / "exit-code").exists():
         sys.exit(int((home / "exit-code").read_text()))
-    time.sleep(0.02)
+    time.sleep(0.02)  # poll interval of the fake CLI's main loop
 if os.environ.get("FAKE_IGNORE_STOP"):
     while True:
-        time.sleep(1)
+        time.sleep(1)  # ignores SIGTERM: the bridge has to kill it
 child.terminate()
 child.wait()
 (home / "stopped").write_text("clean")
 """
+)
+
+
+# The service tests use a fake CLI without the app-server protocol, so the runtime
+# verification is replaced by a recorded synthetic attestation. The real verification path is
+# covered by tests/test_codex_bridge_launcher.py (fail closed) and test_codex_bridge_runtime.py.
+VERIFIED = (
+    LAUNCHER_UNDER_TEST
+    + """\
+import json
+
+def verified(command, executable, bridge_home):
+    return {"catalog_text": json.dumps({"models": []}),
+            "runtime": {"cli_sha256": launcher["file_digest"](executable)}}
+
+launcher["verify_runtime"] = verified
+"""
+    + LAUNCHER_MAIN
+)
 
 
 def wait_for(predicate):
-    deadline = time.monotonic() + 10
+    deadline = time.monotonic() + 60  # a stuck process, not a speed limit
     while time.monotonic() < deadline:
         result = predicate()
         if result:
             return result
-        time.sleep(0.03)
+        time.sleep(0.03)  # poll interval of the bounded wait above
     raise AssertionError("synthetic service did not reach the expected state")
 
 
@@ -61,12 +85,15 @@ def running(pid):
 
 
 @pytest.fixture
-def service(tmp_path):
+def service(tmp_path, local_sockets):
     from contextlib import contextmanager
 
     script = tmp_path / "scripts" / "start_codex_bridge.py"
     script.parent.mkdir()
     script.write_text(Path(bridge.__file__).read_text())
+    front = Path(bridge.__file__).with_name("codex_bridge_front.py")
+    (tmp_path / "scripts" / front.name).write_text(front.read_text())
+    (tmp_path / "app").symlink_to(Path(bridge.__file__).parents[1] / "app")
     cli = tmp_path / "codex"
     cli.write_text(f"#!{sys.executable}\n" + FAKE_CLI)
     cli.chmod(0o700)
@@ -91,7 +118,7 @@ def service(tmp_path):
         marker = state / "started"
         marker.unlink(missing_ok=True)
         process = subprocess.Popen(
-            [sys.executable, str(script), "--foreground"],
+            [sys.executable, "-c", VERIFIED, str(script), "--foreground"],
             env=dict(env, **overrides),
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -105,7 +132,7 @@ def service(tmp_path):
         finally:
             if process.poll() is None:
                 process.terminate()
-            stdout, stderr = process.communicate(timeout=10)
+            stdout, stderr = process.communicate(timeout=120)
             assert process.returncode == expected, stderr.decode()
             assert token.encode() not in stdout + stderr
             if data:
@@ -121,8 +148,11 @@ def test_service_start_stop_restart_preserves_identity(service, stop_signal):
         with start() as (process, data):
             assert process.poll() is None and data["pid"] != process.pid
             assert data["cwd"] == str(state / "workspace") and not data["has_api_key"]
-            assert data["args"][-2:] == ["--ws-token-file", str(state / "bridge.token")]
-            assert data["args"][:3] == ["app-server", "--listen", "ws://127.0.0.1:8766"]
+            # The app-server stays on a private port with its own token, behind the TLS front.
+            assert data["args"][-2:] == ["--ws-token-file", str(state / "inner.token")]
+            assert data["args"][:2] == ["app-server", "--listen"]
+            assert data["args"][2].startswith("ws://127.0.0.1:")
+            assert (state / "inner.token").read_text() != token
             assert (state / "bridge.token").read_text() == token
             for name in ("bridge.token", "auth.json", "config.toml"):
                 assert (state / name).stat().st_mode & 0o777 == 0o600
@@ -137,7 +167,7 @@ def test_unexpected_exit_fails_cleans_descendants_and_can_restart(service, exit_
     start, state, _ = service
     with start(expected=exit_code or 1) as (process, data):
         (state / "exit-code").write_text(str(exit_code))
-        process.wait(timeout=10)
+        process.wait(timeout=120)
     (state / "exit-code").unlink()
     with start() as (_, replacement):
         assert replacement["pid"] != data["pid"]
@@ -149,7 +179,7 @@ def test_service_escalates_a_stop_and_requires_an_existing_token(service):
         pass  # fixture cleanup sends SIGTERM and verifies the complete process group stops
     (state / "bridge.token").unlink()
     with start(expected=1, ready=False) as (process, _):
-        process.wait(timeout=10)
+        process.wait(timeout=120)
         assert not (state / "started").exists()
 
 
@@ -197,9 +227,13 @@ def test_manual_launcher_reuses_a_healthy_bridge_and_preserves_url(
     monkeypatch.delenv("CODEX_BRIDGE_URL", raising=False)
     monkeypatch.setenv("CODEX_HOME", str(tmp_path / "identity"))
     monkeypatch.setenv("CODEX_BRIDGE_BIND_HOST", "127.0.0.1")
-    monkeypatch.setenv("CODEX_BRIDGE_TOKEN", "synthetic")
+    monkeypatch.setenv("CODEX_BRIDGE_TOKEN", "synthetic-bridge-token-0123456789-abcdef")
     monkeypatch.setattr(sys, "argv", ["start_codex_bridge.py"])
     monkeypatch.setattr(bridge, "healthy", AsyncMock(return_value=True))
+    state = tmp_path / "identity" / "healthos-bridge"
+    state.mkdir(parents=True)
+    attestation = {"passed": True, "policy_sha256": bridge.policy_fingerprint()}
+    (state / bridge.ATTESTATION).write_text(json.dumps(attestation))
     path = tmp_path / ".env"
     path.write_text("OTHER_SETTING=keep\n  CODEX_BRIDGE_URL=ws://custom.invalid:9999\n")
     expected = "ws://environment.invalid:9998" if configured else "ws://custom.invalid:9999"
@@ -213,7 +247,7 @@ def test_manual_launcher_reuses_a_healthy_bridge_and_preserves_url(
         os.umask(previous_umask)
     assert path.read_text().splitlines() == [
         "OTHER_SETTING=keep",
-        "CODEX_BRIDGE_TOKEN=synthetic",
+        "CODEX_BRIDGE_TOKEN=synthetic-bridge-token-0123456789-abcdef",
         f"CODEX_BRIDGE_URL={expected}",
     ]
     assert path.stat().st_mode & 0o777 == 0o600

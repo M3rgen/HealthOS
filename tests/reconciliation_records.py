@@ -8,7 +8,8 @@ from retrieval_records import END, START, Client, point
 
 from app.core.config import Settings
 from app.google_health.data_types import REGISTRY
-from app.services.reconciliation_reports import list_runs
+from app.services.providers.ingestion import GoogleSource
+from app.services.synchronization.reconciliation_reports import list_runs
 from app.sync.incremental import IncrementalSync
 from app.sync.reconciliation import ReconciliationService
 
@@ -24,7 +25,7 @@ def service(sessions, client=None, specs=None):
         IncrementalSync(
             Settings(_env_file=None),
             sessions,
-            client or Client(),
+            GoogleSource(client or Client()),
             specs or {"heart-rate": REGISTRY["heart-rate"]},
         ),
         sessions,

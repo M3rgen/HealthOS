@@ -46,7 +46,7 @@ const composite = (rgba, bg) => bg.map((v, i) => rgba[i] * rgba[3] + v * (1 - rg
 // the sampled geometry and the screenshot describe the same frame.
 const settle = page => page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
 
-async function auditText(page, label) {
+async function auditText(page, label, {minimumSamples = 6} = {}) {
   await page.evaluate(() => document.fonts.ready);
   await settle(page);
   const samples = await page.evaluate(() => {
@@ -125,7 +125,7 @@ async function auditText(page, label) {
   const hide = await page.addStyleTag({content: '*{-webkit-text-fill-color:transparent!important;text-shadow:none!important}svg text{fill:transparent!important}'});
   let painted;
   try { painted = pixels(await page.screenshot()); } finally { await hide.evaluate(el => el.remove()); }
-  assert(samples.length > 5, `${label}: no visible text audited`);
+  assert(samples.length >= minimumSamples, `${label}: no visible text audited`);
   const failures = [], ratios = [];
   for (const sample of samples) {
     const minimum = Math.min(...sample.points.map(([x, y]) => {

@@ -1,6 +1,6 @@
 // Synthetic fixtures; no live account records.
 const assert = require('node:assert/strict');
-const { BASE, launch, run } = require('./lib.cjs');
+const { BASE, launch, run, showCard } = require('./lib.cjs');
 
 run(async () => {
   const browser = await launch();
@@ -24,6 +24,7 @@ run(async () => {
       });
       await page.goto(BASE);
       await page.waitForFunction(()=>document.querySelector('#steps-value').textContent==='2.000');
+      await showCard(page, 'connection');
       await page.locator('#sync-button').click();
       await page.waitForFunction(()=>document.querySelector('#sync-button').getAttribute('aria-busy') === 'false');
       assert.equal(started,1,'Sync button must send the deliberate API request header');

@@ -89,7 +89,7 @@ run(async () => {
       await emit(page, receipt);
       assert.match(await first.locator('.chat-transfer-body').textContent(), /Günlük özet: 1/);
       assert.match(await first.locator('.chat-transfer-body').textContent(), /Benzersiz kaynak kayıt sayısı bilinmiyor/);
-      assert.match(await first.locator('.chat-transfer-body').textContent(), /2026-09-01/);
+      assert.match(await first.locator('.chat-transfer-body').textContent(), /1 Eyl – 29 Eylül 2026/);
       assert.match(await first.locator('.chat-transfer-body').textContent(), /Europe\/Paris/);
       await first.locator('.chat-transfer-fields > summary').click();
       const fields = first.getByRole('region', {name: '1. sorguda gönderilen alanlar'});

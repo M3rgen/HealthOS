@@ -20,6 +20,9 @@ function setup() {
   const $ = id => { if (!elements.has(id)) elements.set(id, new Element()); return elements.get(id); };
   globalThis.document = {getElementById: $};
   $('workout-month').closest = () => $('panel');
+  $('workout-editor').querySelector = selector => ({
+    scrollIntoView: options => { $('workout-editor').scrolled = { selector, options }; },
+  });
   let zone = 'Europe/Istanbul';
   const form = $('workout-form');
   form.elements = Object.fromEntries(['exercise_type','start_time','end_time','calories_kcal','distance_km'].map(key => [key,new Element()]));
@@ -90,6 +93,7 @@ test('reverse month and timezone responses cannot overwrite newer content, statu
   assert.match($('workout-status').textContent, /Bu ay antrenman kaydı yok/);
   const oldZone = controller.update(); setZone('UTC'); const newZone = controller.update();
   pending[3].resolve(rows); await newZone;
+  assert.match($('workout-timezone').textContent, /UTC/);
   const html = $('workout-rows').innerHTML, status = $('workout-status').textContent;
   pending[2].reject(new Error('Eski istek hatası')); await oldZone;
   assert.equal($('workout-rows').innerHTML, html);
@@ -97,22 +101,36 @@ test('reverse month and timezone responses cannot overwrite newer content, statu
   assert.equal($('workout-retry').hidden, true);
   assert.equal($('workout-timeline').attributes['aria-busy'], 'false');
   assert.match(pending[3].url, /timezone=UTC/);
+  // A refresh of the list on screen is silent: no busy state, no "loading" text, rows stay.
+  const repeat = controller.update();
+  assert.equal($('workout-timeline').attributes['aria-busy'], 'false');
+  assert.equal($('workout-status').textContent, status);
+  assert.equal($('workout-rows').innerHTML, html);
+  pending[4].resolve(rows); await repeat;
+  // A real load of another month: the older answer must not end the newer one's busy state.
+  $('workout-month').value = '2025-11';
   const older = controller.update(), newer = controller.update();
-  pending[4].resolve([]); await older;
+  assert.equal($('workout-rows').innerHTML, '');
+  pending[5].resolve([]); await older;
   assert.equal($('workout-timeline').attributes['aria-busy'], 'true');
-  pending[5].resolve(rows); await newer;
+  pending[6].resolve(rows); await newer;
+  assert.equal($('workout-timeline').attributes['aria-busy'], 'false');
 });
 
 test('manual save refreshes the selected-zone start month and preserves optional empty values', async () => {
   const {$,pending} = setup();
   const fields = $('workout-form').elements;
   fields.exercise_type.value = 'Gece yürüyüşü';
-  fields.start_time.value = '2025-12-31T22:30:00Z'; fields.end_time.value = '2025-12-31T23:30:00Z';
+  fields.start_time.value = '2026-01-01T01:30'; fields.end_time.value = '2026-01-01T02:30';
   fields.distance_km.value = '5';
   $('workout-month').value = '2025-11';
   $('workout-add').emit('click'); assert.equal($('workout-editor').open, true);
+  assert.deepEqual($('workout-editor').scrolled, { selector: 'summary', options: { block: 'nearest' } });
   const save = $('workout-form').emit('submit');
   const body = JSON.parse(pending[0].options.body);
+  assert.equal(body.start_time, '2025-12-31T22:30:00.000Z');
+  assert.equal(body.end_time, '2025-12-31T23:30:00.000Z');
+  assert.match($('workout-timezone').textContent, /Europe\/Istanbul/);
   assert.equal(body.calories_kcal, null); assert.equal(body.distance_meters, 5000);
   assert.equal($('workout-save').getAttribute('aria-disabled'), 'true');
   pending[0].resolve({...body,id:'saved',source:'Manuel'});

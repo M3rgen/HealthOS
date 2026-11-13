@@ -19,18 +19,22 @@ import pytest
 from derived_records import steps
 from identity_records import HEART, OLD_NAME, T0, fitbit, heart, store
 from sqlalchemy import func, select, text, update
+from support.clock import freeze_app_clock
 
 from app.api.dashboard import dashboard, export, metric_history, workouts
 from app.models.eligibility import normalized_counted, raw_counted
 from app.models.health import ExerciseSession, HeartRate, RestingHeartRate, Steps
-from app.models.identity import RawHealthDataSupersession
+from app.models.identity_tables import RawHealthDataSupersession
 from app.models.state import RawHealthData
 from app.parsers.identity import source_fingerprint
-from app.services import analytics_views, codex_health
-from app.services.analytics_views import view_select
-from app.services.dashboard import dashboard_data
-from app.services.identity_backfill import identity_backfill
-from app.services.identity_decisions import decide_sources
+from app.services.dashboard_views.dashboard import dashboard_data
+from app.services.identities import analytics_views
+from app.services.identities.analytics_views import view_select
+from app.services.identities.identity_backfill import identity_backfill
+from app.services.identities.identity_decisions import decide_sources
+from app.services.identities.identity_options import SourceDecision
+from app.services.readers.dashboard_queries import DashboardQuery
+from app.services.umay import codex_health
 
 DAY = T0.date()
 DELETED = T0 + timedelta(days=1)
@@ -136,11 +140,12 @@ async def seed(sessions) -> None:
 
 async def readers(sessions, monkeypatch) -> dict[str, set[str]]:
     """The steps records each reader counts on DAY."""
-    monkeypatch.setattr(codex_health, "SessionLocal", sessions)
+    # The history page holding DAY counts back from today: the reader's today and ours agree.
+    today = freeze_app_clock(monkeypatch, datetime.now(UTC)).date()
     found: dict[str, set[str]] = {}
     async with sessions() as session:
         for name, flags in (("dashboard_data", {}), ("strict", {"valid_sources_only": True})):
-            data = await dashboard_data(session, DAY, 1, "UTC", **flags)
+            data = await dashboard_data(session, **flags, query=DashboardQuery(DAY, 1, "UTC"))
             found[name] = decode(data["days"][0]["steps"])
         found["/api/dashboard"] = decode(
             (await dashboard(1, DAY, "UTC", session))["days"][0]["steps"]
@@ -148,7 +153,7 @@ async def readers(sessions, monkeypatch) -> dict[str, set[str]]:
         response = await export(1, DAY, "UTC", session)
         rows = list(csv.DictReader(io.StringIO(bytes(response.body).decode().lstrip("﻿"))))
         found["export.csv"] = decode(rows[0]["steps"])
-        page = (datetime.now(UTC).date() - DAY).days // 30 + 1
+        page = (today - DAY).days // 30 + 1
         history = await metric_history("steps", page, "UTC", session)
         found["/api/dashboard/history"] = decode(
             next(row["value"] for row in history["days"] if row["date"] == DAY.isoformat())
@@ -170,11 +175,13 @@ async def readers(sessions, monkeypatch) -> dict[str, set[str]]:
             )
         )
     day = {"start_date": DAY.isoformat(), "end_date": DAY.isoformat()}
-    daily = await codex_health.read_health({"action": "daily", **day})
+    daily = await codex_health.read_health(sessions, {"action": "daily", **day})
     found["codex daily"] = decode(daily["days"][0]["steps"])
-    records = await codex_health.read_health({"action": "records", "data_type": "steps", **day})
+    records = await codex_health.read_health(
+        sessions, {"action": "records", "data_type": "steps", **day}
+    )
     found["codex records"] = {row["payload"]["gid"] for row in records["records"]}
-    inventory = await codex_health.read_health({"action": "inventory"})
+    inventory = await codex_health.read_health(sessions, {"action": "inventory"})
     (stream,) = [row for row in inventory["streams"] if row["data_type"] == "steps"]
     assert stream["count"] == len(found["codex records"])
     return found
@@ -221,8 +228,12 @@ async def test_a_lost_holder_lets_the_row_it_held_count_again(sessions, monkeypa
 async def test_valid_sources_only_changes_nothing(sessions) -> None:
     await seed(sessions)
     async with sessions() as session:
-        default = await dashboard_data(session, DAY, 3, "UTC")
-        strict = await dashboard_data(session, DAY, 3, "UTC", valid_sources_only=True)
+        default = await dashboard_data(session, query=DashboardQuery(DAY, 3, "UTC"))
+        strict = await dashboard_data(
+            session,
+            valid_sources_only=True,
+            query=DashboardQuery(DAY, 3, "UTC"),
+        )
     assert default == strict
 
 
@@ -256,8 +267,12 @@ async def test_source_deletions_included_still_hide_a_quarantine(sessions) -> No
                 )
             )
     async with sessions() as session:
-        default = await dashboard_data(session, DAY, 2, "UTC")
-        with_deleted = await dashboard_data(session, DAY, 2, "UTC", include_source_deleted=True)
+        default = await dashboard_data(session, query=DashboardQuery(DAY, 2, "UTC"))
+        with_deleted = await dashboard_data(
+            session,
+            include_source_deleted=True,
+            query=DashboardQuery(DAY, 2, "UTC"),
+        )
     assert [row["resting_bpm"] for row in default["days"]] == [None, None]
     assert [row["resting_bpm"] for row in with_deleted["days"]] == [60, None]
 
@@ -306,11 +321,12 @@ async def test_workouts_and_records_count_the_same_sessions(sessions, monkeypatc
                     is_quarantined=quarantined,
                 )
             )
-    monkeypatch.setattr(codex_health, "SessionLocal", sessions)
     async with sessions() as session:
         shown = await workouts(DAY.replace(day=1), "UTC", session)
     day = {"start_date": DAY.isoformat(), "end_date": DAY.isoformat()}
-    records = await codex_health.read_health({"action": "records", "data_type": "exercise", **day})
+    records = await codex_health.read_health(
+        sessions, {"action": "records", "data_type": "exercise", **day}
+    )
     assert [row["exercise_type"] for row in shown] == ["ex-live"]
     assert [row["payload"]["gid"] for row in records["records"]] == ["ex-live"]
 
@@ -332,7 +348,6 @@ async def two_bands(sessions) -> None:
 
 
 async def heart_counts(sessions, monkeypatch) -> dict[str, object]:
-    monkeypatch.setattr(codex_health, "SessionLocal", sessions)
     async with sessions() as session:
         raw = await session.scalar(
             select(func.count())
@@ -343,8 +358,8 @@ async def heart_counts(sessions, monkeypatch) -> dict[str, object]:
             select(func.count()).select_from(HeartRate).where(normalized_counted(HeartRate))
         )
         view = len((await session.execute(text(view_select("heart_rate")))).all())
-        data = await dashboard_data(session, DAY, 1, "UTC")
-    inventory = await codex_health.read_health({"action": "inventory"})
+        data = await dashboard_data(session, query=DashboardQuery(DAY, 1, "UTC"))
+    inventory = await codex_health.read_health(sessions, {"action": "inventory"})
     (stream,) = [row for row in inventory["streams"] if row["data_type"] == "heart-rate"]
     return {
         "raw": raw,
@@ -362,9 +377,17 @@ def same(count: int) -> dict[str, object]:
 async def test_a_rejected_link_counts_both_bands_again(sessions, clock, monkeypatch) -> None:
     await two_bands(sessions)
     assert await heart_counts(sessions, monkeypatch) == same(8)
-    await decide_sources(sessions, "heart-rate", "link", OLD_FP[:12], CHARGE_FP[:12])
+    await decide_sources(
+        sessions,
+        "heart-rate",
+        request=SourceDecision("link", OLD_FP[:12], CHARGE_FP[:12]),
+    )
     assert await heart_counts(sessions, monkeypatch) == same(4)
-    await decide_sources(sessions, "heart-rate", "reject", OLD_FP[:12], CHARGE_FP[:12])
+    await decide_sources(
+        sessions,
+        "heart-rate",
+        request=SourceDecision("reject", OLD_FP[:12], CHARGE_FP[:12]),
+    )
     assert await heart_counts(sessions, monkeypatch) == same(8)
     async with sessions() as session:  # the links stay, as history
         assert (
@@ -377,7 +400,11 @@ async def test_a_lost_holder_is_never_counted_twice(sessions, clock, monkeypatch
     """The holder's raw row alone is quarantined (or marked deleted): the row it held
     counts again, and every reader still counts four readings, averaging 61.5."""
     await two_bands(sessions)
-    await decide_sources(sessions, "heart-rate", "link", OLD_FP[:12], CHARGE_FP[:12])
+    await decide_sources(
+        sessions,
+        "heart-rate",
+        request=SourceDecision("link", OLD_FP[:12], CHARGE_FP[:12]),
+    )
     async with sessions() as session:
         link = (await session.scalars(select(RawHealthDataSupersession).limit(1))).one()
     change = {"is_quarantined": True} if loss == "quarantined" else {"source_deleted_at": DELETED}

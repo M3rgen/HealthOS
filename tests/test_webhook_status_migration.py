@@ -10,9 +10,10 @@ from alembic.config import Config
 from sqlalchemy import create_engine, inspect, select, text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session
+from support import sqlite_guards
 
 from app.core.config import get_settings
-from app.models import apple, garmin, raw_rejections, webhook_status
+from app.models import apple, garmin, oauth_credentials, raw_rejections, webhook_status
 from app.models.state import WebhookEvent
 from app.models.webhook_status import WebhookStatusEvent
 
@@ -46,10 +47,13 @@ def test_upgrade_keeps_raw_archive_and_populated_diagnostics_refuse_downgrade(
         assert set(inspect(engine).get_table_names()) - before == {
             "webhook_status_events",
             "derived_days",
+            "derived_day_pending",
             "display_preferences",
             *raw_rejections.TABLES,
             *garmin.TABLES,
             garmin.STATE,
+            garmin.NORMALIZATION_STATE,
+            *oauth_credentials.TABLES,
             *apple.TABLES,
             apple.IMPORTS,
             apple.SOURCES,
@@ -82,7 +86,7 @@ def test_guard_sql_is_frozen_and_matches_metadata():
     assert migration.revision == "20261025_0019"
     assert migration.down_revision == "20261025_0018"
     assert migration.POSTGRESQL_DDL == webhook_status.POSTGRESQL_DDL
-    assert migration.SQLITE_DDL == webhook_status.SQLITE_DDL
+    assert migration.SQLITE_DDL == sqlite_guards.ddl(webhook_status)
     assert "app.models" not in path.read_text()
     assert "app.services" not in path.read_text()
 
@@ -131,10 +135,11 @@ def test_guard_upgrade_and_downgrade_preserve_populated_evidence(tmp_path, monke
         assert snapshot() == before
         assert triggers() == {
             **old_triggers,
-            **{name: sql for name, (_, sql) in webhook_status.SQLITE_TRIGGER_SQL.items()},
-            **{name: sql for name, (_, sql) in raw_rejections.SQLITE_TRIGGER_SQL.items()},
-            **{name: sql for name, (_, sql) in garmin.SQLITE_TRIGGER_SQL.items()},
-            **{name: sql for name, (_, sql) in apple.SQLITE_TRIGGER_SQL.items()},
+            **{
+                name: sql
+                for module in (webhook_status, raw_rejections, garmin, oauth_credentials, apple)
+                for name, (_, sql) in sqlite_guards.definitions(module.GUARDS).items()
+            },
         }
         for statement in (
             "UPDATE webhook_status_events SET reason = 'challenge'",

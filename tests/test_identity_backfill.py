@@ -1,9 +1,8 @@
-"""``health-mirror identity-backfill`` and the readers that skip superseded rows (SQLite)."""
+"""``healthos identity-backfill`` and the readers that skip superseded rows (SQLite)."""
 
 from __future__ import annotations
 
 import json
-import uuid
 from datetime import UTC, date, timedelta
 
 from identity_records import (
@@ -15,7 +14,6 @@ from identity_records import (
     SWIM,
     T0,
     count,
-    fitbit,
     heart,
     legacy,
     phone,
@@ -26,51 +24,18 @@ from identity_records import (
     swim,
 )
 from sqlalchemy import func, select
+from support.identity import archive_with_duplicates
 from typer.testing import CliRunner
 
-from app.models.identity import RawHealthDataIdentity, RawHealthDataSupersession
+from app.models.identity_tables import RawHealthDataIdentity, RawHealthDataSupersession
 from app.models.raw_versions import RawHealthDataEvent
 from app.models.state import RawHealthData
 from app.parsers.common import temporal
-from app.services.dashboard import dashboard_data
-from app.services.identity_backfill import identity_backfill
-
-
-async def archive_with_duplicates(sessions) -> dict[str, uuid.UUID]:
-    """Rows as the pre-v2 archive held them (each pair: before / after the change)."""
-    day = timedelta(days=1)
-    ids = {
-        "renamed-old": await legacy(sessions, HEART, heart(60), T0, deleted=T0 + day),
-        "renamed-new": await legacy(sessions, HEART, heart(60, name=NEW_NAME), T0 + day),
-        "lone-deleted": await legacy(
-            sessions, HEART, heart(80, at=T0 + timedelta(minutes=9)), T0, deleted=T0 + day
-        ),
-        # The band (old name) was last seen half a day before the new name first appeared;
-        # the watch, another device of another class (recording method), was seen with both.
-        "band": await legacy(
-            sessions, HEART, heart(70, at=T0 + timedelta(minutes=3)), T0, last=T0 + day / 2
-        ),
-        "watch": await legacy(
-            sessions,
-            HEART,
-            {
-                **heart(72, at=T0 + timedelta(minutes=3)),
-                "dataSource": fitbit("Example Watch", method="PASSIVELY_MEASURED"),
-            },
-            T0 + timedelta(hours=2),
-            last=T0 + day,
-        ),
-        "suffixed": await legacy(sessions, STEPS, steps(40), T0),
-        "plain": await legacy(sessions, STEPS, steps(40, source=phone(PACKAGE)), T0 + day),
-        "other-steps": await legacy(sessions, STEPS, steps(25, start=T0 + timedelta(hours=1)), T0),
-        "swim-flat": await legacy(sessions, SWIM, swim(12), T0),
-        "swim-civil": await legacy(sessions, SWIM, swim(12, civil=True), T0 + day),
-    }
-    for minutes in (15, 30, 45):
-        ids[f"sedentary-{minutes}"] = await legacy(
-            sessions, SEDENTARY, sedentary(minutes), T0 + timedelta(minutes=minutes)
-        )
-    return ids
+from app.services.dashboard_views.dashboard import dashboard_data
+from app.services.identities import identity_backfill_linking
+from app.services.identities.identity_backfill import identity_backfill
+from app.services.identities.identity_options import BackfillOptions
+from app.services.readers.dashboard_queries import DashboardQuery
 
 
 async def links(sessions) -> dict:
@@ -81,7 +46,7 @@ async def links(sessions) -> dict:
 
 async def test_backfill_links_duplicates_once_and_dry_run_writes_nothing(sessions) -> None:
     ids = await archive_with_duplicates(sessions)
-    dry = await identity_backfill(sessions, dry_run=True)
+    dry = await identity_backfill(sessions, options=BackfillOptions(dry_run=True))
     assert await count(sessions, RawHealthDataIdentity) == 0
     assert await links(sessions) == {}
     # The renamed record's old row is marked deleted: never linked across fingerprints (it
@@ -135,8 +100,9 @@ async def test_backfill_batches_never_split_an_identity_and_resume_after(session
     await identity_backfill(
         sessions,
         data_types=["sedentary-period", "heart-rate"],
-        batch_size=1,
-        progress=lambda name, stats, reached: progress.append((name, reached)),
+        options=BackfillOptions(
+            batch_size=1, progress=lambda name, stats, reached: progress.append((name, reached))
+        ),
     )
     found = await links(sessions)
     assert found[ids["sedentary-15"]] == (ids["sedentary-45"], "growing-interval")
@@ -178,9 +144,17 @@ async def test_superseded_rows_are_not_counted_by_the_dashboard(sessions) -> Non
 
     async def board() -> tuple:
         async with sessions() as session:
-            data = await dashboard_data(session, day, 1, "UTC")
-            history = await dashboard_data(session, day, 1, "UTC", valid_sources_only=True)
-            everything = await dashboard_data(session, day, 1, "UTC", include_source_deleted=True)
+            data = await dashboard_data(session, query=DashboardQuery(day, 1, "UTC"))
+            history = await dashboard_data(
+                session,
+                valid_sources_only=True,
+                query=DashboardQuery(day, 1, "UTC"),
+            )
+            everything = await dashboard_data(
+                session,
+                include_source_deleted=True,
+                query=DashboardQuery(day, 1, "UTC"),
+            )
         return (
             data["days"][0]["steps"],
             data["charts"]["heart_rate"][9],
@@ -194,7 +168,7 @@ async def test_superseded_rows_are_not_counted_by_the_dashboard(sessions) -> Non
 
 
 async def test_verify_reports_an_alias_that_does_not_match_its_row(sessions) -> None:
-    from app.services.identity import verify_identities
+    from app.services.identities.identity_verification import verify_identities
 
     ids = await archive_with_duplicates(sessions)
     await identity_backfill(sessions)
@@ -266,7 +240,7 @@ async def test_a_device_seen_alongside_keeps_a_rename_undecided(sessions) -> Non
         sessions, HEART, heart(61, at=later, name=NEW_NAME), T0 + 9 * hour, last=T0 + 30 * hour
     )
     await legacy(sessions, HEART, heart(90, name="Example Watch"), T0, last=T0 + 30 * hour)
-    dry = await identity_backfill(sessions, dry_run=True)
+    dry = await identity_backfill(sessions, options=BackfillOptions(dry_run=True))
     report = dry["heart-rate"]
     assert report.chains == []
     [case] = report.ambiguous
@@ -314,7 +288,6 @@ async def test_backfill_counts_only_links_it_inserted_and_genuine_deletions(
 ) -> None:
     """Review 2: ``linked`` counts the links this run inserted (another run may insert some
     first); ``deletions_kept`` counts deleted records with no live row of their device."""
-    from app.services import identity_backfill as backfill
 
     day = timedelta(days=1)
     renamed_old = await legacy(sessions, HEART, heart(60), T0)
@@ -328,7 +301,7 @@ async def test_backfill_counts_only_links_it_inserted_and_genuine_deletions(
     await legacy(sessions, HEART, heart(64, at=at), T0, deleted=T0 + day)
     await legacy(sessions, HEART, heart(64, at=at, name=NEW_NAME), T0 + day, deleted=T0 + 2 * day)
     await legacy(sessions, HEART, heart(80, at=T0 + timedelta(minutes=9)), T0, deleted=T0 + day)
-    original = backfill._write_plan
+    original = identity_backfill_linking._write_plan
 
     async def racing(session, spec, plan, stats, *, dry_run):
         # Another run linked the first row a moment earlier.
@@ -351,7 +324,7 @@ async def test_backfill_counts_only_links_it_inserted_and_genuine_deletions(
             await session.flush()
         await original(session, spec, plan, stats, dry_run=dry_run)
 
-    monkeypatch.setattr(backfill, "_write_plan", racing)
+    monkeypatch.setattr(identity_backfill_linking, "_write_plan", racing)
     result = (await identity_backfill(sessions))["heart-rate"]
     assert sum(result.linked.values()) == 1  # two planned, one inserted by this run
     found = await links(sessions)

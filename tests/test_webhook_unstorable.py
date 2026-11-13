@@ -14,14 +14,14 @@ from datetime import UTC, datetime
 import pytest
 from sqlalchemy import func, null, select, text
 from sqlalchemy.exc import DBAPIError
-from test_webhook_route import finish, make_client, notification
+from support.webhook_archive import KINDS, rows, snapshot
+from support.webhooks import finish, make_client, notification
 
-from app.models.state import WebhookBatchItem, WebhookEvent, WebhookNotification
+from app.models.state import WebhookEvent, WebhookNotification
 from app.parsers.common import payload_hash
-from app.services.raw_history import verify_guards
-from app.services.webhook_metadata import UNREPRESENTABLE
+from app.services.archive.raw_history_verification import verify_guards
+from app.services.synchronization.webhook_metadata import UNREPRESENTABLE
 
-KINDS = ["nul_value", "nul_key", "nul_data_type", "surrogate", "nan", "overflow"]
 REFUSED = "keeps every record"
 
 
@@ -53,31 +53,6 @@ async def post(client, raw: bytes):
         content=raw,
         headers={"Authorization": "Bearer local-test", "GOOGLE-HEALTH-API-SIGNATURE": "signed"},
     )
-
-
-async def rows(sessions):
-    async with sessions() as session:
-        batches = (await session.scalars(select(WebhookEvent))).all()
-        elements = (await session.scalars(select(WebhookNotification))).all()
-        items = (
-            await session.scalars(
-                select(WebhookBatchItem).order_by(
-                    WebhookBatchItem.batch_hash, WebhookBatchItem.ordinal
-                )
-            )
-        ).all()
-    return batches, elements, items
-
-
-async def snapshot(sessions):
-    async with sessions() as session:
-        return [
-            (await session.execute(text(f"SELECT {columns} FROM {table} ORDER BY 1"))).all()
-            for table, columns in (
-                ("webhook_events", "payload_hash, raw_json, raw_body, created_at"),
-                ("webhook_notifications", "element_hash, raw_json, is_valid, created_at"),
-            )
-        ]
 
 
 def assert_rejected(element) -> None:

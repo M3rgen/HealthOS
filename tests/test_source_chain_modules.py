@@ -1,6 +1,5 @@
 """Import compatibility and production wiring across the source-chain split."""
 
-import importlib
 import json
 import subprocess
 import sys
@@ -10,60 +9,41 @@ import pytest
 from identity_records import HEART, NEW_NAME, T0, heart, store
 from sqlalchemy import event, select
 
+import app.services.identities.source_chain_evidence as source_chain_evidence
+import app.services.identities.source_chain_rules as source_chain_rules
 from app.core.timeutil import as_utc
 from app.db.base import Base
-from app.models.identity import RawSourceChain, RawSourceDevice
-from app.services import source_chain_repository as repository
-from app.services import source_chains
-from app.services.identity_backfill import identity_backfill
-
-
-@pytest.mark.parametrize(
-    ("module", "names"),
-    [
-        (
-            "evidence",
-            "CHAIN_GAP PAIR_KEYS RENAME_OVERLAP RETIRED_AFTER MAX_CHAIN RULE Span Evidence "
-            "precedes overlaps gap_seconds worn_together back_to_back ordered_pair key_time "
-            "established useful evidence parse_evidence owner_decision_of parse_premise "
-            "parse_agreement dump_agreement _STAMP",
-        ),
-        ("model", "Chains SourceState"),
-        ("rules", "Decision describe decide_chains kindred_groups"),
-        (
-            "repository",
-            "database_now _span load_state load_chains _upsert record_sightings write_spans "
-            "record_evidence record_refutations record_devices insert_chain record_decision",
-        ),
-    ],
-)
-def test_legacy_exports_are_the_extracted_implementations(module, names):
-    implementation = importlib.import_module(f"app.services.source_chain_{module}")
-    for name in names.split():
-        exported = getattr(source_chains, name)
-        assert exported is getattr(implementation, name)
-        if callable(exported):
-            assert exported.__module__ == implementation.__name__
+from app.models.identity_tables import RawSourceChain, RawSourceDevice
+from app.services.identities import source_chain_repository as repository
+from app.services.identities.identity_backfill import identity_backfill
+from app.services.identities.identity_options import ChainEvidence, SourceDecision
 
 
 @pytest.mark.parametrize("first", ["evidence", "model", "rules", "repository", "locks", "storage"])
 def test_import_order_has_no_cycle_or_eager_storage_dependency(first):
-    module = "storage" if first == "storage" else f"source_chain_{first}"
+    module = (
+        "app.services.archive.storage"
+        if first == "storage"
+        else f"app.services.identities.source_chain_{first}"
+    )
     result = subprocess.run(
         [
             sys.executable,
             "-c",
-            f"import app.services.{module}; import sys; "
+            f"import {module}; import sys; "
             + (
-                "assert 'app.services.source_chains' not in sys.modules; "
-                "assert 'app.services.storage' not in sys.modules; "
+                "assert 'app.services.identities.source_chains' not in sys.modules; "
+                "assert 'app.services.archive.storage' not in sys.modules; "
                 if first != "storage"
                 else ""
             )
-            + "import app.services.source_chains; import app.services.storage; "
-            "import app.services.identity; import app.services.identity_backfill; "
-            "import app.services.identity_decisions; import app.services.identity_verification; "
-            "import app.services.identity_reconciler; import app.sync.deletions; "
+            + "import app.services.identities.source_chains; import app.services.archive.storage; "
+            "import app.services.identities.identity; "
+            "import app.services.identities.identity_backfill; "
+            "import app.services.identities.identity_decisions; "
+            "import app.services.identities.identity_verification; "
+            "import app.services.identities.identity_reconciler; "
+            "import app.services.archive.source_deletions; "
             "import app.cli.main",
         ],
         capture_output=True,
@@ -72,28 +52,6 @@ def test_import_order_has_no_cycle_or_eager_storage_dependency(first):
         timeout=30,
     )
     assert result.returncode == 0, result.stderr
-
-
-def test_production_callers_use_the_extracted_model_rules_and_repository():
-    from app.services import identity, identity_backfill_chains, identity_decisions, storage
-    from app.services import source_chain_model as model
-    from app.services import source_chain_rules as rules
-    from app.sync import deletions
-
-    assert identity.Chains is identity_decisions.Chains is deletions.Chains is model.Chains
-    assert identity.SourceState is model.SourceState
-    assert identity_backfill_chains.decide_chains is rules.decide_chains
-    assert storage.record_sightings is repository.record_sightings
-    assert (
-        storage.record_evidence
-        is identity_backfill_chains.record_evidence
-        is repository.record_evidence
-    )
-    assert identity.load_state is repository.load_state
-    assert deletions.load_chains is identity_backfill_chains.load_chains is repository.load_chains
-    assert identity_decisions.record_decision is repository.record_decision
-    for name in ("insert_chain", "record_devices", "record_refutations", "write_spans"):
-        assert getattr(identity_backfill_chains, name) is getattr(repository, name)
 
 
 async def snapshot(session):
@@ -136,8 +94,8 @@ async def test_repository_round_trip_shares_the_callers_transaction(sessions, co
     old, new = "first", "second"
     now = T0 + timedelta(hours=2)
     spans = {
-        old: source_chains.Span(T0, T0, "band", "old", True, newest=T0),
-        new: source_chains.Span(now, now, "band", "new", True, newest=now),
+        old: source_chain_evidence.Span(T0, T0, "band", "old", True, newest=T0),
+        new: source_chain_evidence.Span(now, now, "band", "new", True, newest=now),
     }
     async with sessions() as session:
         before = await snapshot(session)
@@ -149,11 +107,16 @@ async def test_repository_round_trip_shares_the_callers_transaction(sessions, co
         )
         chains = await repository.load_chains(session, HEART.name)
         assert chains.spans[new].complete and chains.spans[new].newest == now
-        assert source_chains.decide_chains(chains).links == [(old, new)]
+        assert source_chain_rules.decide_chains(chains).links == [(old, new)]
         chains.forget(old, new)
         for _ in range(2):
             assert await repository.insert_chain(
-                session, HEART.name, chains, old, new, decided_by="reconciler", now=now
+                session,
+                HEART.name,
+                chains,
+                old,
+                new,
+                evidence_record=ChainEvidence(decided_by="reconciler", now=now),
             )
         assert await repository.record_devices(session, HEART.name, chains, now) == {
             old: old,
@@ -162,7 +125,11 @@ async def test_repository_round_trip_shares_the_callers_transaction(sessions, co
         assert await repository.record_devices(session, HEART.name, chains, now) == {}
         original = await snapshot(session)
         decision_id = await repository.record_decision(
-            session, HEART.name, chains, "reject", old, new, note=None, now=now
+            session,
+            HEART.name,
+            chains,
+            now=now,
+            request=SourceDecision("reject", old, new, None),
         )
         assert decision_id > 0
         assert await repository.record_devices(session, HEART.name, chains, now) == {new: new}
@@ -199,11 +166,15 @@ async def test_repository_round_trip_shares_the_callers_transaction(sessions, co
 
 
 async def test_persisted_premises_evidence_and_refutations_keep_their_meaning(sessions):
-    from app.models.identity import IdentityReconcileState, RawSourceChainEvent, RawSourcePair
+    from app.models.identity_tables import (
+        IdentityReconcileState,
+        RawSourceChainEvent,
+        RawSourcePair,
+    )
 
     now = T0 + timedelta(hours=2)
     spans = {
-        name: source_chains.Span(at, at, stable, name, True)
+        name: source_chain_evidence.Span(at, at, stable, name, True)
         for name, at, stable in (
             ("a", T0, "band"),
             ("b", now, "band"),
@@ -214,21 +185,34 @@ async def test_persisted_premises_evidence_and_refutations_keep_their_meaning(se
     async with sessions.begin() as session:
         await repository.write_spans(session, HEART.name, spans, now)
         chains = await repository.load_chains(session, HEART.name)
-        chains.premises[("c", "d")] = frozenset({("a", "b")})
+        chains.set_premise("c", "d", frozenset({("a", "b")}))
         for old, new in (("a", "b"), ("c", "d")):
             assert await repository.insert_chain(
-                session, HEART.name, chains, old, new, decided_by="reconciler", now=now
+                session,
+                HEART.name,
+                chains,
+                old,
+                new,
+                evidence_record=ChainEvidence(decided_by="reconciler", now=now),
             )
     async with sessions.begin() as session:
         chains = await repository.load_chains(session, HEART.name)
         assert chains.premises == {("c", "d"): frozenset({("a", "b")})}
         assert chains.live("c", "d")
         await repository.record_decision(
-            session, HEART.name, chains, "reject", "a", "b", note=None, now=now
+            session,
+            HEART.name,
+            chains,
+            now=now,
+            request=SourceDecision("reject", "a", "b", None),
         )
         assert chains.state("c", "d") == "lapsed"
         await repository.record_decision(
-            session, HEART.name, chains, "confirm", "c", "d", note=None, now=now
+            session,
+            HEART.name,
+            chains,
+            now=now,
+            request=SourceDecision("confirm", "c", "d", None),
         )
         assert chains.live("c", "d")
         # Two keys from one fetch do not establish distinct devices. A third key,
@@ -242,12 +226,12 @@ async def test_persisted_premises_evidence_and_refutations_keep_their_meaning(se
         assert await repository.record_evidence(session, HEART.name, chains, early + late) == 0
         # Refutation must wait until every shared key has been counted.
         assert await repository.record_refutations(session, HEART.name, chains, now) == []
-        chains.agreement[("c", "d")] = (0, 3, True)
+        chains.update_agreement({("c", "d"): (0, 3, True)})
         session.add(
             IdentityReconcileState(
                 data_type=HEART.name,
                 runs=0,
-                pair_agreement=source_chains.dump_agreement(chains.agreement),
+                pair_agreement=source_chain_evidence.dump_agreement(chains.agreement),
             )
         )
         assert await repository.record_refutations(session, HEART.name, chains, now) == [("c", "d")]

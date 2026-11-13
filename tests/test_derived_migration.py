@@ -7,13 +7,15 @@ from alembic import command
 from alembic.config import Config
 from sqlalchemy import create_engine, text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from support import sqlite_guards
 
 from app.core.config import get_settings
-from app.models import apple, derived_invalidation, garmin
+from app.db.guards import definitions
+from app.models import apple, derived_invalidation, garmin, oauth_credentials, raw_rejections
 
 
-def _migration(suffix):
-    path = next(Path("migrations/versions").glob(f"20261025_{suffix}_*.py"))
+def _migration(suffix, day="20261025"):
+    path = next(Path("migrations/versions").glob(f"{day}_{suffix}_*.py"))
     spec = importlib.util.spec_from_file_location(f"migration{suffix}", path)
     migration = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(migration)
@@ -34,18 +36,32 @@ def test_historical_0018_contract_and_new_head_match_metadata():
         replacements.get(sql, sql).replace("CREATE OR REPLACE TRIGGER", "CREATE TRIGGER")
         for sql in historical
     )
-    assert upgraded == derived_invalidation.POSTGRESQL_DDL
-    assert old.SQLITE_DDL == derived_invalidation.SQLITE_DDL
+    # 0028 replaces every invalidation body: what it restores is exactly the chain above,
+    # what it installs is exactly the metadata.
+    latest = _migration("0028", "20261108")
+    assert {
+        *(
+            f"CREATE FUNCTION {name}() RETURNS trigger LANGUAGE plpgsql AS $${body}$$"
+            for name, body in latest.PREVIOUS_FUNCTION_BODIES.items()
+        ),
+        *(sql for _, sql in latest.PREVIOUS_TRIGGER_SQL.values()),
+    } == {sql for sql in upgraded if not sql.startswith("ALTER TABLE")}
+    pg, functions, _ = definitions(derived_invalidation.GUARDS)
+    assert latest.FUNCTION_BODIES == functions
+    assert {
+        **latest.TRIGGER_SQL,
+        latest.DRAIN_TRIGGER: (latest.PENDING_TABLE, latest.DRAIN_SQL),
+    } == pg
     assert len(new.POSTGRESQL_DDL) == 8
     assert all(
         sql.startswith(("CREATE OR REPLACE TRIGGER ", "ALTER TABLE ")) for sql in new.POSTGRESQL_DDL
     )
     source = Path(new.__file__).read_text()
     assert "from app" not in source and "import app" not in source and "DROP" not in source
-    for name, (_, sql) in derived_invalidation.PG_TRIGGER_SQL.items():
+    for name, (_, sql) in pg.items():
         if name.endswith("_insert"):
             assert "OLD." not in sql
-    update_sql = derived_invalidation.PG_TRIGGER_SQL["derived_raw_health_data_update"][1]
+    update_sql = pg["derived_raw_health_data_update"][1]
     assert "OLD.data_type IN" in update_sql and "OR NEW.data_type IN" in update_sql
 
 
@@ -73,17 +89,18 @@ async def test_upgrade_and_downgrade_preserve_all_existing_triggers(tmp_path, mo
                 ).all()
             )
         assert all(after[name] == sql for name, sql in before.items())
-        assert set(after) - set(before) == set(derived_invalidation.SQLITE_TRIGGER_SQL)
+        assert set(after) - set(before) == set(
+            sqlite_guards.definitions(derived_invalidation.GUARDS)
+        )
         # The models carry the columns of head (0025: provider), so the rows are stored at
         # head and the schema is then brought back to 0019, where the comparison starts.
         command.upgrade(config, "head")
         from derived_records import T0, manual, raw_mutation, snapshot, steps, store
 
-        from app.models import raw_rejections
         from app.models.state import WebhookEvent
         from app.models.webhook_status import WebhookStatusEvent
-        from app.services.manual_flags import record_flag
-        from app.services.raw_history import verify_guards
+        from app.services.archive.manual_flags import record_flag
+        from app.services.archive.raw_history_verification import verify_guards
 
         await store(sessions, "steps", steps(count=100))
         await store(sessions, "steps", steps(count=120))
@@ -102,26 +119,27 @@ async def test_upgrade_and_downgrade_preserve_all_existing_triggers(tmp_path, mo
             )
             session.add(WebhookStatusEvent(reason="signature_valid", occurred_at=T0))
         command.downgrade(config, "20261025_0019")
-        # Tables of later migrations (0022, 0023, 0024) do not exist at the 0019 target.
+        # Tables of later migrations (0022, 0023, 0024, a001, 0026, 0027) do not exist at 0019.
         newer = {
+            "derived_day_pending",
             "display_preferences",
             garmin.STATE,
+            garmin.NORMALIZATION_STATE,
+            *oauth_credentials.TABLES,
             *raw_rejections.TABLES,
             *garmin.TABLES,
             *apple.TABLES,
             apple.IMPORTS,
             apple.SOURCES,
         }
-        # 0023's and 0024's guards are expected at head only; verify names them missing at 0019.
+        # Later tables' guards are expected at head only; verify names them missing at 0019.
         later = {
-            name: sql
-            for module in (raw_rejections, garmin, apple)
-            for name, (_, sql) in module.SQLITE_TRIGGER_SQL.items()
+            name: (table, sql)
+            for module in (raw_rejections, garmin, oauth_credentials, apple)
+            for name, (table, sql) in sqlite_guards.definitions(module.GUARDS).items()
         }
         at_0019 = [
-            f"protective trigger missing: {table}.{name}"
-            for module in (raw_rejections, garmin, apple)
-            for name, (table, _) in module.SQLITE_TRIGGER_SQL.items()
+            f"protective trigger missing: {table}.{name}" for name, (table, _) in later.items()
         ]
         async with sessions() as session:
             archive = await snapshot(session, newer)
@@ -136,13 +154,13 @@ async def test_upgrade_and_downgrade_preserve_all_existing_triggers(tmp_path, mo
                 command.upgrade(config, revision)
             async with sessions() as session:
                 assert await snapshot(session, newer) == archive
-                assert await verify_guards(session) == (
+                assert sorted(await verify_guards(session)) == sorted(
                     at_0019 if revision == "20261025_0019" else []
                 )
             with engine.connect() as connection:
                 stored = connection.execute(triggers).all()
             if revision == "head":
-                assert sorted(stored) == sorted([*legacy, *later.items()])
+                assert sorted(stored) == sorted([*legacy, *((n, s) for n, (_, s) in later.items())])
                 assert [row for row in stored if row[0] not in later] == legacy
             else:
                 assert stored == legacy

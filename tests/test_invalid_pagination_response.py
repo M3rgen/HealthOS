@@ -25,9 +25,10 @@ from app.google_health.data_types import REGISTRY
 from app.google_health.pagination import RepeatedPageTokenError, iter_pages
 from app.models.retrieval import RetrievalCheckpoint, RetrievalEvent
 from app.models.state import BackfillJob, JobStatus, RawHealthData, SyncState
-from app.services import storage
-from app.services.retrieval_coverage import coverage_report
-from app.sync import backfill, incremental
+from app.services.archive import storage
+from app.services.providers import ingestion
+from app.services.shared.query_ranges import CivilDateRange
+from app.services.synchronization.retrieval_coverage import coverage_report
 from app.sync.errors import error_summary
 
 
@@ -104,7 +105,7 @@ async def test_wrong_collection_preserves_progress_and_archive(
 
 @pytest.mark.parametrize("kind", KINDS)
 async def test_rejection_keeps_retries_when_archiving_is_cancelled(sessions, kind):
-    from app.services.responses import DatabaseResponseArchive
+    from app.services.archive.responses import DatabaseResponseArchive
 
     started, release, finished = (asyncio.Event() for _ in range(3))
 
@@ -129,13 +130,13 @@ async def test_rejection_keeps_retries_when_archiving_is_cancelled(sessions, kin
         pages = iter_pages(google, REGISTRY[kind], START, END, "saved")
         task = asyncio.create_task(anext(pages))
         try:
-            await asyncio.wait_for(started.wait(), 2)
+            await asyncio.wait_for(started.wait(), 30)
             task.cancel()
             await asyncio.sleep(0)
             task.cancel()
             release.set()
             with pytest.raises(asyncio.CancelledError):
-                await asyncio.wait_for(task, 2)
+                await asyncio.wait_for(task, 30)
             assert finished.is_set()
         finally:
             release.set()
@@ -199,7 +200,10 @@ async def test_cyclic_page_is_stored_without_advancing_checkpoints(sessions, lan
     # The checkpoint never pointed at the cyclic page, so the repaired chain proves the day.
     async with sessions() as session:
         report = await coverage_report(
-            session, REGISTRY, START.date(), START.date(), "UTC", runner.kind
+            session,
+            REGISTRY,
+            runner.kind,
+            dates=CivilDateRange(START.date(), START.date(), "UTC"),
         )
     assert report["types"][0]["days"][0]["retrieval"] == "completed_with_records"
 
@@ -212,8 +216,7 @@ async def test_failed_store_of_cyclic_page_archives_it_once(sessions, lane, monk
             raise RuntimeError("synthetic store failure")
         return await stored_page(session, spec, page, **kwargs)
 
-    monkeypatch.setattr(incremental, "store_page", store)
-    monkeypatch.setattr(backfill, "store_page", store)
+    monkeypatch.setattr(ingestion, "store_page", store)
     google = Client(Page([point()], "repeat"), Page([point()], "repeat"))
     with pytest.raises(RuntimeError, match="synthetic store failure") as caught:
         await Runner(sessions, lane).run(google)

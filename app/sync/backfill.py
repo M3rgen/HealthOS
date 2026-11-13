@@ -5,22 +5,28 @@ import logging
 from contextlib import nullcontext
 from datetime import UTC, datetime, time, timedelta
 from typing import Any, cast
+from uuid import UUID
 
 from sqlalchemy import CursorResult, case, func, select, update
-from sqlalchemy.ext.asyncio import async_sessionmaker
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.config import Settings
-from app.core.logging import event
+from app.core.logging import error_diagnostics, event
 from app.core.provenance import provenance
 from app.core.timeutil import as_utc
-from app.google_health.client import GoogleHealthClient
+from app.db.contracts import TransactionSessions
+from app.db.dialect import for_bind
+from app.google_health.client import Page
 from app.google_health.data_types import DataTypeSpec
-from app.google_health.pagination import PageBudget, PaginationPaused, iter_pages
+from app.google_health.fetch_window import FetchWindow
+from app.google_health.pagination import PageBudget, PaginationPaused
 from app.models.state import BackfillJob, JobStatus, fetch_round_start
-from app.services.retrieval import ReceiptWriter
-from app.services.storage import store_page
-from app.sync.errors import error_summary
+from app.services.providers.ingestion import PageSource
+from app.services.synchronization.retrieval import ReceiptWriter
+from app.sync.errors import error_code, error_summary
 from app.sync.ownership import OwnershipLost, run_ownership
+from app.sync.page_cycle import PageCycle
+from app.sync.rounds import FetchTiming
 
 logger = logging.getLogger(__name__)
 
@@ -46,15 +52,21 @@ class BackfillService:
         self,
         settings: Settings,
         sessions: async_sessionmaker,
-        client: GoogleHealthClient,
+        source: PageSource,
         specs: dict[str, DataTypeSpec],
     ):
         self.settings = settings
         self.sessions = sessions
-        self.client = client
+        self.source = source
         self.specs = specs
 
-    async def _ensure_jobs(self, data_type, end, configured_start, sessions) -> int:
+    async def _ensure_jobs(
+        self,
+        data_type: str,
+        end: datetime,
+        configured_start: datetime,
+        sessions: TransactionSessions,
+    ) -> int:
         """Read boundaries only after acquiring this type; never reacquire ownership."""
         created = 0
         async with sessions.begin() as session:
@@ -136,7 +148,8 @@ class BackfillService:
         reset = 0
         for data_type in selected:
             async with run_ownership(self.sessions, data_type) as sessions:
-                assert sessions is not None
+                if sessions is None:
+                    raise OwnershipLost("sync run ownership was not acquired")
                 async with sessions.begin() as session:
                     result = await session.execute(
                         update(BackfillJob)
@@ -162,33 +175,48 @@ class BackfillService:
             if data_type not in self.specs:
                 raise ValueError(f"Unsupported data type: {data_type}")
         bind = self.sessions.kw.get("bind")
-        concurrency = (
-            self.settings.sync_concurrency
-            if bind is not None and bind.dialect.name == "postgresql"
-            else 1
+        slots = asyncio.Semaphore(for_bind(bind).concurrency(self.settings.sync_concurrency))
+        # Waiting for an owner never holds a concurrency slot.
+        setup = for_bind(bind).setup_scope(slots)
+        return sum(
+            await asyncio.gather(*(self._run_type(name, end, slots, setup) for name in selected))
         )
-        slots = asyncio.Semaphore(concurrency)
-        return sum(await asyncio.gather(*(self._run_type(name, end, slots) for name in selected)))
 
     async def _run_type(
-        self, data_type: str, end: datetime | None = None, slots: asyncio.Semaphore | None = None
+        self,
+        data_type: str,
+        end: datetime | None = None,
+        slots: asyncio.Semaphore | None = None,
+        setup: asyncio.Semaphore | None = None,
     ) -> int:
         configured_start = datetime.combine(self.settings.backfill_start_date, time.min, tzinfo=UTC)
         async with run_ownership(self.sessions, data_type) as sessions:
-            assert sessions is not None
-            await self._ensure_jobs(data_type, end or datetime.now(UTC), configured_start, sessions)
+            if sessions is None:
+                raise OwnershipLost("sync run ownership was not acquired")
+            async with setup or nullcontext():
+                await self._ensure_jobs(
+                    data_type, end or datetime.now(UTC), configured_start, sessions
+                )
         completed = 0
         budget = PageBudget()
         # A spent budget ends the invocation before another window is selected.
         while budget.remaining > 0:
             try:
-                outcome = await self._run_next_window(data_type, budget, slots)
+                outcome = await self._run_next_window(data_type, budget, slots, setup)
             except PaginationPaused:
                 return completed
-            except Exception:
-                logger.exception(
+            except Exception as exc:
+                # A failed page write's error quotes the raw record (SQL parameters, the
+                # database's DETAIL): only value-free diagnostics, never exc_info.
+                logger.error(
                     "Backfill data type paused after a failed window",
-                    extra={"event": "BACKFILL_WINDOW_FAILED", "data_type": data_type},
+                    extra={
+                        "event": "BACKFILL_WINDOW_FAILED",
+                        "data_type": data_type,
+                        "error_type": type(exc).__name__,
+                        "error_code": error_code(exc),
+                        **error_diagnostics(exc, frames=True),
+                    },
                 )
                 return completed
             if outcome is None:
@@ -197,7 +225,11 @@ class BackfillService:
         return completed
 
     async def _run_next_window(
-        self, data_type: str, budget: PageBudget, slots: asyncio.Semaphore | None = None
+        self,
+        data_type: str,
+        budget: PageBudget,
+        slots: asyncio.Semaphore | None = None,
+        setup: asyncio.Semaphore | None = None,
     ) -> bool | None:
         """Select and fetch one window under ownership; None when none is runnable.
 
@@ -207,29 +239,40 @@ class BackfillService:
         only once the type is owned, so waiting for a busy type never idles another.
         """
         async with run_ownership(self.sessions, data_type) as sessions:
-            assert sessions is not None
-            async with sessions.begin() as session:
-                job_id = await session.scalar(
-                    select(BackfillJob.id)
-                    .where(
-                        BackfillJob.data_type == data_type,
-                        BackfillJob.status.in_(RUNNABLE_STATUSES),
+            if sessions is None:
+                raise OwnershipLost("sync run ownership was not acquired")
+            async with setup or nullcontext():
+                async with sessions.begin() as session:
+                    job_id = await session.scalar(
+                        select(BackfillJob.id)
+                        .where(
+                            BackfillJob.data_type == data_type,
+                            BackfillJob.status.in_(RUNNABLE_STATUSES),
+                        )
+                        .order_by(
+                            case(
+                                (BackfillJob.retry_count >= DEPRIORITIZE_AFTER_RETRIES, 1),
+                                else_=0,
+                            ),
+                            BackfillJob.window_start.desc(),
+                        )
+                        .limit(1)
                     )
-                    .order_by(
-                        case(
-                            (BackfillJob.retry_count >= DEPRIORITIZE_AFTER_RETRIES, 1),
-                            else_=0,
-                        ),
-                        BackfillJob.window_start.desc(),
-                    )
-                    .limit(1)
-                )
             if job_id is None:
                 return None
             async with slots or nullcontext():
                 return await self._run_owned_job(job_id, sessions, budget)
 
-    async def _run_owned_job(self, job_id, sessions, budget: PageBudget | None = None) -> bool:
+    @staticmethod
+    async def _checkpoint_page(session: AsyncSession, job_id: UUID, page: Page) -> None:
+        job = await _required_job(session, job_id)
+        if not page.cyclic:  # A repeated token is never a resume point.
+            job.page_token = page.next_page_token
+        job.records_downloaded += len(page.data_points)
+
+    async def _run_owned_job(
+        self, job_id: UUID, sessions: TransactionSessions, budget: PageBudget | None = None
+    ) -> bool:
         async with sessions.begin() as session:
             job = await session.get(BackfillJob, job_id)
             if job is None or job.status not in RUNNABLE_STATUSES:
@@ -250,12 +293,14 @@ class BackfillService:
             spec = self.specs[job.data_type]
             start, end, token = job.window_start, job.window_end, job.page_token
         event(logger, "BACKFILL_WINDOW_STARTED", data_type=spec.name, window_start=str(start))
-        receipt = ReceiptWriter(sessions, spec, start, end, "backfill", str(job_id), token)
+        receipt = ReceiptWriter(
+            sessions,
+            spec,
+            "backfill",
+            str(job_id),
+            window=FetchWindow(start, end, token),
+        )
         began = False
-
-        async def restart() -> None:
-            nonlocal run_started
-            run_started = await receipt.reset()
 
         try:
             # Inside the try: a failed receipt insert is a failed attempt too, so the job
@@ -263,27 +308,17 @@ class BackfillService:
             await receipt.begin()
             began = True
             with provenance(source="backfill", context_id=f"backfill:{job_id}"):
-                async for page in iter_pages(
-                    self.client, spec, start, end, token, on_reset=restart, budget=budget
-                ):
-                    try:
-                        async with sessions.begin() as session:
-                            await store_page(
-                                session, spec, page, source="backfill", fetch_started=run_started
-                            )
-                            job = await session.get(BackfillJob, job_id)
-                            if not page.cyclic:  # A repeated token is never a resume point.
-                                job.page_token = page.next_page_token
-                            job.records_downloaded += len(page.data_points)
-                            await receipt.page(session, page)
-                        receipt.committed(page)
-                    except BaseException as failure:
-                        receipt.received = page
-                        # Also on cancellation: what Google sent is kept.
-                        await self.client.keep_after(page.responses, failure)
-                        raise
+                timing = FetchTiming(run_started, None)
+
+                async def checkpoint(session: AsyncSession, page: Page) -> None:
+                    await self._checkpoint_page(session, job_id, page)
+
+                await PageCycle(self.source, spec, receipt, timing, budget).run(
+                    FetchWindow(start, end, token), checkpoint
+                )
+                await self.source.normalize(FetchWindow(start, end))
             async with sessions.begin() as session:
-                job = await session.get(BackfillJob, job_id)
+                job = await _required_job(session, job_id)
                 job.status = JobStatus.completed
                 job.completed_at = datetime.now(UTC)
                 job.page_token = None
@@ -293,7 +328,7 @@ class BackfillService:
             # Keep the page pointer, fetch start and all committed evidence. A full
             # budget is normal progress and must never count toward abandonment.
             async with sessions.begin() as session:
-                job = await session.get(BackfillJob, job_id)
+                job = await _required_job(session, job_id)
                 job.status = JobStatus.pending
                 job.last_error = None
             event(logger, "BACKFILL_WINDOW_PAUSED", data_type=spec.name, window_start=str(start))
@@ -303,26 +338,44 @@ class BackfillService:
                 await receipt.failure(exc)
             if not isinstance(exc, Exception):
                 raise
-            try:
-                async with sessions.begin() as session:
-                    job = await session.get(BackfillJob, job_id)
-                    job.retry_count += 1
-                    abandoned = job.retry_count >= ABANDON_AFTER_RETRIES
-                    job.status = JobStatus.abandoned if abandoned else JobStatus.failed
-                    job.last_error = error_summary(exc)
-                    retries = job.retry_count
-            except OwnershipLost:
-                # The replacement may already have completed this job. Never use the
-                # application pool to write an outcome after losing this connection.
-                raise exc from None
-            if abandoned:
-                event(
-                    logger,
-                    "BACKFILL_WINDOW_ABANDONED",
-                    data_type=spec.name,
-                    window_start=str(start),
-                    retry_count=retries,
-                    error_type=type(exc).__name__,
-                )
+            await self._fail_owned_job(job_id, sessions, exc, spec, start)
             raise
         return True
+
+    async def _fail_owned_job(
+        self,
+        job_id: UUID,
+        sessions: TransactionSessions,
+        exc: Exception,
+        spec: DataTypeSpec,
+        start: datetime,
+    ) -> None:
+        try:
+            async with sessions.begin() as session:
+                job = await _required_job(session, job_id)
+                job.retry_count += 1
+                abandoned = job.retry_count >= ABANDON_AFTER_RETRIES
+                job.status = JobStatus.abandoned if abandoned else JobStatus.failed
+                job.last_error = error_summary(exc)
+                retries = job.retry_count
+        except OwnershipLost:
+            # The replacement may already have completed this job. Never use the
+            # application pool to write an outcome after losing this connection.
+            raise exc from None
+        if abandoned:
+            event(
+                logger,
+                "BACKFILL_WINDOW_ABANDONED",
+                data_type=spec.name,
+                window_start=str(start),
+                retry_count=retries,
+                error_type=type(exc).__name__,
+            )
+
+
+async def _required_job(session: AsyncSession, job_id: UUID) -> BackfillJob:
+    """The owning run created this job and no archive operation deletes it."""
+    job = await session.get(BackfillJob, job_id)
+    if job is None:
+        raise RuntimeError("Backfill job is missing")
+    return job

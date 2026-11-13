@@ -8,131 +8,317 @@
   <link id="favicon-small" rel="icon" type="image/png" sizes="16x16" href="/assets/presets/logo/yurt/favicon-16.png" />
   <link id="favicon-fallback" rel="icon" href="/assets/presets/logo/yurt/favicon.ico" sizes="any" />
   <link id="apple-touch" rel="apple-touch-icon" href="/assets/presets/logo/yurt/apple-touch-icon.png" />
-  <title>HealthOS · Kişisel sağlık paneli</title>
+  <title>{{i18n:document.title}}</title>
 </head>
 <body>
+  <a class="skip-link" href="#main-content" data-i18n="common.skipToContent">{{i18n:common.skipToContent}}</a>
   <header class="topbar">
-    <a class="brand" href="/" aria-label="HealthOS ana sayfa">
+    <a class="brand" href="/" aria-label="{{i18n:topbar.healthosAnaSayfa.label}}" data-i18n-aria-label="topbar.healthosAnaSayfa.label">
       <svg class="brand-mark brand-mark-art" data-preset="yurt" viewBox="0 0 48 48" fill="none" aria-hidden="true"><g fill="none" stroke="#f0c478" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="24" cy="10.5" rx="5.5" ry="2.5"/><path d="M18.7 11.7L5 25Q24 27.5 43 25L29.3 11.7M8 25.4V38Q24 41 40 38V25.4M19.5 13L12 25.7M24 13V26.2M28.5 13L36 25.7M9 28L18 38.5M18 28L9 38M30 28L39 38M39 28L30 38.5"/><path d="M21.5 39V33a2.5 2.5 0 0 1 5 0V39Z" fill="#48f8b0" stroke="none"/></g></svg>
       <span class="brand-wordmark">Health<span class="brand-os">OS</span></span>
     </a>
-    <nav aria-label="Ana menü">
-      <button class="nav-button active" data-page="overview" aria-current="page">Genel bakış</button>
-      <button class="nav-button" data-page="measurements">Ölçümler</button>
-      <button class="nav-button" data-page="system">Sistem</button>
-      <button class="nav-button" data-page="sports">Spor</button>
+    <nav aria-label="{{i18n:topbar.anaMenu.label}}" data-i18n-aria-label="topbar.anaMenu.label">
+      <button class="nav-button active" data-page="overview" aria-current="page" data-i18n="topbar.genelBakis">{{i18n:topbar.genelBakis}}</button>
+      <button class="nav-button" data-page="measurements" data-i18n="topbar.olcumler">{{i18n:topbar.olcumler}}</button>
+      <button class="nav-button" data-page="system" data-i18n="topbar.sistem">{{i18n:topbar.sistem}}</button>
+      <button class="nav-button" data-page="sports" data-i18n="topbar.spor">{{i18n:topbar.spor}}</button>
     </nav>
-    <div class="header-meta"><button type="button" id="header-date" popovertarget="date-calendar" aria-label="Tarih seç" aria-controls="date-calendar" aria-expanded="false"><span class="button-icon" data-icon="calendar"></span><span id="header-date-text"></span></button></div>
+    <div class="header-meta"><button type="button" id="header-date" popovertarget="date-calendar" aria-label="{{i18n:topbar.header-date.label}}" aria-controls="date-calendar" aria-expanded="false" data-i18n-aria-label="topbar.header-date.label"><span class="button-icon" data-icon="calendar"></span><span id="header-date-text"></span><span id="header-date-short"></span></button></div>
   </header>
-  <section id="date-calendar" popover="auto" aria-label="Tarih seçimi">
-    <div class="calendar-heading"><p id="calendar-selected"></p><button type="button" class="calendar-control" popovertarget="date-calendar" popovertargetaction="hide" aria-label="Takvimi kapat"><span data-icon="chevron-down"></span></button></div>
+  <section id="date-calendar" popover="auto" aria-label="{{i18n:calendar.date-calendar.label}}" data-i18n-aria-label="calendar.date-calendar.label">
+    <div class="calendar-heading"><p id="calendar-selected"></p><button type="button" class="calendar-control" popovertarget="date-calendar" popovertargetaction="hide" aria-label="{{i18n:calendar.takvimiKapat.label}}" data-i18n-aria-label="calendar.takvimiKapat.label"><span data-icon="chevron-down"></span></button></div>
     <div class="calendar-body">
-      <div class="calendar-month-row"><h2 id="calendar-month" aria-live="polite"></h2><div class="calendar-month-controls"><button type="button" class="calendar-control" id="calendar-prev" aria-label="Önceki ay"><span data-icon="chevron-up"></span></button><button type="button" class="calendar-control" id="calendar-next" aria-label="Sonraki ay"><span data-icon="chevron-down"></span></button></div></div>
-      <div class="calendar-weekdays" aria-hidden="true"><span>Pt</span><span>Sa</span><span>Ça</span><span>Pe</span><span>Cu</span><span>Ct</span><span>Pa</span></div>
-      <div id="calendar-days" role="group" aria-label="Günler"></div>
+      <div class="calendar-month-row">
+        <h2 id="calendar-month" aria-live="polite"></h2>
+        <div class="calendar-month-controls"><button type="button" class="calendar-control" id="calendar-prev" aria-label="{{i18n:calendar.calendar-prev.label}}" data-i18n-aria-label="calendar.calendar-prev.label"><span data-icon="chevron-up"></span></button><button type="button" class="calendar-control" id="calendar-next" aria-label="{{i18n:calendar.calendar-next.label}}" data-i18n-aria-label="calendar.calendar-next.label"><span data-icon="chevron-down"></span></button></div>
+      </div>
+      <div class="calendar-weekdays" aria-hidden="true"><span data-i18n="calendar.pt">{{i18n:calendar.pt}}</span><span data-i18n="calendar.sa">{{i18n:calendar.sa}}</span><span data-i18n="calendar.ca">{{i18n:calendar.ca}}</span><span data-i18n="calendar.pe">{{i18n:calendar.pe}}</span><span data-i18n="calendar.cu">{{i18n:calendar.cu}}</span><span data-i18n="calendar.ct">{{i18n:calendar.ct}}</span><span data-i18n="calendar.pa">{{i18n:calendar.pa}}</span></div>
+      <div id="calendar-days" role="group" aria-label="{{i18n:calendar.calendar-days.label}}" data-i18n-aria-label="calendar.calendar-days.label"></div>
     </div>
-    <div class="calendar-footer"><button type="button" id="calendar-today">Bugüne dön</button></div>
+    <div class="calendar-footer"><button type="button" id="calendar-today" data-i18n="calendar.calendar-today">{{i18n:calendar.calendar-today}}</button></div>
   </section>
-  <main>
-    <div id="notice" class="notice" tabindex="0" aria-label="Durum mesajı" role="status" aria-live="polite" hidden></div>
+  <main id="main-content" tabindex="-1">
+    <div id="login-disabled-warning" role="status" hidden data-i18n="overview.girisKapali">{{i18n:overview.girisKapali}}</div>
+    <div id="sample-banner" class="sample-banner" hidden><span id="sample-banner-text" role="status"></span><button type="button" class="text-link" id="sample-remove"></button></div>
+    <div id="notice" class="notice" hidden><div id="notice-text" class="notice-text" data-scroll-focus role="status" aria-live="polite"></div><button type="button" id="notice-close" class="notice-close"><span data-icon="close"></span></button></div>
+    <div id="overview-state" class="page-state" role="status" hidden>
+      <span class="empty-illustration" aria-hidden="true"></span>
+      <div class="page-state-text"><strong id="overview-state-title"></strong><p id="overview-state-detail"></p></div>
+      <button type="button" class="button outline" id="overview-state-action" hidden></button>
+      <button type="button" class="button outline" id="overview-state-sample" hidden></button>
+    </div>
     <section id="overview" class="page">
-      <div class="overview-grid" tabindex="0" role="region" aria-label="Profil ve günlük sağlık özeti">
+      <h1 class="sr-only" data-i18n="overview.pageTitle">{{i18n:overview.pageTitle}}</h1>
+      <div class="overview-grid" role="region" aria-label="{{i18n:overview.profilVeGunlukSaglik.label}}" data-i18n-aria-label="overview.profilVeGunlukSaglik.label">
         <section class="panel profile-panel" aria-labelledby="profile-title">
-          <div class="body-column"><h1 id="profile-title">PROFİL</h1><div id="body-model" role="img" aria-label="Temsili üç boyutlu beden modeli"><div class="model-fallback model-loading" aria-hidden="true"><svg viewBox="0 0 120 280" aria-hidden="true"><path fill="#8d8b85" d="M60 6c-10 0-17 8-17 20 0 10 4 18 8 22l-2 10c-14 3-23 11-26 26l-9 58-1 29c0 7 5 9 7 3l4-26 10-40 5 43-6 76-1 34-7 8c-3 4 0 7 7 7h10l8-9 3-38 7-45 7 45 3 38 8 9h10c7 0 10-3 7-7l-7-8-1-34-6-76 5-43 10 40 4 26c2 6 7 4 7-3l-1-29-9-58c-3-15-12-23-26-26l-2-10c4-4 8-12 8-22 0-12-7-20-17-20Z"/></svg></div></div></div>
-          <div class="profile-values"><div id="profile-values" aria-live="polite"></div><button class="button outline" id="add-measurement"><span class="button-icon amber-icon" data-icon="plus"></span> <span>Ölçüm ekle</span></button></div>
+          <div class="body-column">
+            <h2 id="profile-title" data-i18n="overview.profile-title">{{i18n:overview.profile-title}}</h2>
+            <div id="body-model" role="img" aria-label="{{i18n:overview.body-model.label}}" data-i18n-aria-label="overview.body-model.label">
+              <div class="model-fallback model-loading" aria-hidden="true"><svg viewBox="0 0 120 280" aria-hidden="true"><path fill="#8d8b85" d="M60 6c-10 0-17 8-17 20 0 10 4 18 8 22l-2 10c-14 3-23 11-26 26l-9 58-1 29c0 7 5 9 7 3l4-26 10-40 5 43-6 76-1 34-7 8c-3 4 0 7 7 7h10l8-9 3-38 7-45 7 45 3 38 8 9h10c7 0 10-3 7-7l-7-8-1-34-6-76 5-43 10 40 4 26c2 6 7 4 7-3l-1-29-9-58c-3-15-12-23-26-26l-2-10c4-4 8-12 8-22 0-12-7-20-17-20Z"/></svg></div>
+            </div>
+          </div>
+          <div class="profile-values"><div id="profile-values" aria-live="polite"></div><button class="button outline" id="add-measurement"><span class="button-icon amber-icon" data-icon="plus"></span> <span data-i18n="overview.olcumEkle">{{i18n:overview.olcumEkle}}</span></button></div>
         </section>
         <div class="right-column">
           <section class="panel connection" aria-labelledby="connection-title">
-            <div class="panel-heading"><h2 id="connection-title">Veri bağlantısı</h2><span id="service-status" class="status-text">Kontrol ediliyor</span></div>
-            <dl class="connection-times"><div><dt>Son başarılı eşitleme</dt><dd id="last-sync">—</dd></div><div><dt>Son nabız ölçümü</dt><dd id="last-heart">—</dd></div><div><dt>Son adım verisi</dt><dd id="last-steps">—</dd></div></dl>
-            <div class="service-row"><span>Veritabanı: <b id="database-state">—</b></span><span>Zamanlayıcı: <b id="scheduler-state">—</b></span></div>
-            <div id="webhook-info" class="webhook-note">Bildirim durumu kontrol ediliyor.</div>
-            <div class="connection-footer"><span id="queue-state">—</span><button class="button primary" id="sync-button"><span class="button-icon" data-icon="sync"></span> <span>Şimdi eşitle</span></button></div>
+            <div class="panel-heading"><h2 id="connection-title" data-i18n="overview.connection-title">{{i18n:overview.connection-title}}</h2><span id="service-status" class="status-text" data-i18n="overview.service-status">{{i18n:overview.service-status}}</span></div>
+            <dl class="connection-times">
+              <div>
+                <dt data-i18n="overview.sonBasariliEsitleme">{{i18n:overview.sonBasariliEsitleme}}</dt>
+                <dd id="last-sync">—</dd>
+              </div>
+              <div>
+                <dt data-i18n="overview.sonNabizOlcumu">{{i18n:overview.sonNabizOlcumu}}</dt>
+                <dd id="last-heart">—</dd>
+              </div>
+              <div>
+                <dt data-i18n="overview.sonAdimVerisi">{{i18n:overview.sonAdimVerisi}}</dt>
+                <dd id="last-steps">—</dd>
+              </div>
+            </dl>
+            <div class="service-row"><span data-i18n="overview.veritabani">{{i18n:overview.veritabani}} <b id="database-state">—</b></span><span data-i18n="overview.zamanlayici">{{i18n:overview.zamanlayici}} <b id="scheduler-state">—</b></span></div>
+            <div id="webhook-info" class="webhook-note" data-i18n="overview.webhook-info">{{i18n:overview.webhook-info}}</div>
+            <div class="connection-footer"><span id="queue-state">—</span><button class="button primary" id="sync-button"><span class="button-icon" data-icon="sync"></span> <span data-i18n="overview.simdiEsitle">{{i18n:overview.simdiEsitle}}</span></button></div>
           </section>
           <div class="metric-cards">
-            <section class="panel metric-card steps-card"><div class="metric-top"><span class="metric-icon" data-icon="steps"></span><div><h3 id="steps-label">Bugünkü adım</h3><strong id="steps-value">—</strong></div></div><p id="steps-note" class="metric-note">Yükleniyor</p><div id="steps-chart" class="chart" role="img" aria-label="Saatlik adım grafiği"></div><div class="chart-axis"><span>00:00</span><span class="axis-mid">12:00</span><span>24:00</span></div><button type="button" class="metric-open" data-history-metric="steps" aria-haspopup="dialog" aria-label="Adım geçmişini aç" aria-describedby="steps-value steps-note"></button></section>
-            <section class="panel metric-card sleep-card"><div class="metric-top"><span class="metric-icon" data-icon="sleep"></span><div><h3 id="sleep-label">Dün geceki uyku</h3><strong id="sleep-value">—</strong></div></div><p id="sleep-note" class="metric-note">Uyandığın güne göre</p><div id="sleep-chart" class="chart" role="img" aria-label="Günlük uyku süresi grafiği"></div><div class="chart-axis"><span>Günlük süre</span><span id="sleep-axis">Son 7 gün</span></div><button type="button" class="metric-open" data-history-metric="sleep" aria-haspopup="dialog" aria-label="Uyku geçmişini aç" aria-describedby="sleep-value sleep-note"></button></section>
-            <section class="panel metric-card heart-card"><div class="metric-top"><span class="metric-icon" data-icon="heart"></span><div><h3>Dinlenme nabzı</h3><strong id="heart-value">—</strong></div></div><p id="heart-note" class="metric-note">Saatin günlük özetinden</p><div id="heart-chart" class="chart" role="img" aria-label="Saatlik ortalama nabız grafiği"></div><div class="chart-axis"><span>Saatlik ortalama</span><span>bpm</span></div><button type="button" class="metric-open" data-history-metric="heart" aria-haspopup="dialog" aria-label="Nabız geçmişini aç" aria-describedby="heart-value heart-note"></button></section>
+            <section class="panel metric-card steps-card"><div class="metric-top"><span class="metric-icon" data-icon="steps"></span><div><h2 id="steps-label" data-i18n="overview.steps-label">{{i18n:overview.steps-label}}</h2><strong id="steps-value">—</strong></div></div><p id="steps-note" class="metric-note" data-i18n="overview.steps-note">{{i18n:overview.steps-note}}</p><div id="steps-chart" class="chart" role="img" aria-label="{{i18n:overview.steps-chart.label}}" data-i18n-aria-label="overview.steps-chart.label"></div><div class="chart-axis"><span>00:00</span><span class="axis-mid">12:00</span><span>24:00</span></div><button type="button" class="metric-open" data-history-metric="steps" aria-haspopup="dialog" aria-label="{{i18n:overview.adimGecmisiniAc.label}}" aria-describedby="steps-value steps-note" data-i18n-aria-label="overview.adimGecmisiniAc.label"></button></section>
+            <section class="panel metric-card sleep-card"><div class="metric-top"><span class="metric-icon" data-icon="sleep"></span><div><h2 id="sleep-label" data-i18n="overview.sleep-label">{{i18n:overview.sleep-label}}</h2><strong id="sleep-value">—</strong></div></div><p id="sleep-note" class="metric-note" data-i18n="overview.sleep-note">{{i18n:overview.sleep-note}}</p><div id="sleep-chart" class="chart" role="img" aria-label="{{i18n:overview.sleep-chart.label}}" data-i18n-aria-label="overview.sleep-chart.label"></div><div class="chart-axis"><span data-i18n="overview.gunlukSure">{{i18n:overview.gunlukSure}}</span><span id="sleep-axis" data-i18n="overview.sleep-axis">{{i18n:overview.sleep-axis}}</span></div><button type="button" class="metric-open" data-history-metric="sleep" aria-haspopup="dialog" aria-label="{{i18n:overview.uykuGecmisiniAc.label}}" aria-describedby="sleep-value sleep-note" data-i18n-aria-label="overview.uykuGecmisiniAc.label"></button></section>
+            <section class="panel metric-card heart-card"><div class="metric-top"><span class="metric-icon" data-icon="heart"></span><div><h2 data-i18n="overview.dinlenmeNabzi">{{i18n:overview.dinlenmeNabzi}}</h2><strong id="heart-value">—</strong></div></div><p id="heart-note" class="metric-note" data-i18n="overview.heart-note">{{i18n:overview.heart-note}}</p><div id="heart-chart" class="chart" role="img" aria-label="{{i18n:overview.heart-chart.label}}" data-i18n-aria-label="overview.heart-chart.label"></div><div class="chart-axis"><span data-i18n="overview.saatlikOrtalama">{{i18n:overview.saatlikOrtalama}}</span><span data-i18n="overview.atimDk">{{i18n:overview.atimDk}}</span></div><button type="button" class="metric-open" data-history-metric="heart" aria-haspopup="dialog" aria-label="{{i18n:overview.nabizGecmisiniAc.label}}" aria-describedby="heart-value heart-note" data-i18n-aria-label="overview.nabizGecmisiniAc.label"></button></section>
           </div>
         </div>
       </div>
       <section id="history-panel" class="panel history" aria-labelledby="history-title">
-        <button type="button" id="history-toggle" class="history-handle" aria-label="Aylık görünümü aç" aria-expanded="false" aria-controls="history-table"><span class="drag-grip" aria-hidden="true"></span></button>
-        <div class="history-heading"><div><h2 id="history-title">Son 7 gün</h2><p id="range-caption">Yükleniyor</p></div><div class="history-actions"><a class="button outline" id="export-button" href="/api/dashboard/export.csv?days=7" download><span class="button-icon" data-icon="download"></span> <span>CSV indir</span></a></div></div>
-        <p id="history-status" tabindex="0" aria-label="Geçmiş durumu" role="status" hidden></p><div id="history-table" class="table-scroll" tabindex="0" role="region" aria-label="Günlük sağlık kayıtları"><table><caption class="sr-only">Günlük sağlık kayıtları</caption><thead><tr><th scope="col">Tarih</th><th scope="col"><span class="th-icon steps-icon" data-icon="steps"></span>Adım</th><th scope="col"><span class="th-icon sleep-icon" data-icon="sleep"></span>Uyku</th><th scope="col"><span class="th-icon heart-icon" data-icon="heart"></span>Dinlenme nabzı</th><th scope="col"><span class="th-icon" data-icon="hrv"></span>HRV</th><th scope="col"><span class="th-icon" data-icon="spo2"></span>SpO₂</th><th scope="col">Durum</th></tr></thead><tbody id="history-rows"></tbody></table></div>
-        <footer id="history-months" class="history-months" hidden><label for="history-month">Gösterilen ay</label><input type="month" id="history-month"><button type="button" class="button outline" id="history-current">Bu ay</button></footer>
+        <button type="button" id="history-toggle" class="history-handle" aria-label="{{i18n:overview.history-toggle.label}}" aria-expanded="false" aria-controls="history-table" data-i18n-aria-label="overview.history-toggle.label"><span class="drag-grip" aria-hidden="true"></span></button>
+        <div class="history-heading">
+          <div>
+            <h2 id="history-title" data-i18n="overview.history-title">{{i18n:overview.history-title}}</h2>
+            <p id="range-caption" data-i18n="overview.range-caption">{{i18n:overview.range-caption}}</p>
+          </div>
+          <div class="history-actions"><a class="button outline" id="export-button" href="/api/dashboard/export.csv?days=7" download><span class="button-icon" data-icon="download"></span> <span data-i18n="overview.csvIndir">{{i18n:overview.csvIndir}}</span></a></div>
+        </div>
+        <p id="history-status" data-scroll-focus aria-label="{{i18n:overview.history-status.label}}" role="status" hidden data-i18n-aria-label="overview.history-status.label"></p><div id="history-table" class="table-scroll" data-scroll-focus role="region" aria-label="{{i18n:overview.history-table.label}}" data-i18n-aria-label="overview.history-table.label">
+          <table>
+            <caption class="sr-only" data-i18n="overview.gunlukSaglikKayitlari">{{i18n:overview.gunlukSaglikKayitlari}}</caption>
+            <thead>
+              <tr>
+                <th scope="col" data-i18n="overview.tarih">{{i18n:overview.tarih}}</th>
+                <th scope="col" data-i18n="overview.adim"><span class="th-icon steps-icon" data-icon="steps"></span>{{i18n:overview.adim}}</th>
+                <th scope="col" data-i18n="overview.uyku"><span class="th-icon sleep-icon" data-icon="sleep"></span>{{i18n:overview.uyku}}</th>
+                <th scope="col" data-i18n="overview.dinlenmeNabzi"><span class="th-icon heart-icon" data-icon="heart"></span>{{i18n:overview.dinlenmeNabzi}}</th>
+                <th scope="col" data-i18n="overview.hrv"><span class="th-icon" data-icon="hrv"></span>{{i18n:overview.hrv}}</th>
+                <th scope="col" data-i18n="overview.spo2"><span class="th-icon" data-icon="spo2"></span>{{i18n:overview.spo2}}</th>
+                <th scope="col" data-i18n="overview.durum">{{i18n:overview.durum}}</th>
+              </tr>
+            </thead>
+            <tbody id="history-rows"></tbody>
+          </table>
+        </div>
+        <footer id="history-months" class="history-months" hidden><label for="history-month" data-i18n="overview.gosterilenAy">{{i18n:overview.gosterilenAy}}</label><input type="month" id="history-month"><button type="button" class="button outline" id="history-current" data-i18n="overview.history-current">{{i18n:overview.history-current}}</button></footer>
       </section>
     </section>
-    <section id="measurements" class="page" tabindex="0" role="region" aria-label="Ölçümler" hidden><div class="section-title"><span class="section-icon" data-icon="weight"></span><div><h1>Ölçümler</h1><p>Elle girdiğin ölçümler Google verilerinden ayrı saklanır.</p></div><button class="button primary" id="measurements-add"><span class="button-icon" data-icon="plus"></span> <span>Ölçüm ekle</span></button></div><section class="panel"><div class="table-scroll" tabindex="0" role="region" aria-label="Elle girilen ölçümler"><table><caption class="sr-only">Elle girilen ölçümler</caption><thead><tr><th>Tarih</th><th>Ölçüm</th><th>Değer</th><th>Kaynak</th><th><span class="sr-only">İşaret</span></th></tr></thead><tbody id="measurement-rows"></tbody></table></div></section></section>
-    <section id="system" class="page" tabindex="0" role="region" aria-label="Sistem" hidden><div class="section-title"><span class="section-icon" data-icon="status"></span><div><h1>Sistem</h1><p>Bağlantı ve görünüm tercihleri</p></div><button class="button outline" id="refresh-system"><span class="button-icon" data-icon="sync"></span> <span>Durumu yenile</span></button></div><section class="panel coverage-panel" aria-labelledby="coverage-title"><div class="panel-heading"><h2 id="coverage-title">Google kapsaması</h2><button type="button" class="button outline" id="coverage-open" aria-haspopup="dialog">Ayrıntıları aç</button></div><p id="coverage-period" class="fine-print"></p><p id="coverage-summary" role="status">Kapsama yükleniyor…</p></section><section class="panel webhook-status-panel" aria-labelledby="webhook-title"><div class="panel-heading"><h2 id="webhook-title">Google bildirimleri</h2><button type="button" class="button outline" id="webhook-status-open" aria-haspopup="dialog">Bildirim ayrıntıları</button></div><p id="webhook-status-summary" role="status">Bildirim durumu yükleniyor…</p></section><section class="panel devices-panel" aria-labelledby="devices-title"><div class="panel-heading"><h2 id="devices-title">Cihazlarım</h2><p id="devices-summary" role="status">Cihazlar yükleniyor…</p></div><p id="devices-thresholds" class="fine-print"></p><p id="devices-google-note" class="fine-print" hidden>Google’ın eşleşmiş cihaz bilgisi şu an alınamadı; liste arşivden geliyor.</p><button type="button" class="button outline" id="devices-retry" hidden>Cihazları yeniden al</button><ul id="devices-list" class="devices-list" tabindex="0" role="region" aria-label="Cihazlar" aria-busy="false" hidden></ul></section><section class="panel apple-import-panel" id="apple-import-panel" aria-labelledby="apple-import-title" aria-busy="false"><div class="panel-heading"><h2 id="apple-import-title">Apple Sağlık içe aktar</h2></div><p id="apple-import-help" class="fine-print">iPhone’da Sağlık uygulamasını aç, sağ üstteki profil resmine dokun ve “Tüm sağlık verilerini dışa aktar”ı seç. Oluşan export.zip dosyasını buradan yükle; aynı dosyayı yeniden yüklemek yalnız eksik kayıtları ekler.</p><div class="apple-import-form"><label for="apple-import-file" class="sr-only">Dışa aktarma dosyası (export.zip veya export.xml)</label><input type="file" id="apple-import-file" accept=".zip,.xml,application/zip,application/xml,text/xml" /><button type="button" class="button primary" id="apple-import-start" disabled>Yükle</button></div><progress id="apple-import-progress" class="apple-import-progress" max="100" value="0" aria-label="Yükleme ilerlemesi" hidden></progress><p id="apple-import-status" role="status" aria-live="polite"></p><p id="apple-import-receiver" class="fine-print"></p></section><div class="system-grid"><section class="panel settings-panel"><h2>Görünüm</h2><label class="setting-row" for="timezone">Saat dilimi<select id="timezone"><option value="auto">Cihaz saati</option><option value="Europe/Istanbul">İstanbul</option><option value="UTC">UTC</option></select></label><label class="setting-row" for="model-motion">Beden modeli otomatik dönsün<input type="checkbox" id="model-motion" /></label><div class="setting-row"><span>Logo, Umay ve arka plan</span><button type="button" class="button outline" id="appearance-open" aria-haspopup="dialog"><span class="button-icon" data-icon="brush"></span> <span>Özelleştir</span></button></div><p class="fine-print" id="display-preferences-note" role="status">Saat dilimi ve dönüş tercihi paneli açtığın her cihazda geçerli olur.</p></section><section class="panel settings-panel"><h2>Bağlantı</h2><dl id="system-details" class="system-details"></dl><div id="google-empty" class="empty-state google-empty" hidden><span class="empty-illustration" aria-hidden="true"></span><p>Google bağlantısı tamamlanmadı. Verileri almak için hesabını bağla.</p></div><a href="/auth/google/start" class="button outline">Google hesabını bağla</a><form method="post" action="/logout" class="logout-form"><button type="submit" class="text-link">Çıkış yap</button></form></section></div><section class="panel sync-history"><h2>Veri türleri</h2><p class="fine-print">Eşitleme işlerinin durumu; saatin o anki bağlantısını göstermez.</p><div class="table-scroll" tabindex="0" role="region" aria-label="Eşitleme işlerinin durumu"><table><thead><tr><th>Veri türü</th><th>Son başarılı eşitleme</th><th>Durum</th><th>Kayıt</th></tr></thead><tbody id="sync-rows"></tbody></table></div></section></section>
-    <section id="sports" class="page" tabindex="0" role="region" aria-label="Spor" hidden>
-      <div class="section-title"><span class="section-icon" data-icon="workout"></span><div><h1>Spor</h1><p>Cihazlardan gelen ve elle girilen antrenmanlar</p></div></div>
-      <section class="panel workouts-panel" tabindex="0" aria-labelledby="workouts-title">
-        <div class="history-heading"><div><h2 id="workouts-title">Aylık zaman çizgisi</h2></div><button type="button" id="workout-add" class="button primary"><span class="button-icon" data-icon="plus"></span> <span>Antrenman ekle</span></button></div>
-        <nav class="workout-months" aria-label="Antrenman ayı">
-          <button type="button" id="workout-prev" class="button outline" aria-label="Önceki ay">‹</button>
-          <label class="workout-month-label" for="workout-month"><span class="sr-only">Gösterilen ay</span><input type="month" id="workout-month" aria-controls="workout-timeline"></label>
-          <button type="button" id="workout-next" class="button outline" aria-label="Sonraki ay">›</button>
+    <section id="measurements" class="page" role="region" aria-label="{{i18n:measurements.measurements.label}}" hidden data-i18n-aria-label="measurements.measurements.label">
+      <div class="section-title"><span class="section-icon" data-icon="weight"></span><div>
+          <h1 data-i18n="measurements.olcumler">{{i18n:measurements.olcumler}}</h1>
+          <p data-i18n="measurements.elleGirdiginOlcumlerGoogle">{{i18n:measurements.elleGirdiginOlcumlerGoogle}}</p>
+        </div><button class="button primary" id="measurements-add"><span class="button-icon" data-icon="plus"></span> <span data-i18n="measurements.olcumEkle">{{i18n:measurements.olcumEkle}}</span></button></div>
+      <section class="panel">
+        <div id="measurements-state" class="page-state" role="status" hidden>
+          <span class="empty-illustration" aria-hidden="true"></span>
+          <div class="page-state-text"><strong id="measurements-state-title"></strong><p id="measurements-state-detail"></p></div>
+          <button type="button" class="button outline" id="measurements-state-action" hidden></button>
+        </div>
+        <div class="table-scroll" data-scroll-focus role="region" aria-label="{{i18n:measurements.elleGirilenOlcumler.label}}" data-i18n-aria-label="measurements.elleGirilenOlcumler.label">
+          <table>
+            <caption class="sr-only" data-i18n="measurements.elleGirilenOlcumler">{{i18n:measurements.elleGirilenOlcumler}}</caption>
+            <thead>
+              <tr>
+                <th scope="col" data-i18n="measurements.tarih">{{i18n:measurements.tarih}}</th>
+                <th scope="col" data-i18n="measurements.olcum">{{i18n:measurements.olcum}}</th>
+                <th scope="col" data-i18n="measurements.deger">{{i18n:measurements.deger}}</th>
+                <th scope="col" data-i18n="measurements.kaynak">{{i18n:measurements.kaynak}}</th>
+                <th scope="col"><span class="sr-only" data-i18n="measurements.isaret">{{i18n:measurements.isaret}}</span></th>
+              </tr>
+            </thead>
+            <tbody id="measurement-rows"></tbody>
+          </table>
+        </div>
+      </section>
+    </section>
+    <section id="system" class="page" role="region" aria-label="{{i18n:system.system.label}}" hidden data-i18n-aria-label="system.system.label">
+      <div class="section-title"><span class="section-icon" data-icon="status"></span><div>
+          <h1 data-i18n="system.sistem">{{i18n:system.sistem}}</h1>
+          <p data-i18n="system.baglantiVeGorunumTercihleri">{{i18n:system.baglantiVeGorunumTercihleri}}</p>
+        </div><button class="button outline" id="refresh-system"><span class="button-icon" data-icon="sync"></span> <span data-i18n="system.durumuYenile">{{i18n:system.durumuYenile}}</span></button></div>
+      <div class="system-panels" id="system-panels">
+        <div class="system-group" data-group="status" role="group" data-scroll-focus>
+        <section class="panel coverage-panel" aria-labelledby="coverage-title">
+          <div class="panel-heading"><h2 id="coverage-title" data-i18n="system.coverage-title">{{i18n:system.coverage-title}}</h2><button type="button" class="button outline" id="coverage-open" aria-haspopup="dialog" data-i18n="system.coverage-open">{{i18n:system.coverage-open}}</button></div>
+          <p id="coverage-period" class="fine-print"></p>
+          <p id="coverage-summary" role="status" data-i18n="system.coverage-summary">{{i18n:system.coverage-summary}}</p>
+        </section>
+        <section class="panel webhook-status-panel" aria-labelledby="webhook-title">
+          <div class="panel-heading"><h2 id="webhook-title" data-i18n="system.webhook-title">{{i18n:system.webhook-title}}</h2><button type="button" class="button outline" id="webhook-status-open" aria-haspopup="dialog" data-i18n="system.webhook-status-open">{{i18n:system.webhook-status-open}}</button></div>
+          <p id="webhook-status-summary" role="status" data-i18n="system.webhook-status-summary">{{i18n:system.webhook-status-summary}}</p>
+        </section>
+          <section class="panel settings-panel"><h2 data-i18n="system.baglanti">{{i18n:system.baglanti}}</h2><div id="source-guide" class="source-guide" hidden></div><dl id="system-details" class="system-details"></dl><div id="google-empty" class="empty-state google-empty" hidden><span class="empty-illustration" aria-hidden="true"></span><p data-i18n="system.googleBaglantisiTamamlanmadiVerileri">{{i18n:system.googleBaglantisiTamamlanmadiVerileri}}</p></div><a href="/auth/google/start" class="button outline" data-i18n="system.googleHesabiniBagla">{{i18n:system.googleHesabiniBagla}}</a><form method="post" action="/logout" class="logout-form"><button type="submit" class="text-link" data-i18n="system.cikisYap">{{i18n:system.cikisYap}}</button></form></section>
+        </div>
+        <div class="system-group" data-group="devices" role="group" data-scroll-focus>
+        <section class="panel devices-panel" aria-labelledby="devices-title"><div class="panel-heading">
+            <h2 id="devices-title" data-i18n="system.devices-title">{{i18n:system.devices-title}}</h2>
+            <p id="devices-summary" role="status" data-i18n="system.devices-summary">{{i18n:system.devices-summary}}</p>
+          </div><p id="devices-thresholds" class="fine-print"></p><p id="devices-google-note" class="fine-print" hidden data-i18n="system.devices-google-note">{{i18n:system.devices-google-note}}</p><button type="button" class="button outline" id="devices-retry" hidden data-i18n="system.devices-retry">{{i18n:system.devices-retry}}</button><ul id="devices-list" class="devices-list" aria-label="{{i18n:system.devices-list.label}}" aria-busy="false" hidden data-i18n-aria-label="system.devices-list.label"></ul></section>
+        <section class="panel apple-import-panel" id="apple-import-panel" aria-labelledby="apple-import-title" aria-busy="false">
+          <div class="panel-heading"><h2 id="apple-import-title" data-i18n="system.apple-import-title">{{i18n:system.apple-import-title}}</h2></div>
+          <p id="apple-import-help" class="fine-print" data-i18n="system.apple-import-help">{{i18n:system.apple-import-help}}</p>
+          <div class="apple-import-form"><label for="apple-import-file" class="sr-only" data-i18n="system.apple-import-file">{{i18n:system.apple-import-file}}</label><input type="file" id="apple-import-file" accept=".zip,.xml,application/zip,application/xml,text/xml" /><button type="button" class="button primary" id="apple-import-start" disabled data-i18n="system.apple-import-start">{{i18n:system.apple-import-start}}</button></div>
+          <progress id="apple-import-progress" class="apple-import-progress" max="100" value="0" aria-label="{{i18n:system.apple-import-progress.label}}" hidden data-i18n-aria-label="system.apple-import-progress.label"></progress>
+          <p id="apple-import-status" role="status" aria-live="polite"></p>
+          <p id="apple-import-receiver" class="fine-print"></p>
+        </section>
+        </div>
+        <div class="system-group" data-group="sync" role="group" data-scroll-focus>
+        <section class="panel sync-history">
+          <h2 data-i18n="system.veriTurleri">{{i18n:system.veriTurleri}}</h2>
+          <p class="fine-print" data-i18n="system.esitlemeIslerininDurumuSaatin">{{i18n:system.esitlemeIslerininDurumuSaatin}}</p>
+          <div class="table-scroll" data-scroll-focus role="region" aria-label="{{i18n:system.esitlemeIslerininDurumu.label}}" data-i18n-aria-label="system.esitlemeIslerininDurumu.label">
+            <table>
+              <thead>
+                <tr>
+                  <th scope="col" data-i18n="system.veriTuru">{{i18n:system.veriTuru}}</th>
+                  <th scope="col" data-i18n="system.sonBasariliEsitleme">{{i18n:system.sonBasariliEsitleme}}</th>
+                  <th scope="col" data-i18n="system.durum">{{i18n:system.durum}}</th>
+                  <th scope="col" data-i18n="system.kayit">{{i18n:system.kayit}}</th>
+                </tr>
+              </thead>
+              <tbody id="sync-rows"></tbody>
+            </table>
+          </div>
+        </section>
+        </div>
+        <div class="system-group" data-group="settings" role="group" data-scroll-focus>
+          <section class="panel settings-panel"><h2 data-i18n="system.gorunum">{{i18n:system.gorunum}}</h2><label class="setting-row" for="timezone" data-i18n="system.saatDilimi">{{i18n:system.saatDilimi}}<select id="timezone"><option value="auto" data-i18n="system.cihazSaati">{{i18n:system.cihazSaati}}</option><option value="Europe/Istanbul" data-i18n="system.istanbul">{{i18n:system.istanbul}}</option><option value="UTC">UTC</option></select></label><label class="setting-row" for="language" data-i18n="system.dil">{{i18n:system.dil}}<select id="language"><option value="tr" lang="tr" data-i18n="system.turkce">{{i18n:system.turkce}}</option><option value="en" lang="en">English</option></select></label><label class="setting-row" for="model-motion" data-i18n="system.bedenModeliOtomatikDonsun">{{i18n:system.bedenModeliOtomatikDonsun}}<input type="checkbox" id="model-motion" /></label><div class="setting-row"><span data-i18n="system.logoUmayVeArka">{{i18n:system.logoUmayVeArka}}</span><button type="button" class="button outline" id="appearance-open" aria-haspopup="dialog"><span class="button-icon" data-icon="brush"></span> <span data-i18n="system.ozellestir">{{i18n:system.ozellestir}}</span></button></div><p class="fine-print" id="display-preferences-note" role="status" data-i18n="system.display-preferences-note">{{i18n:system.display-preferences-note}}</p><p class="fine-print" id="language-note" data-i18n="system.language-note">{{i18n:system.language-note}}</p></section>
+        <section class="panel about-panel" aria-labelledby="about-title">
+          <h2 id="about-title" data-i18n="system.about-title">{{i18n:system.about-title}}</h2>
+          <h3 data-i18n="system.about.medicalTitle">{{i18n:system.about.medicalTitle}}</h3>
+          <p data-i18n="system.about.medical">{{i18n:system.about.medical}}</p>
+          <h3 data-i18n="system.about.dataTitle">{{i18n:system.about.dataTitle}}</h3>
+          <p data-i18n="system.about.data">{{i18n:system.about.data}}</p>
+          <h3 data-i18n="system.about.umayTitle">{{i18n:system.about.umayTitle}}</h3>
+          <p data-i18n="system.about.umay">{{i18n:system.about.umay}}</p>
+        </section>
+        </div>
+      </div>
+    </section>
+    <section id="sports" class="page" role="region" aria-label="{{i18n:sports.sports.label}}" hidden data-i18n-aria-label="sports.sports.label">
+      <div class="section-title"><span class="section-icon" data-icon="workout"></span><div>
+          <h1 data-i18n="sports.spor">{{i18n:sports.spor}}</h1>
+          <p data-i18n="sports.cihazlardanGelenVeElle">{{i18n:sports.cihazlardanGelenVeElle}}</p>
+        </div></div>
+      <section class="panel workouts-panel" aria-labelledby="workouts-title">
+        <div class="history-heading"><div>
+            <h2 id="workouts-title" data-i18n="sports.workouts-title">{{i18n:sports.workouts-title}}</h2>
+          </div><button type="button" id="workout-add" class="button primary"><span class="button-icon" data-icon="plus"></span> <span data-i18n="sports.antrenmanEkle">{{i18n:sports.antrenmanEkle}}</span></button></div>
+        <nav class="workout-months" aria-label="{{i18n:sports.antrenmanAyi.label}}" data-i18n-aria-label="sports.antrenmanAyi.label">
+          <button type="button" id="workout-prev" class="button outline" aria-label="{{i18n:sports.workout-prev.label}}" data-i18n-aria-label="sports.workout-prev.label">‹</button>
+          <label class="workout-month-label" for="workout-month"><span class="sr-only" data-i18n="sports.gosterilenAy">{{i18n:sports.gosterilenAy}}</span><input type="month" id="workout-month" aria-controls="workout-timeline"></label>
+          <button type="button" id="workout-next" class="button outline" aria-label="{{i18n:sports.workout-next.label}}" data-i18n-aria-label="sports.workout-next.label">›</button>
         </nav>
         <p id="workout-zone" class="fine-print"></p>
-        <div class="workout-state"><p id="workout-status" role="status"></p><button type="button" id="workout-retry" class="button outline" hidden>Yeniden dene</button></div>
-        <div id="workout-timeline" tabindex="0" role="region" aria-labelledby="workouts-title" aria-describedby="workout-zone" aria-busy="false"><ol id="workout-rows" class="workout-days" aria-label="Antrenman günleri"></ol></div>
-        <details id="workout-editor"><summary>Antrenmanı elle ekle</summary><form id="workout-form"><div class="workout-fields"><label>Spor türü<input name="exercise_type" aria-describedby="workout-error" required maxlength="128" placeholder="Örneğin yürüyüş"></label><label>Başlangıç<input name="start_time" aria-describedby="workout-error workout-timezone" type="datetime-local" required></label><label>Bitiş<input name="end_time" aria-describedby="workout-error workout-timezone" type="datetime-local" required></label><label>Kalori · kcal (isteğe bağlı)<input name="calories_kcal" aria-describedby="workout-error" type="number" min="0" max="100000" step="0.1"></label><label>Mesafe · km (isteğe bağlı)<input name="distance_km" aria-describedby="workout-error" type="number" min="0" max="10000" step="0.001"></label></div><p id="workout-timezone" class="fine-print"></p><p id="workout-error" class="form-error" role="alert"></p><div class="dialog-actions"><button type="button" id="workout-cancel" class="button outline">İptal</button><button type="submit" id="workout-save" class="button primary">Kaydet</button></div></form></details>
+        <div class="workout-state"><p id="workout-status" role="status"></p><button type="button" id="workout-retry" class="button outline" hidden data-i18n="sports.workout-retry">{{i18n:sports.workout-retry}}</button></div>
+        <div id="workout-timeline" data-scroll-focus role="region" aria-label="{{i18n:sports.workout-timeline.label}}" data-i18n-aria-label="sports.workout-timeline.label" aria-describedby="workout-zone" aria-busy="false">
+          <ol id="workout-rows" class="workout-days" aria-label="{{i18n:sports.workout-rows.label}}" data-i18n-aria-label="sports.workout-rows.label"></ol>
+        </div>
+        <details id="workout-editor">
+          <summary data-i18n="sports.antrenmaniElleEkle">{{i18n:sports.antrenmaniElleEkle}}</summary>
+          <form id="workout-form">
+            <div class="workout-fields"><label data-i18n="sports.sporTuru">{{i18n:sports.sporTuru}}<input name="exercise_type" aria-describedby="workout-error" required maxlength="128" placeholder="{{i18n:sports.orneginYuruyus.placeholder}}" data-i18n-placeholder="sports.orneginYuruyus.placeholder"></label><label data-i18n="sports.baslangic">{{i18n:sports.baslangic}}<input name="start_time" aria-describedby="workout-error workout-timezone" type="datetime-local" required></label><label data-i18n="sports.bitis">{{i18n:sports.bitis}}<input name="end_time" aria-describedby="workout-error workout-timezone" type="datetime-local" required></label><label data-i18n="sports.kaloriKcalIstegeBagli">{{i18n:sports.kaloriKcalIstegeBagli}}<input name="calories_kcal" aria-describedby="workout-error" type="number" min="0" max="100000" step="0.1"></label><label data-i18n="sports.mesafeKmIstegeBagli">{{i18n:sports.mesafeKmIstegeBagli}}<input name="distance_km" aria-describedby="workout-error" type="number" min="0" max="10000" step="0.001"></label></div>
+            <p id="workout-timezone" class="fine-print"></p>
+            <p id="workout-error" class="form-error" role="alert"></p>
+            <div class="dialog-actions"><button type="button" id="workout-cancel" class="button outline" data-i18n="sports.workout-cancel">{{i18n:sports.workout-cancel}}</button><button type="submit" id="workout-save" class="button primary" data-i18n="sports.workout-save">{{i18n:sports.workout-save}}</button></div>
+          </form>
+        </details>
       </section>
     </section>
   </main>
-  <dialog id="measurement-dialog" aria-labelledby="measurement-title" aria-describedby="measurement-intro"><form id="measurement-form" tabindex="0" aria-label="Ölçüm formu"><div class="dialog-heading"><h2 id="measurement-title">Ölçüm ekle</h2><button type="button" class="icon-button" id="measurement-close" aria-label="Kapat"><span data-icon="close"></span></button></div><p id="measurement-intro" class="fine-print">Yeni bir kayıt eklenir; Google’dan gelen ölçümler değişmez.</p><label>Ölçüm<select name="metric" id="measurement-metric" aria-describedby="form-error"><option value="height">Boy · cm</option><option value="weight">Kilo · kg</option><option value="body_fat">Yağ oranı · %</option><option value="muscle">Kas oranı · %</option></select></label><label>Değer<input name="value" type="number" step="0.01" required id="measurement-value" aria-describedby="form-error" /></label><label>Tarih ve saat<input name="measured_at" type="datetime-local" required id="measurement-date" aria-describedby="input-timezone form-error" /></label><p id="input-timezone" class="fine-print"></p><p id="form-error" role="alert" class="form-error"></p><div class="dialog-actions"><button type="button" class="button outline" id="measurement-cancel">İptal</button><button type="submit" class="button primary" id="measurement-save">Kaydet</button></div></form></dialog>
-  <button class="assistant-launcher" id="assistant-open" aria-label="Umay sohbetini aç" aria-controls="assistant-dialog" aria-expanded="false"><span data-icon="umay"></span></button>
-  <aside id="assistant-dialog" aria-labelledby="assistant-title" aria-describedby="assistant-data-notice" hidden>
-    <div class="dialog-heading"><div class="assistant-identity"><img class="assistant-avatar" src="/assets/umay/umay-64.webp" srcset="/assets/umay/umay-64.webp 1x, /assets/umay/umay-64@2x.webp 2x" width="44" height="44" alt=""><div class="assistant-name"><h2 id="assistant-title">Umay</h2><p id="assistant-status" role="status" data-presence="offline">Bağlanıyor…</p></div></div><button class="assistant-icon" id="assistant-close" aria-label="Sohbeti kapat" title="Kapat"><span data-icon="close"></span></button></div>
-    <div id="assistant-messages" tabindex="0" role="log" aria-label="Umay sohbeti" aria-live="off"><p id="assistant-data-notice" class="assistant-data-notice">Sağlık verilerin yanıt için OpenAI’ye gönderilir. Tur özeti, yerel köprüye gönderilen veriyi gösterir; OpenAI’nin aldığını doğrulamaz. Önceki turların verileri aynı model konuşmasının bağlamında kalabilir. Yeniden bağlanınca yeni model sohbeti açılır.</p><div class="assistant-intro" aria-hidden="true"><img src="/assets/umay/umay-256.webp" srcset="/assets/umay/umay-256.webp 1x, /assets/umay/umay.webp 2x" width="128" height="128" alt="" loading="lazy" decoding="async"><p class="assistant-intro-title">Merhaba, ben Umay.</p><p>Adım, uyku ve nabız verilerin hakkında soru sorabilirsin.</p></div><div id="assistant-typing" class="assistant-typing" aria-label="Umay yanıt hazırlıyor" hidden><span aria-hidden="true"></span><span aria-hidden="true"></span><span aria-hidden="true"></span></div></div>
-    <p id="assistant-error" tabindex="0" aria-label="Umay bağlantı ve yanıt hatası" class="form-error" role="alert" hidden></p>
-    <div class="assistant-controls"><button type="button" class="assistant-icon" id="assistant-new" aria-label="Yeni sohbet" title="Yeni sohbet"><span data-icon="chat-new"></span></button><button type="button" class="assistant-icon" id="assistant-reconnect" aria-label="Yeniden bağlan" title="Yeniden bağlan" hidden><span data-icon="sync"></span></button><button type="button" class="assistant-icon" id="assistant-stop" aria-label="Yanıtı durdur" title="Yanıtı durdur" hidden><span data-icon="stop"></span></button></div>
-    <form id="assistant-form"><label class="sr-only" for="assistant-input">Umay’a mesajın</label><textarea id="assistant-input" rows="3" maxlength="8000" required></textarea><button class="assistant-icon assistant-send" id="assistant-send" type="submit" aria-label="Gönder" title="Gönder" disabled><span data-icon="send"></span></button></form>
+  <dialog id="measurement-dialog" aria-labelledby="measurement-title" aria-describedby="measurement-intro">
+    <form id="measurement-form" data-scroll-focus aria-label="{{i18n:measurementDialog.measurement-form.label}}" data-i18n-aria-label="measurementDialog.measurement-form.label"><div class="dialog-heading"><h2 id="measurement-title" data-i18n="measurementDialog.measurement-title">{{i18n:measurementDialog.measurement-title}}</h2><button type="button" class="icon-button" id="measurement-close" aria-label="{{i18n:measurementDialog.measurement-close.label}}" data-i18n-aria-label="measurementDialog.measurement-close.label"><span data-icon="close"></span></button></div><p id="measurement-intro" class="fine-print" data-i18n="measurementDialog.measurement-intro">{{i18n:measurementDialog.measurement-intro}}</p><label data-i18n="measurementDialog.olcum">{{i18n:measurementDialog.olcum}}<select name="metric" id="measurement-metric" aria-describedby="form-error"><option value="height" data-i18n="measurementDialog.boyCm">{{i18n:measurementDialog.boyCm}}</option><option value="weight" data-i18n="measurementDialog.kiloKg">{{i18n:measurementDialog.kiloKg}}</option><option value="body_fat" data-i18n="measurementDialog.yagOrani">{{i18n:measurementDialog.yagOrani}}</option><option value="muscle" data-i18n="measurementDialog.kasOrani">{{i18n:measurementDialog.kasOrani}}</option></select></label><label data-i18n="measurementDialog.deger">{{i18n:measurementDialog.deger}}<input name="value" type="number" step="0.01" required id="measurement-value" aria-describedby="form-error" /></label><label data-i18n="measurementDialog.tarihVeSaat">{{i18n:measurementDialog.tarihVeSaat}}<input name="measured_at" type="datetime-local" required id="measurement-date" aria-describedby="input-timezone form-error" /></label><p id="input-timezone" class="fine-print"></p><p id="form-error" role="alert" class="form-error"></p><div class="dialog-actions"><button type="button" class="button outline" id="measurement-cancel" data-i18n="measurementDialog.measurement-cancel">{{i18n:measurementDialog.measurement-cancel}}</button><button type="submit" class="button primary" id="measurement-save" data-i18n="measurementDialog.measurement-save">{{i18n:measurementDialog.measurement-save}}</button></div></form>
+  </dialog>
+  <button class="assistant-launcher" id="assistant-open" aria-label="{{i18n:common.assistant-open.label}}" aria-controls="assistant-dialog" aria-expanded="false" data-i18n-aria-label="common.assistant-open.label"><span data-icon="umay"></span></button>
+  <p id="assistant-announcer" class="sr-only" aria-live="polite" aria-atomic="true"></p>
+  <aside id="assistant-dialog" role="dialog" aria-labelledby="assistant-title" aria-describedby="assistant-data-notice" hidden>
+    <div class="dialog-heading"><div class="assistant-identity"><img class="assistant-avatar" src="/assets/umay/umay-64.webp" srcset="/assets/umay/umay-64.webp 1x, /assets/umay/umay-64@2x.webp 2x" width="44" height="44" alt=""><div class="assistant-name">
+          <h2 id="assistant-title" data-i18n="umay.assistant-title">{{i18n:umay.assistant-title}}</h2>
+          <p id="assistant-status" role="status" data-presence="offline" data-i18n="umay.assistant-status">{{i18n:umay.assistant-status}}</p>
+        </div></div><button class="assistant-icon" id="assistant-close" aria-label="{{i18n:umay.assistant-close.label}}" title="{{i18n:umay.assistant-close.title}}" data-i18n-title="umay.assistant-close.title" data-i18n-aria-label="umay.assistant-close.label"><span data-icon="close"></span></button></div>
+    <div id="assistant-messages" data-scroll-focus role="log" aria-label="{{i18n:umay.assistant-messages.label}}" aria-live="off" data-i18n-aria-label="umay.assistant-messages.label">
+      <p id="assistant-data-notice" class="assistant-data-notice" data-i18n="umay.assistant-data-notice">{{i18n:umay.assistant-data-notice}}</p>
+      <div class="assistant-intro" aria-hidden="true"><img src="/assets/umay/umay-256.webp" srcset="/assets/umay/umay-256.webp 1x, /assets/umay/umay.webp 2x" width="128" height="128" alt="" loading="lazy" decoding="async"><p class="assistant-intro-title" data-i18n="umay.merhabaBenUmay">{{i18n:umay.merhabaBenUmay}}</p><p data-i18n="umay.adimUykuVeNabiz">{{i18n:umay.adimUykuVeNabiz}}</p></div>
+      <div id="assistant-typing" class="assistant-typing" aria-label="{{i18n:umay.assistant-typing.label}}" hidden data-i18n-aria-label="umay.assistant-typing.label"><span aria-hidden="true"></span><span aria-hidden="true"></span><span aria-hidden="true"></span></div>
+    </div>
+    <p id="assistant-error" data-scroll-focus aria-label="{{i18n:umay.assistant-error.label}}" class="form-error" role="alert" hidden data-i18n-aria-label="umay.assistant-error.label"></p>
+    <div class="assistant-controls"><button type="button" class="assistant-icon" id="assistant-new" aria-label="{{i18n:umay.assistant-new.label}}" title="{{i18n:umay.assistant-new.title}}" data-i18n-title="umay.assistant-new.title" data-i18n-aria-label="umay.assistant-new.label"><span data-icon="chat-new"></span></button><button type="button" class="assistant-icon" id="assistant-reconnect" aria-label="{{i18n:umay.assistant-reconnect.label}}" title="{{i18n:umay.assistant-reconnect.title}}" hidden data-i18n-title="umay.assistant-reconnect.title" data-i18n-aria-label="umay.assistant-reconnect.label"><span data-icon="sync"></span></button><button type="button" class="assistant-icon" id="assistant-stop" aria-label="{{i18n:umay.assistant-stop.label}}" title="{{i18n:umay.assistant-stop.title}}" hidden data-i18n-title="umay.assistant-stop.title" data-i18n-aria-label="umay.assistant-stop.label"><span data-icon="stop"></span></button></div>
+    <form id="assistant-form"><label class="sr-only" for="assistant-input" data-i18n="umay.umayaMesajin">{{i18n:umay.umayaMesajin}}</label><textarea id="assistant-input" rows="3" maxlength="8000" required></textarea><button class="assistant-icon assistant-send" id="assistant-send" type="submit" aria-label="{{i18n:umay.assistant-send.label}}" title="{{i18n:umay.assistant-send.title}}" disabled data-i18n-title="umay.assistant-send.title" data-i18n-aria-label="umay.assistant-send.label"><span data-icon="send"></span></button></form>
   </aside>
   <dialog id="appearance-dialog" aria-labelledby="appearance-title" aria-describedby="appearance-intro">
-    <header class="dialog-heading"><div><h2 id="appearance-title">Görünüm</h2><p id="appearance-intro" class="fine-print">Logoyu, Umay’ı ve arka planı seç ya da kendi görselini yükle. Hazır seçenekler tüm cihazlarında geçerli olur.</p></div><button type="button" class="icon-button" id="appearance-close" aria-label="Kapat"><span data-icon="close"></span></button></header>
+    <header class="dialog-heading"><div>
+        <h2 id="appearance-title" data-i18n="appearance.appearance-title">{{i18n:appearance.appearance-title}}</h2>
+        <p id="appearance-intro" class="fine-print" data-i18n="appearance.appearance-intro">{{i18n:appearance.appearance-intro}}</p>
+      </div><button type="button" class="icon-button" id="appearance-close" aria-label="{{i18n:appearance.appearance-close.label}}" data-i18n-aria-label="appearance.appearance-close.label"><span data-icon="close"></span></button></header>
     <div class="appearance-preview" aria-hidden="true"><span class="preview-brand"><span data-appearance-preview="logo"></span><span class="brand-wordmark">Health<span class="brand-os">OS</span></span></span><span class="preview-umay"><img data-appearance-preview="avatar" src="/assets/umay/umay-64.webp" width="36" height="36" alt=""><span class="preview-launcher"><span data-appearance-preview="glyph"></span></span></span></div>
-    <div class="appearance-body" tabindex="0" role="region" aria-label="Görünüm seçenekleri">
-      <fieldset class="appearance-group" data-appearance-kind="logo"><legend></legend><p class="appearance-hint fine-print"></p><div class="preset-grid"></div><p class="appearance-error form-error" role="alert" hidden></p><button type="button" class="text-link" data-remove hidden>Yüklenen görseli kaldır</button></fieldset>
-      <fieldset class="appearance-group" data-appearance-kind="umay"><legend></legend><p class="appearance-hint fine-print"></p><div class="preset-grid"></div><p class="appearance-error form-error" role="alert" hidden></p><button type="button" class="text-link" data-remove hidden>Yüklenen görseli kaldır</button></fieldset>
-      <fieldset class="appearance-group" data-appearance-kind="background"><legend></legend><p class="appearance-hint fine-print"></p><div class="preset-grid"></div><p class="appearance-error form-error" role="alert" hidden></p><button type="button" class="text-link" data-remove hidden>Yüklenen görseli kaldır</button></fieldset>
-      <p class="fine-print appearance-note">PNG, JPEG, WebP veya SVG · en fazla 2 MB. Yüklediğin görsel yalnız bu tarayıcıda saklanır; diğer cihazlarda varsayılan görsel görünür. Umay için kare bir görsel en iyi sonucu verir.</p>
+    <div class="appearance-body" data-scroll-focus role="region" aria-label="{{i18n:appearance.gorunumSecenekleri.label}}" data-i18n-aria-label="appearance.gorunumSecenekleri.label">
+      <fieldset class="appearance-group" data-appearance-kind="logo"><legend></legend><p class="appearance-hint fine-print"></p><div class="preset-grid"></div><p class="appearance-error form-error" role="alert" hidden></p><button type="button" class="text-link" data-remove hidden data-i18n="appearance.yuklenenGorseliKaldir">{{i18n:appearance.yuklenenGorseliKaldir}}</button></fieldset>
+      <fieldset class="appearance-group" data-appearance-kind="umay"><legend></legend><p class="appearance-hint fine-print"></p><div class="preset-grid"></div><p class="appearance-error form-error" role="alert" hidden></p><button type="button" class="text-link" data-remove hidden data-i18n="appearance.yuklenenGorseliKaldir">{{i18n:appearance.yuklenenGorseliKaldir}}</button></fieldset>
+      <fieldset class="appearance-group" data-appearance-kind="background"><legend></legend><p class="appearance-hint fine-print"></p><div class="preset-grid"></div><p class="appearance-error form-error" role="alert" hidden></p><button type="button" class="text-link" data-remove hidden data-i18n="appearance.yuklenenGorseliKaldir">{{i18n:appearance.yuklenenGorseliKaldir}}</button></fieldset>
+      <p class="fine-print appearance-note" data-i18n="appearance.pngJpegWebpVeya">{{i18n:appearance.pngJpegWebpVeya}}</p>
     </div>
-    <footer class="dialog-actions"><button type="button" class="button outline" id="appearance-reset">Varsayılana dön</button><button type="button" class="button primary" id="appearance-done">Tamam</button></footer>
+    <footer class="dialog-actions"><button type="button" class="button outline" id="appearance-reset" data-i18n="appearance.appearance-reset">{{i18n:appearance.appearance-reset}}</button><button type="button" class="button primary" id="appearance-done" data-i18n="appearance.appearance-done">{{i18n:appearance.appearance-done}}</button></footer>
   </dialog>
   <dialog id="metric-history-dialog" aria-labelledby="metric-history-title" aria-describedby="metric-history-range">
-    <header class="metric-history-heading"><div><h2 id="metric-history-title">Adım geçmişi</h2><p id="metric-history-range"></p></div><button class="assistant-icon" id="metric-history-close" aria-label="Geçmişi kapat"><span data-icon="close"></span></button></header>
-    <div class="metric-history-tabs" role="group" aria-label="Veri türü"><button type="button" data-history-tab="steps" aria-pressed="true">Adım</button><button type="button" data-history-tab="sleep" aria-pressed="false">Uyku</button><button type="button" data-history-tab="heart" aria-pressed="false">Nabız</button></div>
-    <p id="metric-history-status" role="status">Geçmiş yükleniyor…</p>
-    <div id="metric-history-content" tabindex="0" role="region" aria-label="Metrik geçmişi kayıtları" hidden>
-      <div class="metric-history-summary"><div><span id="metric-history-average-label">Günlük ortalama</span><strong id="metric-history-average"></strong></div><div class="metric-history-meta"><span id="metric-history-coverage"></span><span id="metric-history-archive"></span></div></div>
+    <header class="metric-history-heading"><div>
+        <h2 id="metric-history-title" data-i18n="metricHistory.metric-history-title">{{i18n:metricHistory.metric-history-title}}</h2>
+        <p id="metric-history-range"></p>
+      </div><button class="assistant-icon" id="metric-history-close" aria-label="{{i18n:metricHistory.metric-history-close.label}}" data-i18n-aria-label="metricHistory.metric-history-close.label"><span data-icon="close"></span></button></header>
+    <div class="metric-history-tabs" role="group" aria-label="{{i18n:metricHistory.veriTuru.label}}" data-i18n-aria-label="metricHistory.veriTuru.label"><button type="button" data-history-tab="steps" aria-pressed="true" data-i18n="metricHistory.adim">{{i18n:metricHistory.adim}}</button><button type="button" data-history-tab="sleep" aria-pressed="false" data-i18n="metricHistory.uyku">{{i18n:metricHistory.uyku}}</button><button type="button" data-history-tab="heart" aria-pressed="false" data-i18n="metricHistory.nabiz">{{i18n:metricHistory.nabiz}}</button></div>
+    <p id="metric-history-status" role="status" data-i18n="metricHistory.metric-history-status">{{i18n:metricHistory.metric-history-status}}</p>
+    <div id="metric-history-content" data-scroll-focus role="region" aria-label="{{i18n:metricHistory.metric-history-content.label}}" hidden data-i18n-aria-label="metricHistory.metric-history-content.label">
+      <div class="metric-history-summary">
+        <div><span id="metric-history-average-label" data-i18n="metricHistory.metric-history-average-label">{{i18n:metricHistory.metric-history-average-label}}</span><strong id="metric-history-average"></strong></div>
+        <div class="metric-history-meta"><span id="metric-history-coverage"></span><span id="metric-history-archive"></span></div>
+      </div>
       <div id="metric-history-chart" role="img"></div>
-      <ol id="metric-history-days" aria-label="Günlük kayıtlar"></ol>
+      <ol id="metric-history-days" aria-label="{{i18n:metricHistory.metric-history-days.label}}" data-i18n-aria-label="metricHistory.metric-history-days.label"></ol>
     </div>
-    <footer class="metric-history-footer"><nav id="metric-history-pages" aria-label="Geçmiş sayfaları"></nav><p id="metric-history-page-note"></p></footer>
+    <footer class="metric-history-footer">
+      <nav id="metric-history-pages" aria-label="{{i18n:metricHistory.metric-history-pages.label}}" data-i18n-aria-label="metricHistory.metric-history-pages.label"></nav>
+      <p id="metric-history-page-note"></p>
+    </footer>
   </dialog>
   <dialog id="webhook-status-dialog" aria-labelledby="webhook-status-title">
-    <div class="dialog-heading"><h2 id="webhook-status-title">Bildirim tanılaması</h2><button type="button" class="icon-button" id="webhook-status-close" aria-label="Bildirim ayrıntılarını kapat">×</button></div>
-    <div class="webhook-status-body" tabindex="0" role="region" aria-label="Bildirim tanılama içeriği">
+    <div class="dialog-heading"><h2 id="webhook-status-title" data-i18n="webhook.webhook-status-title">{{i18n:webhook.webhook-status-title}}</h2><button type="button" class="icon-button" id="webhook-status-close" aria-label="{{i18n:webhook.webhook-status-close.label}}" data-i18n-aria-label="webhook.webhook-status-close.label">×</button></div>
+    <div class="webhook-status-body" data-scroll-focus role="region" aria-label="{{i18n:webhook.bildirimTanilamaIcerigi.label}}" data-i18n-aria-label="webhook.bildirimTanilamaIcerigi.label">
       <p id="webhook-status-message" role="status"></p>
-      <button type="button" class="button outline" id="webhook-status-retry">Bildirim durumunu yeniden al</button>
+      <button type="button" class="button outline" id="webhook-status-retry" data-i18n="webhook.webhook-status-retry">{{i18n:webhook.webhook-status-retry}}</button>
       <dl id="webhook-status-details"></dl>
     </div>
   </dialog>
   <dialog id="devices-dialog" aria-labelledby="devices-dialog-title">
-    <div class="dialog-heading"><h2 id="devices-dialog-title">Cihaz ayrıntıları</h2><button type="button" class="icon-button" id="devices-close" aria-label="Cihaz ayrıntılarını kapat">×</button></div>
-    <div class="devices-dialog-body" tabindex="0" role="region" aria-label="Cihaz ayrıntıları içeriği"><dl id="devices-details"></dl></div>
+    <div class="dialog-heading"><h2 id="devices-dialog-title" data-i18n="devices.devices-dialog-title">{{i18n:devices.devices-dialog-title}}</h2><button type="button" class="icon-button" id="devices-close" aria-label="{{i18n:devices.devices-close.label}}" data-i18n-aria-label="devices.devices-close.label">×</button></div>
+    <div class="devices-dialog-body" data-scroll-focus role="region" aria-label="{{i18n:devices.cihazAyrintilariIcerigi.label}}" data-i18n-aria-label="devices.cihazAyrintilariIcerigi.label">
+      <dl id="devices-details"></dl>
+    </div>
   </dialog>
   <dialog id="coverage-dialog" aria-labelledby="coverage-dialog-title">
-    <div class="dialog-heading"><h2 id="coverage-dialog-title">Kapsama ayrıntıları</h2><button type="button" class="icon-button" id="coverage-close" aria-label="Kapsama ayrıntılarını kapat">×</button></div>
-    <div class="coverage-dialog-body" tabindex="0" role="region" aria-label="Kapsama içeriği">
-      <form id="coverage-form"><label>Başlangıç<input type="date" id="coverage-start" aria-describedby="coverage-status" required /></label><label>Bitiş<input type="date" id="coverage-end" aria-describedby="coverage-status" required /></label><label>Veri türü<select id="coverage-type" aria-describedby="coverage-status"><option value="steps">steps</option><option value="">Tüm türler</option></select></label><button type="submit" class="button outline">Göster</button></form>
-      <p id="coverage-status" role="status" class="fine-print"></p><button type="button" id="coverage-retry" class="button outline" hidden>Yeniden dene</button>
-      <p class="fine-print">Google arşivindeki kayıtlar ve çekim fişleri. Değer yok, sıfır demek değildir. Google boş döndü: kapalı günün çekimi son sayfaya kadar tamamlandı ve o güne ait kayıt dönmedi. Fişsiz geçmişte çekimin tamamlandığı bilinmiyor. Bugün kapalı gün sayılmaz. Dönen kayıt sayısı dışlananları ve yeniden çekimleri de içerir. Kaynaklar ayrı gösterilir; toplanmaz.</p>
+    <div class="dialog-heading"><h2 id="coverage-dialog-title" data-i18n="coverage.coverage-dialog-title">{{i18n:coverage.coverage-dialog-title}}</h2><button type="button" class="icon-button" id="coverage-close" aria-label="{{i18n:coverage.coverage-close.label}}" data-i18n-aria-label="coverage.coverage-close.label">×</button></div>
+    <div class="coverage-dialog-body" data-scroll-focus role="region" aria-label="{{i18n:coverage.kapsamaIcerigi.label}}" data-i18n-aria-label="coverage.kapsamaIcerigi.label">
+      <form id="coverage-form"><label data-i18n="coverage.baslangic">{{i18n:coverage.baslangic}}<input type="date" id="coverage-start" aria-describedby="coverage-status" required /></label><label data-i18n="coverage.bitis">{{i18n:coverage.bitis}}<input type="date" id="coverage-end" aria-describedby="coverage-status" required /></label><label data-i18n="coverage.veriTuru">{{i18n:coverage.veriTuru}}<select id="coverage-type" aria-describedby="coverage-status"><option value="steps">steps</option><option value="" data-i18n="coverage.tumTurler">{{i18n:coverage.tumTurler}}</option></select></label><button type="submit" class="button outline" data-i18n="coverage.goster">{{i18n:coverage.goster}}</button></form>
+      <p id="coverage-status" role="status" class="fine-print"></p><button type="button" id="coverage-retry" class="button outline" hidden data-i18n="coverage.coverage-retry">{{i18n:coverage.coverage-retry}}</button>
+      <p class="fine-print" data-i18n="coverage.googleArsivindekiKayitlarVe">{{i18n:coverage.googleArsivindekiKayitlarVe}}</p>
       <div id="coverage-results" aria-busy="false"></div>
     </div>
   </dialog>
+  <script src="/assets/boot-guard.js"></script>
   <script type="module" src="/src/main.js"></script>
+  <script type="module" src="/src/page-states.js"></script>
+  <script type="module" src="/src/assistant-sheet.js"></script>
 </body>
 </html>

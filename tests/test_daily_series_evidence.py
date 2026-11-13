@@ -7,16 +7,15 @@ from unittest.mock import Mock
 import pytest
 from derived_records import BAND, DAY, PHONE, T0, snapshot, store, summary
 from interpretation_records import call
-from interpretation_records import production_reader as production_reader
 
-from app.models.identity import RawSourceDevice
+from app.models.identity_tables import RawSourceDevice
 from app.parsers.common import canonical_json, payload_hash
-from app.services import health_interpretation as reader
-from app.services import interpretation_baseline_index as indexing
-from app.services import interpretation_inputs
-from app.services import interpretation_series as daily
-from app.services import interpretation_stats as stats
-from app.services.interpretation_inputs import MAX_INPUT_BYTES, MAX_INPUT_RECORDS
+from app.services.interpretation import health_interpretation as reader
+from app.services.interpretation import interpretation_baseline_index as indexing
+from app.services.interpretation import interpretation_inputs
+from app.services.interpretation import interpretation_series as daily
+from app.services.interpretation import interpretation_stats as stats
+from app.services.interpretation.interpretation_inputs import MAX_INPUT_BYTES, MAX_INPUT_RECORDS
 
 KIND = "daily-resting-heart-rate"
 DEVICE = "d" * 64
@@ -124,6 +123,7 @@ async def test_linked_stream_copy_visits_are_linear_and_preserve_order(
     async with sessions() as session:
         before = await snapshot(session)
     result = await call(
+        sessions,
         action,
         limit=1,
         **args,
@@ -189,11 +189,11 @@ async def test_collision_pages_budgets_and_append_only_decisions(sessions, monke
     )
     if action == "relationship":
         args.update(other_metric="resting_bpm", lags=[0, 1])
-    whole = await call(action, limit=200, **args)
+    whole = await call(sessions, action, limit=200, **args)
     expected = whole["summaries"]
-    page = await call(action, limit=1, **args)
+    page = await call(sessions, action, limit=1, **args)
     assert page["summaries"] == expected[:1] and page["next_cursor"]
-    rest = await call(action, limit=200, cursor=page["next_cursor"], **args)
+    rest = await call(sessions, action, limit=200, cursor=page["next_cursor"], **args)
     assert page["summaries"] + rest["summaries"] == expected
     assert page["candidates"] == rest["candidates"] == whole["candidates"]
     if action != "relationship":
@@ -237,7 +237,7 @@ async def test_collision_pages_budgets_and_append_only_decisions(sessions, monke
     for module, name, ceiling, code in budgets:
         with monkeypatch.context() as patch:
             patch.setattr(module, name, ceiling)
-            assert (await call(action, limit=1, **args))["summaries"] == expected[:1]
+            assert (await call(sessions, action, limit=1, **args))["summaries"] == expected[:1]
             patch.setattr(module, name, ceiling - 1)
             blocked = Mock(side_effect=AssertionError("budget must precede output generation"))
             for output in (
@@ -248,7 +248,7 @@ async def test_collision_pages_budgets_and_append_only_decisions(sessions, monke
                 patch.setattr(stats, output, blocked)
             for limit in (1, 200):
                 for cursor in (None, page["next_cursor"]):
-                    result = await call(action, limit=limit, cursor=cursor, **args)
+                    result = await call(sessions, action, limit=limit, cursor=cursor, **args)
                     assert result["code"] == code and result["reason_codes"] == [code]
                     assert "summaries" not in result and "next_cursor" not in result
             blocked.assert_not_called()
@@ -256,16 +256,22 @@ async def test_collision_pages_budgets_and_append_only_decisions(sessions, monke
     for name, ceiling in (("MAX_INPUT_RECORDS", 1), ("MAX_INPUT_BYTES", 1)):
         with monkeypatch.context() as patch:
             patch.setattr(interpretation_inputs, name, ceiling)
-            assert (await call(action, limit=1, **args))["code"] == "input_budget_exceeded"
+            assert (await call(sessions, action, limit=1, **args))[
+                "code"
+            ] == "input_budget_exceeded"
     with monkeypatch.context() as patch:
         patch.setattr(reader, "RESPONSE_BUDGET_BYTES", 1)
-        assert (await call(action, limit=1, **args))["code"] == "response_budget_exceeded"
+        assert (await call(sessions, action, limit=1, **args))["code"] == "response_budget_exceeded"
     async with sessions() as session:
         assert await snapshot(session) == before
     # Reassign by appending, then append the original device again. Both changes
     # expire the cursor, including when effective membership returns to its start.
     await decide(sessions, [sources[0]], "f" * 64)
-    assert (await call(action, cursor=page["next_cursor"], **args))["code"] == "stale_cursor"
+    assert (await call(sessions, action, cursor=page["next_cursor"], **args))[
+        "code"
+    ] == "stale_cursor"
     await decide(sessions, [sources[0]])
-    assert (await call(action, cursor=page["next_cursor"], **args))["code"] == "stale_cursor"
-    assert (await call(action, limit=200, **args))["summaries"] == expected
+    assert (await call(sessions, action, cursor=page["next_cursor"], **args))[
+        "code"
+    ] == "stale_cursor"
+    assert (await call(sessions, action, limit=200, **args))["summaries"] == expected

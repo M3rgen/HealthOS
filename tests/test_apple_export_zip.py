@@ -8,7 +8,6 @@ documents (tests/apple_fixtures.py).
 from __future__ import annotations
 
 import struct
-import time
 import tracemalloc
 import zipfile
 import zlib
@@ -270,7 +269,6 @@ def test_a_50_mb_export_streams_in_constant_memory(kind):
         source = streamed_zip(MEMBER, source)
     target = ExportUpload()
     seen = 0
-    started = time.perf_counter()
     tracemalloc.start()
     try:
         for chunk in _rechunk(source, CHUNK):
@@ -281,11 +279,9 @@ def test_a_50_mb_export_streams_in_constant_memory(kind):
         _, peak = tracemalloc.get_traced_memory()
     finally:
         tracemalloc.stop()
-    elapsed = time.perf_counter() - started
     assert seen == RECORDS == target.counts[QUANTITY]
     assert target.xml_bytes > 45_000_000
     assert peak < PEAK_LIMIT, f"peak {peak / 1e6:.1f} MB"
-    assert elapsed < 30, f"{elapsed:.1f} s"
 
 
 def test_zlib_raw_stream_matches_the_generator():

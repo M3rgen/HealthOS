@@ -7,9 +7,8 @@ from types import SimpleNamespace
 import pytest
 from derived_records import DAY, store, summary
 
-from app.services import codex_health
-from app.services.codex_health import read_health
-from app.services.interpretation_stats import correlation, ranks, relationships
+from app.services.interpretation.interpretation_stats import correlation, ranks, relationships
+from app.services.umay.codex_health import read_health
 
 
 @pytest.mark.parametrize(
@@ -128,8 +127,8 @@ def test_lags_at_calendar_boundaries_keep_missing_and_incomparable_days(first):
 
 
 async def relationship(sessions, monkeypatch, size=40, lags=None):
-    monkeypatch.setattr(codex_health, "SessionLocal", sessions)
     return await read_health(
+        sessions,
         dict(
             action="relationship",
             metric="resting_bpm",
@@ -138,7 +137,7 @@ async def relationship(sessions, monkeypatch, size=40, lags=None):
             start_date=str(DAY - timedelta(days=size)),
             end_date=str(DAY),
             limit=100,
-        )
+        ),
     )
 
 
@@ -228,8 +227,8 @@ async def test_relationship_statistics_do_not_depend_on_page_size(sessions, monk
         end_date=str(DAY),
         limit=1,
     )
-    first = await read_health(args)
-    second = await read_health(dict(args, cursor=first["next_cursor"], limit=200))
+    first = await read_health(sessions, args)
+    second = await read_health(sessions, dict(args, cursor=first["next_cursor"], limit=200))
     assert first["summaries"] + second["summaries"] == result["summaries"]
 
 

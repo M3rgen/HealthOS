@@ -1,4 +1,8 @@
+from app.models import derived_invalidation as derived_invalidation
+from app.models import identity_guards as identity_guards
+from app.models.apple import AppleImport, ApplePayload, AppleRawRecord, AppleSource
 from app.models.derived import DerivedDay
+from app.models.garmin import GarminApiResponse, GarminPullState, GarminRawRecord
 from app.models.health import (
     ActiveZoneMinute,
     Distance,
@@ -16,7 +20,7 @@ from app.models.health import (
     Vo2Max,
     Weight,
 )
-from app.models.identity import (
+from app.models.identity_tables import (
     IdentityReconcileState,
     RawHealthDataIdentity,
     RawHealthDataSupersession,
@@ -27,6 +31,7 @@ from app.models.identity import (
 )
 from app.models.manual import ManualMeasurement, ManualWorkout
 from app.models.manual_flags import ManualMeasurementFlagEvent
+from app.models.oauth_credentials import GoogleAccountRebindEvent, OAuthCredentialVersion
 from app.models.raw_rejections import (
     RawHealthDataRejection,
     RawRejectionAck,
@@ -56,6 +61,10 @@ __all__ = [
     "ManualWorkout",
     "ActiveZoneMinute",
     "AppearanceSettings",
+    "AppleImport",
+    "ApplePayload",
+    "AppleRawRecord",
+    "AppleSource",
     "DisplayPreferences",
     "BackfillJob",
     "Distance",
@@ -69,6 +78,8 @@ __all__ = [
     "HeartRateVariability",
     "IdentityReconcileState",
     "OAuthToken",
+    "OAuthCredentialVersion",
+    "GoogleAccountRebindEvent",
     "OxygenSaturation",
     "RespiratoryRate",
     "RestingHeartRate",
@@ -103,18 +114,3 @@ __all__ = [
     "WebhookStatusEvent",
     "Weight",
 ]
-
-from app.models import derived_invalidation as derived_invalidation
-
-# After the Google archive's guards: the Garmin tables' guards register last (0024).
-from app.models.garmin import GarminApiResponse as GarminApiResponse
-from app.models.garmin import GarminPullState as GarminPullState
-from app.models.garmin import GarminRawRecord as GarminRawRecord
-
-# After Garmin's: the Apple tables' guards register last (20261107_a001).
-# isort: off
-from app.models.apple import AppleImport as AppleImport
-from app.models.apple import ApplePayload as ApplePayload
-from app.models.apple import AppleRawRecord as AppleRawRecord
-from app.models.apple import AppleSource as AppleSource
-# isort: on

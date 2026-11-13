@@ -1,7 +1,6 @@
 """Public archive entry points keep working across the raw-history module split."""
 
 import asyncio
-import importlib
 import json
 import subprocess
 import sys
@@ -9,34 +8,17 @@ import sys
 import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
-from test_raw_versions import NAME, SPEC, _legacy_dump, chain, heart_rate, store
+from support.raw_versions import NAME, SPEC, _legacy_dump, chain, heart_rate, store
 from typer.testing import CliRunner
 
+import app.services.archive.raw_history_import as raw_history_import
+import app.services.archive.raw_history_verification as raw_history_verification
 from app.cli import main as cli
 from app.db.base import Base
 from app.models.raw_versions import RawHealthDataVersion
 from app.models.state import RawHealthData
 from app.parsers.common import payload_hash
-from app.services import raw_history, raw_history_writing
-
-
-@pytest.mark.parametrize(
-    ("module", "names"),
-    [
-        ("import", "import_versions"),
-        ("source", "source_database_url newest_sighting"),
-        ("types", "ImportStats IMPORT_SOURCE"),
-        (
-            "verification",
-            "verify_versions verify_guards PG_TRIGGER_SQL PROTECTIVE_TRIGGERS "
-            "SQLITE_TRIGGER_SQL FUNCTION_BODIES",
-        ),
-    ],
-)
-def test_existing_exports_use_the_extracted_implementations(module, names):
-    implementation = importlib.import_module(f"app.services.raw_history_{module}")
-    for name in names.split():
-        assert getattr(raw_history, name) is getattr(implementation, name)
+from app.services.archive import raw_history_writing
 
 
 @pytest.mark.parametrize(
@@ -47,9 +29,10 @@ def test_modules_import_before_the_facade_and_production_callers(first):
         [
             sys.executable,
             "-c",
-            f"import app.services.raw_history_{first}; import sys; "
-            "assert 'app.services.raw_history' not in sys.modules; "
-            "import app.services.raw_history; import app.services.identity_verification; "
+            f"import app.services.archive.raw_history_{first}; import sys; "
+            "assert 'app.services.archive.raw_history' not in sys.modules; "
+            "import app.services.archive.raw_history; "
+            "import app.services.identities.identity_verification; "
             "import app.cli.main",
         ],
         capture_output=True,
@@ -143,9 +126,9 @@ async def test_write_verification_failure_rolls_back_inserts_and_renumbering(
     monkeypatch.setattr(raw_history_writing, "payload_hash", lambda value: "changed-on-read")
     try:
         with pytest.raises(RuntimeError, match="imported payload would not read back unchanged"):
-            await raw_history.import_versions(sessions, source, batch_size=1)
+            await raw_history_import.import_versions(sessions, source, batch_size=1)
         assert await archive_rows() == before
         async with sessions() as session:
-            assert await raw_history.verify_versions(session) == (1, [])
+            assert await raw_history_verification.verify_versions(session) == (1, [])
     finally:
         await source.dispose()

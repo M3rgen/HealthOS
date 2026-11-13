@@ -1,14 +1,15 @@
 """The daily tool's derived card is byte-bounded and moves detail instead of dropping it."""
 
 import json
-import time
 from datetime import timedelta
 
 from derived_records import DAY, PHONE, T0, manual, sleep, stage, steps, store
+from sqlalchemy import event
 
-from app.services import codex_health
-from app.services.codex_health import DERIVED_BUDGET_BYTES, read_health
-from app.services.health_transfer import describe_result
+from app.services.interpretation import derived
+from app.services.umay import codex_health
+from app.services.umay.codex_health import DERIVED_BUDGET_BYTES, read_health
+from app.services.umay.health_transfer import describe_result
 
 
 def size(value):
@@ -39,21 +40,20 @@ async def five_minute_steps(sessions, days):
 
 
 async def test_detail_is_full_when_it_fits_and_a_summary_when_it_does_not(sessions, monkeypatch):
-    monkeypatch.setattr(codex_health, "SessionLocal", sessions)
     await store(sessions, "steps", steps())
     await store(sessions, "sleep", sleep(stages=[stage("LIGHT", 1, 3)]))
     await manual(sessions, 70)
-    sparse = (await read_health(daily(DAY)))["derived"]
+    sparse = (await read_health(sessions, daily(DAY)))["derived"]
     assert sparse["detail"] == "full" and size(sparse) <= DERIVED_BUDGET_BYTES
     full = {row["metric"]: row for row in sparse["days"][0]["result"]["streams"]}
     assert full["steps"]["observations"] and full["steps"]["source_metadata"]
     assert full["sleep_seconds"]["sleep"]["timeline"] is not None
     # Five-minute step intervals: a single day's observations alone exceed 64 KiB.
     await five_minute_steps(sessions, 3)
-    one = await read_health(daily(DAY))
+    one = await read_health(sessions, daily(DAY))
     assert one["derived"]["detail"] == "summary" and size(one["derived"]) <= DERIVED_BUDGET_BYTES
     assert one["derived"]["suggested_range"] is None  # one day: detail is in records/sleep
-    wide = await read_health(daily(DAY - timedelta(days=2)))
+    wide = await read_health(sessions, daily(DAY - timedelta(days=2)))
     card = wide["derived"]
     assert card["detail"] == "summary" and size(card) <= DERIVED_BUDGET_BYTES
     assert card["reason_codes"] == ["derived_detail_budget_exceeded"]
@@ -76,7 +76,9 @@ async def test_detail_is_full_when_it_fits_and_a_summary_when_it_does_not(sessio
     pages, offset = [], 0
     while offset is not None:
         page = await read_health(
-            daily(DAY) | {"action": "records", "data_type": "steps", "offset": offset, "limit": 200}
+            sessions,
+            daily(DAY)
+            | {"action": "records", "data_type": "steps", "offset": offset, "limit": 200},
         )
         pages += page["records"]
         offset = page["next_offset"]
@@ -94,7 +96,6 @@ async def test_detail_is_full_when_it_fits_and_a_summary_when_it_does_not(sessio
 
 
 async def test_a_full_year_is_bounded_and_its_suggested_range_fits(sessions, monkeypatch):
-    monkeypatch.setattr(codex_health, "SessionLocal", sessions)
     first = DAY - timedelta(days=365)
     for offset in range(366):
         start = T0 - timedelta(days=offset)
@@ -104,16 +105,37 @@ async def test_a_full_year_is_bounded_and_its_suggested_range_fits(sessions, mon
             steps(f"band{offset}", 100, start),
             steps(f"phone{offset}", 300, start, source=PHONE),
         )
-    started = time.monotonic()
-    result = await read_health(daily(first))
+    # Bound builds and SQL work independently of machine speed; timeout only guards hangs.
+    built_days = statements = 0
+    original_build_day = derived.build_day
+
+    async def counted_build_day(*args, **kwargs):
+        nonlocal built_days
+        built_days += 1
+        return await original_build_day(*args, **kwargs)
+
+    def trace(conn, cursor, statement, parameters, context, executemany):
+        nonlocal statements
+        statements += 1
+
+    engine = sessions.kw["bind"].sync_engine
+    with monkeypatch.context() as patch:
+        patch.setattr(derived, "build_day", counted_build_day)
+        event.listen(engine, "before_cursor_execute", trace)
+        try:
+            result = await read_health(sessions, daily(first))
+        finally:
+            event.remove(engine, "before_cursor_execute", trace)
+    assert built_days == 366  # one build per cold day; the primary, backend-independent oracle
+    # SQLite at 9999175: 4047 statements (~11/day); allow at most 1.5 times that baseline.
+    assert statements <= 6070
     card = result["derived"]
-    assert time.monotonic() - started < 120
     assert card["detail"] == "omitted" and card["days"] == []
     assert card["reason_codes"] == ["derived_budget_exceeded"]
     assert size(card) <= DERIVED_BUDGET_BYTES and card["size_bytes"] > DERIVED_BUDGET_BYTES
     assert len(result["days"]) == 366  # legacy scalars still span the whole year
     narrower = await read_health(
-        daily(card["suggested_range"]["start_date"], card["suggested_range"]["end_date"])
+        sessions, daily(card["suggested_range"]["start_date"], card["suggested_range"]["end_date"])
     )
     assert narrower["derived"]["detail"] in {"full", "summary"}
     assert size(narrower["derived"]) <= DERIVED_BUDGET_BYTES

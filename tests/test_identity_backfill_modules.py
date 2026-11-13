@@ -1,6 +1,5 @@
 """Compatibility and transaction boundaries of the remaining backfill split."""
 
-import importlib
 import json
 import subprocess
 import sys
@@ -11,7 +10,7 @@ from identity_records import HEART, T0, heart, legacy
 from sqlalchemy import event, func, select
 
 from app.db.base import Base
-from app.models.identity import (
+from app.models.identity_tables import (
     IdentityReconcileState,
     RawHealthDataIdentity,
     RawHealthDataSupersession,
@@ -19,38 +18,16 @@ from app.models.identity import (
 )
 from app.models.raw_versions import RawHealthDataEvent
 from app.models.state import RawHealthData
-from app.services import identity_backfill as backfill
-from app.services import identity_backfill_agreement as agreement
-from app.services import identity_backfill_linking as linking
-from app.services import identity_backfill_planning as planning
-from app.services import identity_backfill_reading as reading
-from app.services.identity_backfill_stats import BackfillStats
-from app.services.source_chains import Chains, LockBusy
-
-
-@pytest.mark.parametrize(
-    ("module", "names"),
-    [
-        ("planning", "_Plan _Link _links_of _plan_batch"),
-        ("linking", "_write_plan _batch_chains"),
-        (
-            "agreement",
-            "_review_agreeing _tally_agreement _record_agreement _agreement_of "
-            "_count_shared summed_agreement _summed _mark_counted",
-        ),
-        (
-            "state",
-            "DeviceChange _prepare _reconcile_row _owe_settlement _settled _chunked "
-            "_deferred_of _reconcile_state _save_state",
-        ),
-    ],
-)
-def test_old_imports_export_the_extracted_implementations(module, names):
-    implementation = importlib.import_module(f"app.services.identity_backfill_{module}")
-    for name in names.split():
-        exported = getattr(backfill, name)
-        assert exported is getattr(implementation, name)
-        assert exported.__module__ == implementation.__name__
+from app.services.identities import identity_backfill as backfill
+from app.services.identities import identity_backfill_agreement as agreement
+from app.services.identities import identity_backfill_chains
+from app.services.identities import identity_backfill_linking as linking
+from app.services.identities import identity_backfill_planning as planning
+from app.services.identities import identity_backfill_reading as reading
+from app.services.identities.identity_backfill_stats import BackfillStats
+from app.services.identities.identity_options import BackfillOptions
+from app.services.identities.source_chain_locks import LockBusy
+from app.services.identities.source_chain_model import Chains
 
 
 @pytest.mark.parametrize("module", ["state", "chains", "planning", "agreement", "linking"])
@@ -59,11 +36,13 @@ def test_modules_import_before_the_executor_and_production_callers(module):
         [
             sys.executable,
             "-c",
-            f"import app.services.identity_backfill_{module}; import sys; "
-            "assert 'app.services.identity_backfill' not in sys.modules; "
-            "import app.services.identity_backfill; import app.services.identity_decisions; "
-            "import app.services.identity_reconciler; import app.services.identity_verification; "
-            "import app.sync.deletions; import app.cli.main",
+            f"import app.services.identities.identity_backfill_{module}; import sys; "
+            "assert 'app.services.identities.identity_backfill' not in sys.modules; "
+            "import app.services.identities.identity_backfill; "
+            "import app.services.identities.identity_decisions; "
+            "import app.services.identities.identity_reconciler; "
+            "import app.services.identities.identity_verification; "
+            "import app.services.archive.source_deletions; import app.cli.main",
         ],
         capture_output=True,
         text=True,
@@ -113,7 +92,10 @@ async def test_extracted_dry_run_takes_no_lock_and_changes_no_archive_table(
     event.listen(engine, "before_cursor_execute", read_only)
     try:
         result = await backfill.identity_backfill(
-            sessions, data_types=[HEART.name], dry_run=True, incremental=incremental, batch_size=1
+            sessions,
+            data_types=[HEART.name],
+            incremental=incremental,
+            options=BackfillOptions(dry_run=True, batch_size=1),
         )
     finally:
         event.remove(engine, "before_cursor_execute", read_only)
@@ -129,11 +111,11 @@ async def test_planning_and_writing_share_the_callers_rollback_and_are_idempoten
     await legacy(sessions, HEART, heart(60, civil=True), T0 + timedelta(hours=1))
     before = await snapshot(sessions)
     async with sessions() as session:
-        batch = await reading._read_batch(session, HEART.name, 1, None, None)
-        rows, stale = reading._rows_of(HEART, batch, None)
+        batch = await reading.read_batch(session, HEART.name, 1, None, None)
+        rows, stale = reading.rows_of(HEART, batch, None)
         assert len(rows) == 2 and not stale
         stats = BackfillStats()
-        plan = await planning._plan_batch(session, HEART, rows, Chains(), stats)
+        plan = await planning.plan_batch(session, HEART, rows, Chains(), stats)
         assert len(plan.links) == 1 and len(plan.aliases) == 1
         await linking._write_plan(session, HEART, plan, stats, dry_run=False)
         assert sum(stats.linked.values()) == stats.aliases_added == 1
@@ -157,13 +139,13 @@ async def test_agreement_boundary_appends_changes_and_recounts_latest_keys(sessi
     pair = ("first", "second")
     first = {(pair, "key-1"): True, (pair, "key-2"): False}
     async with sessions.begin() as session:
-        await agreement._record_agreement(session, HEART.name, first)
-        await agreement._record_agreement(session, HEART.name, first)
+        await agreement.record_agreement(session, HEART.name, first)
+        await agreement.record_agreement(session, HEART.name, first)
         assert await session.scalar(select(func.count()).select_from(RawSourceAgreement)) == 2
-        await agreement._record_agreement(session, HEART.name, {(pair, "key-2"): True})
+        await agreement.record_agreement(session, HEART.name, {(pair, "key-2"): True})
         assert await session.scalar(select(func.count()).select_from(RawSourceAgreement)) == 3
         assert await agreement.summed_agreement(session) == {HEART.name: {pair: (2, 0)}}
-    assert await agreement._mark_counted(sessions, HEART.name, {pair}, recount=True) == {
+    assert await agreement.mark_counted(sessions, HEART.name, {pair}, recount=True) == {
         pair: (2, 0, True)
     }
     async with sessions() as session:
@@ -174,7 +156,7 @@ async def test_agreement_boundary_appends_changes_and_recounts_latest_keys(sessi
         assert await agreement._summed(session, "absent-data-type") == {}
 
 
-async def test_chain_settlement_uses_legacy_retry_hooks_and_rolls_back_failed_attempts(
+async def test_chain_settlement_retries_its_transaction_and_rolls_back_failed_attempts(
     sessions, monkeypatch
 ):
     attempts, pauses, notices = [], [], []
@@ -194,8 +176,13 @@ async def test_chain_settlement_uses_legacy_retry_hooks_and_rolls_back_failed_at
     monkeypatch.setattr(backfill, "lock_data_type", lock)
     monkeypatch.setattr(backfill, "_pause", pause)
     stats = BackfillStats()
-    planned, change = await backfill._settle_chains(
-        sessions, HEART, None, stats, dry_run=False, statement_timeout="120s", notice=notices.append
+    planned, change = await identity_backfill_chains.settle_chains(
+        sessions,
+        HEART,
+        None,
+        stats,
+        exclusively=backfill._exclusively,
+        options=BackfillOptions(dry_run=False, statement_timeout="120s", notice=notices.append),
     )
     assert isinstance(planned, Chains) and not change
     assert attempts == [HEART.name] * 3 and pauses == [2, 4] and len(notices) == 2
@@ -218,8 +205,13 @@ async def test_exhausted_chain_retries_leave_no_checkpoint_or_partial_writes(ses
     monkeypatch.setattr(backfill, "_pause", pause)
     monkeypatch.setattr(backfill, "LOCK_ATTEMPTS", 7)
     with pytest.raises(backfill.LockUnavailable, match="7 attempts"):
-        await backfill._settle_chains(
-            sessions, HEART, None, BackfillStats(), dry_run=False, statement_timeout="120s"
+        await identity_backfill_chains.settle_chains(
+            sessions,
+            HEART,
+            None,
+            BackfillStats(),
+            exclusively=backfill._exclusively,
+            options=BackfillOptions(dry_run=False, statement_timeout="120s"),
         )
     assert pauses == [2, 4, 8, 16, 32, 60, 60]
     assert await snapshot(sessions) == before

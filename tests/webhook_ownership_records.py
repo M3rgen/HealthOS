@@ -6,9 +6,9 @@ from datetime import UTC, datetime, timedelta
 
 from retrieval_records import END, START
 from sqlalchemy import select, update
+from support.webhooks import notification
 from sync_ownership_records import service
 from sync_ownership_records import snapshot as sync_snapshot
-from test_webhook_route import notification
 
 from app.core.config import Settings
 from app.models.state import (
@@ -20,9 +20,9 @@ from app.models.state import (
 )
 from app.models.webhook_status import WebhookStatusEvent
 from app.parsers.common import payload_hash
-from app.services.webhook_processing import WebhookBatchProcessor
-from app.services.webhook_status import WebhookStatusService
+from app.services.synchronization.webhook_status import WebhookStatusService
 from app.sync.incremental import STALE_RUNNING_AFTER
+from app.sync.webhook_processing import WebhookBatchProcessor
 
 
 def processor(sessions, client):

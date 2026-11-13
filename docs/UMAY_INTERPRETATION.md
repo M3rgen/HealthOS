@@ -1,50 +1,56 @@
-# Umay yorum aracı — sürüm 2
+# Umay interpretation tool, version 2
 
-`health_archive` içindeki `baseline`, `analyze`, `sleep`, `intraday`, `sessions`,
-`physiology`, `longitudinal`, `relationship` eylemleri `read_health` ve sohbet API'si
-üzerinden çalışır. `inventory`, `daily`, `records`, `coverage` sürüm 1 davranışını korur.
-Kaynak arşivi ve manuel kayıtlar değişmez; yalnız mevcut, atılabilir günlük önbellek yazılır.
+The `baseline`, `analyze`, `sleep`, `intraday`, `sessions`, `physiology`, `longitudinal` and
+`relationship` actions of `health_archive` run through `read_health` and the chat API. `inventory`,
+`daily`, `records` and `coverage` keep their version 1 behavior. The source archive and manual
+entries are not changed; only the existing, disposable daily cache is written.
 
-- Kişisel taban: varsayılan 56 önceki takvim günü (14–90 seçilebilir), en az 14 uygun gün
-  ve %50 takvim desteği gerekir. 7 günün altı `cold_start` olur. Değerlendirilen gün ve
-  sonrası tabana girmez. Medyan, ölçeklenmemiş MAD, min/max, doğrusal p10/p90 ve orta sıra
-  yüzdeliği döner. Z = (değer − medyan)/(1,4826 × MAD); sıfır MAD'de z yoktur.
-- Boşluk, belirsiz uyku, çelişki, kısmi gün ve eksik adım aralığı kıyas desteği sayılmaz.
-  Ölçülmüş sıfır korunur. Eksik günler sıfıra çevrilmez. Kaynak seçim sıralaması yapılmaz.
-  Yeniden adlandırma yalnız mevcut `raw_source_devices` üyelik kanıtıyla bağlanır;
-  kayıt yöntemi ve ölçüm tanımı ayrı kalır. Kanıtsız kaynaklar birleştirilmez.
-- `analyze.candidates`: uygun özetlerden orta sıraya uzaklığı en az 40 yüzdelik puan olan
-  en çok beş gözlem adayı; skor azalan, eşitlikte özet sırası. Klinik önem/tedavi puanı
-  değildir. `summary_index` tüm sonuç dizisine başvurur; `summary_offset` sayfanın başlangıcıdır.
-- Uyku mevcut oturum/evre kanıtını aynen taşır. Evre toplamı zaman çizelgesi üretmez;
-  desteklenmeyen çizelge `null`, bilinmeyen ve çakışan süreler ayrı kalır.
-- Nabız: yalnız arası en çok 300 saniye olan örnekler arasında doğrusal süre tahmini;
-  uçlara uzatma yoktur. Ortalama gerçek UTC saniyeleriyle ağırlıklıdır. Örnek dağılımı
-  yalnız günün içindeki örneklerden gelir. Adım hızı aralığa eşit dağıtım tahminidir;
-  kaynak aralık sayılarının istatistiği ayrı birimle verilir, kesin hareket patlaması yoktur.
-- Oturumun fiziksel süresi, bildirilen aktif süre, mesafe/enerji ve çakışan oturumlar
-  ayrıdır. Segment kanıtı olmadığından kesintisiz koşu süresi `null` olur.
-- Fizyoloji yalnız mevcut parser alanlarını destekler; yöntem ayrıntısı/tanım/birim
-  taşınır. Güncellik, sorgunun son gününe göre 7 gün; VO₂ için 30 gündür. Bu eşikler
-  klinik geçerlilik sınırı değildir. Yokluk ve desteklenmeyen biçim ayrı nedenlerdir.
-- Miktar özetlerinde aktif/toplam enerji ve kaynak aralıkları ayrıdır; farklı aralık süreleri ayrı tanımdır; aralık tutarları
-  günlük toplam sayılmaz veya pencereye kırpılmaz. Kilo/beden değişimi aynı kaynak,
-  tanım ve yöntemde hesaplanır; aynı andaki çelişkiler hesap dışında, kanıtta görünürdür.
-  Test işaretli manuel ölçümler hem hesap hem kanıttan ortak okuyucuyla dışlanır.
-- İlişki: önceden seçilmiş en çok beş −14…14 günlük gecikme, pozitif gecikmede Y sonra.
-  Takvim çiftleri ve bağlı kayıt başvuruları döner. En az 20 çift ve %50 destek gerekir.
-  Spearman orta sıraları kullanılır; pencerenin iki takvim yarısında en az 8 çift, aynı işaret ve
-  en çok 0,35 katsayı farkı aranır. Sabit/kararsız seriden uygun bulgu üretilmez;
-  p-değeri, nedensellik veya karıştırıcı kontrolü iddiası yoktur.
+- Personal baseline: by default the 56 previous calendar days (14–90 selectable), requiring at
+  least 14 eligible days and 50% calendar support. Under 7 days is `cold_start`. The evaluated day
+  and later days are not part of the baseline. Returns median, unscaled MAD, min/max, linear p10/p90
+  and mid-rank percentile. Z = (value − median)/(1.4826 × MAD); with a zero MAD there is no z.
+- Gaps, uncertain sleep, conflicts, partial days and missing step intervals do not count as
+  comparison support. A measured zero stays. Missing days do not become zero. No source ranking is
+  applied. A rename is linked only with existing `raw_source_devices` membership evidence; recording
+  method and measurement definition stay separate. Sources without evidence are not merged.
+- `analyze.candidates`: at most five observation candidates from eligible summaries at least 40
+  percentile points from the mid-rank, by descending score, ties in summary order. This is not a
+  clinical significance or treatment score. `summary_index` refers to the whole result array;
+  `summary_offset` is the start of the page.
+- Sleep carries the existing session and stage evidence as is. Stage totals produce no timeline; an
+  unsupported timeline is `null`, and unknown and overlapping durations stay separate.
+- Heart rate: linear duration estimate only between samples at most 300 seconds apart, with no
+  extension at the ends. The mean is weighted by real UTC seconds. The sample distribution comes
+  only from the day's own samples. Step rate is an estimate of equal distribution over the interval;
+  statistics of source interval counts are given in their own unit, and there is no exact movement
+  burst.
+- A session's physical duration, reported active time, distance/energy and overlapping sessions stay
+  separate. Without segment evidence, continuous running time is `null`.
+- Physiology supports only existing parser fields; method detail, definition and unit are carried.
+  Recency is 7 days from the query's last day, 30 days for VO₂. These thresholds are not clinical
+  validity limits. Absence and unsupported format are separate reasons.
+- In quantity summaries, active and total energy and source intervals stay separate; different
+  interval lengths are different definitions; interval amounts are not counted as a daily total or
+  clipped to the window. Weight and body change is computed within the same source, definition and
+  method; simultaneous conflicts are outside the computation but visible in the evidence. Manual
+  measurements flagged as test entries are excluded from both computation and evidence by the shared
+  reader.
+- Relationship: at most five pre-selected lags of −14…14 days; with a positive lag, Y comes after.
+  Calendar pairs and bound record references are returned. Requires at least 20 pairs and 50%
+  support. Spearman uses mid-ranks; both calendar halves of the window need at least 8 pairs, the
+  same sign and a coefficient difference of at most 0.35. A constant or unstable series yields no
+  eligible finding; there is no p-value, causation or confounder-control claim.
 
-Yeni eylemler 90 gün, ilişki 180 gün; giriş 50000 ilgili kayıt ve 16 MiB ham JSON, sonuç 1000 özet,
-ilişki 16 rejim, gönderilen sayfa 64 KiB ile sınırlıdır. Bütçe aşımı yapılandırılmış ret
-üretir; JSON kesilmez. `next_cursor`, sürüm/sorgu/giriş ve tüm hesap sonucuna bağlıdır.
-`limit` değişebilir; diğer parametreler aynı kalır. Değer, üyelik, silinme, karantina,
-cihaz kararı veya ilgili manuel işaret değişiminde `stale_cursor` ile baştan başlanır.
-İstatistik ve aday sırası sayfa boyutundan etkilenmez. PostgreSQL okuması tek işlem
-anlık görüntüsü kullanır; gerçek PostgreSQL ve Google/model doğrulaması dış ortam işidir.
+The new actions are limited to 90 days, relationship to 180 days; input to 50,000 relevant records
+and 16 MiB of raw JSON; the result to 1,000 summaries and relationship to 16 regimes; a returned
+page to 64 KiB. Exceeding a budget produces a structured refusal; JSON is never truncated.
+`next_cursor` is bound to version, query, input and the complete computed result. `limit` may change;
+other parameters must stay the same. On a change of value, membership, deletion, quarantine, device
+decision or relevant manual flag, the tool starts over with `stale_cursor`. Statistics and candidate
+order do not depend on page size. A PostgreSQL read uses a single transaction snapshot; verifying
+against real PostgreSQL and Google or a model is outside this repository's tests.
 
-Giriş bütçesi eylemin kullandığı türlere uygulanır; örneğin dakikalık nabız arşivi kişisel
-günlük tabanı engellemez. Önbellek kullanan eylemlerde beş günlük adaptörün girdileri
-sayılır. Yoğun arşivde `lookback_days` de daraltılabilir; ret eksik veri bulgusu değildir.
+The input budget applies to the types an action uses; for example, a minute-level heart-rate
+archive does not block a personal daily baseline. In actions using the cache, the inputs of the five
+daily adapters are counted. On a dense archive `lookback_days` can be narrowed as well; a refusal is
+not a missing-data finding.

@@ -32,24 +32,27 @@ kendisi asla `sudo` çağırmaz: root iken sistem birimleri, normal kullanıcıy
 kurar; `sudo` gerektiren komutlar yazdırılır, onları siz çalıştırırsınız. Türkçe sorular için sonuna `-s -- --lang tr` ekleyin:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/M3rgen/HealthOS/main/install.sh | bash
-curl -fsSL https://raw.githubusercontent.com/M3rgen/HealthOS/main/install.sh | bash -s -- --lang tr
+curl -fsSL https://raw.githubusercontent.com/M3rgen/HealthOS/v0.2.2.1/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/M3rgen/HealthOS/v0.2.2.1/install.sh | bash -s -- --lang tr
 ```
 
 **Windows 10/11** (PowerShell, kendi kullanıcınızla):
 
 ```powershell
-irm https://raw.githubusercontent.com/M3rgen/HealthOS/main/install.ps1 | iex
+irm https://raw.githubusercontent.com/M3rgen/HealthOS/v0.2.2.1/install.ps1 | iex
 ```
 
-**Sabit bir sürüm** (güncel `main` yerine, burada v0.2.2):
+İki komut da bir sürüm kurar (burada v0.2.2.1): kurulum aracı kendi etiketini
+(`HEALTHOS_INSTALLER_VERSION`) klonlar; siz istemedikçe hareketli `main` dalını değil.
+
+**Geliştirme sürümü** (`main`, sürüm değil):
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/M3rgen/HealthOS/v0.2.2/install.sh | bash -s -- --ref v0.2.2
+curl -fsSL https://raw.githubusercontent.com/M3rgen/HealthOS/main/install.sh | bash -s -- --ref main
 ```
 
 ```powershell
-& ([scriptblock]::Create((irm https://raw.githubusercontent.com/M3rgen/HealthOS/v0.2.2/install.ps1))) -Ref v0.2.2
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/M3rgen/HealthOS/main/install.ps1))) -Ref main
 ```
 
 **Betiği çalıştırmadan önce okumak mı istersiniz?** Önce depoyu klonlayın, `install.sh` ya da
@@ -57,14 +60,14 @@ curl -fsSL https://raw.githubusercontent.com/M3rgen/HealthOS/v0.2.2/install.sh |
 yeniden klonlamaz:
 
 ```sh
-git clone https://github.com/M3rgen/HealthOS.git
+git clone --branch v0.2.2.1 https://github.com/M3rgen/HealthOS.git
 cd HealthOS
 less install.sh
 ./install.sh --lang tr            # ya da önce: ./install.sh --lang tr --dry-run
 ```
 
 ```powershell
-git clone https://github.com/M3rgen/HealthOS.git
+git clone --branch v0.2.2.1 https://github.com/M3rgen/HealthOS.git
 cd HealthOS
 notepad .\install.ps1
 powershell -ExecutionPolicy Bypass -File .\install.ps1 -Lang tr     # ya da -DryRun ekleyin
@@ -76,14 +79,14 @@ Kabuk erişimi olan bir kodlama ajanı (Claude Code, OpenAI Codex CLI ya da benz
 [AI_INSTALL.md](AI_INSTALL.md) adımlarını izleyerek sizin yerinize yapabilir. Ona şu istemi verin:
 
 ```text
-Bu bilgisayara HealthOS'u kur: https://raw.githubusercontent.com/M3rgen/HealthOS/main/docs/AI_INSTALL.md adımlarını izle; yönetici izni ya da hesap bilgisi gereken her adımdan önce bana sor ve hiçbir veriyi silme.
+Bu bilgisayara HealthOS'u kur: https://raw.githubusercontent.com/M3rgen/HealthOS/v0.2.2.1/docs/AI_INSTALL.md adımlarını izle; yönetici izni ya da hesap bilgisi gereken her adımdan önce bana sor ve hiçbir veriyi silme.
 ```
 
 Terminalde doğrudan çalıştırmak için:
 
 ```sh
-claude "Bu bilgisayara HealthOS'u kur: https://raw.githubusercontent.com/M3rgen/HealthOS/main/docs/AI_INSTALL.md adımlarını izle; yönetici izni ya da hesap bilgisi gereken her adımdan önce bana sor ve hiçbir veriyi silme."
-codex "Bu bilgisayara HealthOS'u kur: https://raw.githubusercontent.com/M3rgen/HealthOS/main/docs/AI_INSTALL.md adımlarını izle; yönetici izni ya da hesap bilgisi gereken her adımdan önce bana sor ve hiçbir veriyi silme."
+claude "Bu bilgisayara HealthOS'u kur: https://raw.githubusercontent.com/M3rgen/HealthOS/v0.2.2.1/docs/AI_INSTALL.md adımlarını izle; yönetici izni ya da hesap bilgisi gereken her adımdan önce bana sor ve hiçbir veriyi silme."
+codex "Bu bilgisayara HealthOS'u kur: https://raw.githubusercontent.com/M3rgen/HealthOS/v0.2.2.1/docs/AI_INSTALL.md adımlarını izle; yönetici izni ya da hesap bilgisi gereken her adımdan önce bana sor ve hiçbir veriyi silme."
 ```
 
 İsterseniz istemi Claude Code'a, Codex'e ya da komut çalıştırabilen başka bir ajana yapıştırın.
@@ -98,10 +101,11 @@ Sırasıyla:
    işletim sisteminize göre nasıl kurulacağını söyler ve durur (çıkış kodu 2); kendiliğinden
    sistem paketi kurmaz.
 2. Bir HealthOS klonunun içinde çalışmıyorsa `https://github.com/M3rgen/HealthOS.git` deposunu
-   `--ref` (varsayılan `main`) ile kurulum dizinine klonlar.
+   `--ref` (varsayılan: kurulum aracının kendi sürüm etiketi; `main` yalnız `--ref main` ile) ile
+   kurulum dizinine klonlar.
 3. Aşağıdaki soruları sorar (ya da yanıtları seçeneklerden alır).
 4. `.env` dosyasını yazar: yalnızca eksik değerler için yeni gizli anahtar üretir; var olan bir
-   `.env` önce `.env.bak-<UTC zaman damgası>` olarak kopyalanır; yeniden çalıştırma yalnızca
+   `.env` önce `~/.local/state/healthos/env-backups/` (Windows: `%LOCALAPPDATA%\HealthOS\env-backups\`) altına kopyalanır; yeniden çalıştırma yalnızca
    [Kurulum aracının değiştirdikleri](#kurulum-aracının-değiştirdikleri-ve-asla-yapmadıkları)
    bölümündeki birkaç değeri değiştirebilir. Gizli anahtarlar asla değiştirilmez.
 5. İsterseniz yedek anahtarını oluşturur; günlük yedeği, yeniden başlatmadan sonra otomatik
@@ -135,14 +139,17 @@ Türkçedir.
    | 5 | Windows 10/11 | WSL 2 altyapılı Docker Desktop |
    | 6 | Bulut VPS | Linux ile aynı, artı SSH tüneli notu |
 
-3. **Kip.** `trial` (deneme) ya da `full` (tam); bkz. [Deneme ve tam kip](#deneme-ve-tam-kip).
-   İlk çalıştırmada `trial` önceden seçilidir. Yeniden çalıştırmada önceden seçilen yanıt (ve
-   `--yes` ile varsayılan) var olan `.env` dosyasından gelir: `docker-compose.dev.yml` içermeyen bir
-   `COMPOSE_FILE` `full`, içeren `trial` demektir; `.env` ya da `COMPOSE_FILE` yoksa `trial`.
-   `--mode` her zaman önceliklidir.
+3. **Kip.** `full` (tam) ya da `trial` (deneme); bkz. [Deneme ve tam kip](#deneme-ve-tam-kip).
+   İlk çalıştırmada `full` önceden seçilidir; bunun için Google gerekmez. Yeniden çalıştırmada
+   önceden seçilen yanıt (ve `--yes` ile varsayılan) var olan `.env` dosyasından gelir:
+   `docker-compose.dev.yml` içermeyen bir `COMPOSE_FILE` `full`, içeren `trial` demektir; `.env` ya da
+   `COMPOSE_FILE` yoksa `full`. `--mode` her zaman önceliklidir. `trial` yalnız bakıp çıkmak içindir;
+   kurulum aracı bunu her seferinde söyler: veri saklamayın, yedek yok.
 4. **Veri kaynakları.** Google Health API v4, Garmin Connect Personal API ve Apple Sağlık'ın
-   herhangi bir birleşimi ya da hiçbiri; her biri [Veri kaynakları](#veri-kaynakları) altında
-   anlatılır. Google için OAuth istemci kimliğini ve gizli anahtarını (Enter sonraya bırakır),
+   herhangi bir birleşimi ya da hiçbiri (varsayılan); her biri [Veri kaynakları](#veri-kaynakları)
+   altında anlatılır. Seçim `.env` dosyasına `HEALTHOS_SOURCES` olarak yazılır (örneğin
+   `garmin,apple` ya da `none`); var olan `.env` içinde açık olan bir kaynak orada kalır (elle
+   çıkarın). Google için OAuth istemci kimliğini ve gizli anahtarını (Enter sonraya bırakır),
    tam kipte de herkese açık webhook ana makine adını sorar; Garmin için anahtar dosyasının yolunu
    (dosya henüz yoksa anahtarı yapıştırabilirsiniz, oraya kaydedilir); Apple için Health Auto
    Export alıcısının açılıp açılmayacağını (varsayılan hayır) ve HTTPS adresini.
@@ -161,10 +168,11 @@ ister; hayır derseniz hiçbir şey değişmez.
 
 | | `trial` (deneme) | `full` (tam) |
 | --- | --- | --- |
-| Amaç | İlk yerel bakış, geliştirme, boş pano ve elle girişler | Gözetimsiz çalışma |
+| Amaç | Yalnız bakıp çıkmak için (geliştirme): veri saklamayın, yedek yok | Gerçek kullanım: verilerinizi saklar, gözetimsiz çalışır, varsayılan olarak günlük şifreli yedek |
 | Compose dosyaları | `docker-compose.yml` + `docker-compose.dev.yml` | `docker-compose.yml` |
 | `APP_ENV` (Compose dosyaları belirler, `.env` değil) | `development` (üretim gizli anahtar denetimi atlanır) | `production` |
-| Google | isteğe bağlı | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_TOKEN_ENCRYPTION_KEY`, `GOOGLE_HEALTH_WEBHOOK_ENDPOINT_URI` (HTTPS) ve `GOOGLE_HEALTH_WEBHOOK_AUTHORIZATION` |
+| Google | isteğe bağlı | isteğe bağlı; yalnız `HEALTHOS_SOURCES` içinde `google` varsa: `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_TOKEN_ENCRYPTION_KEY`, `GOOGLE_HEALTH_WEBHOOK_ENDPOINT_URI` (HTTPS) ve `GOOGLE_HEALTH_WEBHOOK_AUTHORIZATION` |
+| `HEALTHOS_SOURCES` | seçilen kaynaklar | seçilen kaynaklar |
 | PostgreSQL portu | `127.0.0.1:5432` üzerinde açık | açık değil |
 | `/docs` API belgeleri | var | yok |
 
@@ -173,9 +181,11 @@ ister; hayır derseniz hiçbir şey değişmez.
 
 **Yeniden çalıştırma kipi korur.** `--mode` verilmezse var olan `.env` okunur:
 `docker-compose.dev.yml` içermeyen bir `COMPOSE_FILE` `full`, içeren `trial` demektir; `.env` ya da
-`COMPOSE_FILE` yoksa `trial`. Sihirbaz da aynı yanıtı önceden seçer. Değiştirmek için `--mode` verin.
+`COMPOSE_FILE` yoksa `full`. Sihirbaz da aynı yanıtı önceden seçer. Değiştirmek için `--mode` verin.
 
-Tam kipte uygulama, üretim değerlerinin hepsi girilene kadar başlamayı reddeder. Kurulum aracı
+Tam kipte uygulama, seçilen kaynakların üretim değerlerinin hepsi girilene kadar başlamayı reddeder:
+`APP_UI_TOKEN` her zaman, Google değerleri yalnız `HEALTHOS_SOURCES` içinde `google` varsa,
+`garmin` ile okunabilir bir anahtar dosyası. Kurulum aracı
 kapsayıcının sonradan çökmesini beklemek yerine eksik olanları listeler ve başlatmadan
 yapılandırır; değerleri `.env` dosyasına yazıp kurulum aracını yeniden çalıştırın (ya da
 `docker compose up -d --build`).
@@ -194,10 +204,10 @@ değerlerini listeler. Verileriniz aynı veritabanı biriminde kalır.
 | --- | --- | --- |
 | `--lang en\|tr` | `-Lang en\|tr` | Soruların ve iletilerin dili. Etkileşimli varsayılan: sorar, English önceden seçili. |
 | `--platform linux\|raspberrypi\|nas\|macos\|windows\|vps` | `-Platform …` | Hedef platform (yukarıdaki tablo). |
-| `--mode trial\|full` | `-Mode trial\|full` | İlk çalıştırmada varsayılan `trial`; yeniden çalıştırmada var olan `.env` dosyasının kipi (bkz. [Deneme ve tam kip](#deneme-ve-tam-kip)). Açıkça verilen değer her zaman önceliklidir. |
-| `--sources google,garmin,apple` ya da `none` | `-Sources …` | Virgülle ayrılmış veri kaynakları. |
+| `--mode full\|trial` | `-Mode full\|trial` | İlk çalıştırmada varsayılan `full`; yeniden çalıştırmada var olan `.env` dosyasının kipi (bkz. [Deneme ve tam kip](#deneme-ve-tam-kip)). Açıkça verilen değer her zaman önceliklidir. `trial` yalnız göz atmak içindir: yedek yok, veri saklamayın. |
+| `--sources google,garmin,apple` ya da `none` | `-Sources …` | Virgülle ayrılmış veri kaynakları (varsayılan `none`). `.env` dosyasına `HEALTHOS_SOURCES` olarak, var olan `.env` içinde hâlâ açık kaynaklarla birlikte yazılır. |
 | `--dir YOL` | `-Dir YOL` | Kurulum dizini. Varsayılan: bir klonun içinde çalışıyorsa o klon; değilse Linux'ta `/opt/healthos` (root) ya da `~/healthos`, macOS'ta `~/healthos`, Windows'ta `%USERPROFILE%\healthos`. |
-| `--ref REF` | `-Ref REF` | Klonlanacak Git dalı ya da etiketi (varsayılan `main`). |
+| `--ref REF` | `-Ref REF` | Klonlanacak Git dalı ya da etiketi. Varsayılan: kurulum aracının kendi sürüm etiketi (`v` + `HEALTHOS_INSTALLER_VERSION`, örn. `v0.2.2`); `main` yalnız `--ref main` ile. |
 | `--garmin-key-file YOL` | `-GarminKeyFile YOL` | Makinedeki Garmin Personal API anahtar dosyası. Açıkça verilen yol yoksa hata (çıkış kodu 2). Seçenek verilmezse eksik varsayılan anahtar dosyası Garmin'i bir notla kapalı bırakır, çıkış kodu 0. |
 | `--google-client-id ID` | `-GoogleClientId ID` | Google OAuth istemci kimliği. |
 | `--google-client-secret S` | `-GoogleClientSecret S` | Google OAuth istemci gizli anahtarı. |
@@ -239,11 +249,17 @@ aracı sorsun ya da sonradan `.env` dosyasına yazın.
 
 HealthOS her kaydı ve her yedeği saklar; kurulum aracı da aynı kurala uyar.
 
-- **Her değişiklikten önce `.env` kopyalanır.** Dosya varsa önce `.env.bak-<UTC zaman damgası>`
-  olarak kopyalanır (eski `.bak` dosyaları kalır). Sonra kurulum aracı eksik ya da boş anahtarları
+- **Her değişiklikten önce `.env` kopyalanır.** Dosya varsa önce yalnız sizin açabildiğiniz
+  `~/.local/state/healthos/env-backups/` (Windows: `%LOCALAPPDATA%\HealthOS\env-backups\`) dizinine (700, dosyalar 600)
+  `<kurulum yolu>.env.bak-<UTC zaman damgası>` adıyla kopyalanır; özet bu kurulumun orada kaç
+  kopyası olduğunu yazar. `.env` yanındaki eski `.env.bak-*` dosyaları (önceki sürümlerden) bir kez
+  oraya kopyalanır ve yerlerinde kalır; hiçbir şey taşınmaz ya da silinmez. Sonra kurulum aracı eksik ya da boş anahtarları
   doldurur ve var olan değerlerden yalnızca şunları değiştirebilir: `COMPOSE_FILE` ve
-  `COMPOSE_PATH_SEPARATOR` (güncel kip ve kaynaklarınıza uyar), seçtiğiniz kaynağın
-  `GARMIN_ENABLED` / `APPLE_RECEIVER_ENABLED` değeri `false` ise `true` olur ve
+  `COMPOSE_PATH_SEPARATOR` (güncel kip ve kaynaklarınıza uyar), `HEALTHOS_SOURCES` (seçtiğiniz
+  kaynaklar ve var olan `.env` dosyasında zaten çalışan her kaynak: tam kip her zaman `google`
+  ekler; bu anahtarı içermeyen eski bir `.env`, Google ve eski `GARMIN_ENABLED` anahtarı açık ve
+  anahtar dosyası yazılıysa Garmin sayılır), alıcıyı açtığınızda `APPLE_RECEIVER_ENABLED` değeri
+  `false` ise `true` olur ve
   `--garmin-key-file` / `-GarminKeyFile` açıkça verilirse Garmin anahtar dosyası yolu. Her değişiklik
   bildirilir. Bayrak yalnızca değeri boşsa ya da `false`, `0`, `no`, `off` (büyük/küçük harf fark
   etmez) ise `true` yapılır. Bir kaynağı asla kapatmaz (`…_ENABLED=false` değerini kendiniz yazın); var olan diğer
@@ -259,13 +275,16 @@ HealthOS her kaydı ve her yedeği saklar; kurulum aracı da aynı kurala uyar.
   `exec` komutları `-f` vermeden aynı dosyaları kullanır. Garmin'li bir deneme kurulumu örneği:
   `COMPOSE_FILE=docker-compose.yml:docker-compose.dev.yml:docker-compose.garmin.yml`.
   Kurulum aracı yalnızca `docker-compose.yml`, `docker-compose.dev.yml`,
-  `docker-compose.garmin.yml`, `docker-compose.apple.yml` ve `docker-compose.windows.yml`
-  dosyalarını yönetir; `COMPOSE_FILE` içindeki diğer her girdi (kendi dosyalarınız) özgün sırasıyla
-  korunur. `COMPOSE_FILE` tanımlı değilse ve `docker-compose.override.yml` varsa o da eklenir,
+  `docker-compose.garmin.yml` ve `docker-compose.apple.yml` dosyalarını yönetir. Depodan
+  kaldırılan iki boş uyumluluk dosyası, `docker-compose.windows.yml` ya da
+  `docker-compose.linux.example.yml`, eski bir `COMPOSE_FILE` ayarında geçiyorsa o girdi düşürülür.
+  `COMPOSE_FILE` içindeki diğer her girdi (kendi dosyalarınız) özgün sırasıyla korunur. `COMPOSE_FILE` tanımlı değilse ve `docker-compose.override.yml` varsa o da eklenir,
   çünkü Compose onu zaten örtük olarak yüklerdi.
 - **Asla:** `docker compose down -v`, birim (volume) silme, yedek silme, herhangi bir dosyayı
   silme. Kurulum aracını yeniden çalıştırmak güvenlidir.
-- Erişim anahtarı sonda bir kez yazdırılır. `.env` içinde `APP_UI_TOKEN` olarak kalır.
+- Erişim anahtarı sonda bir kez, yalnız etkileşimli bir terminalde yazdırılır. Terminal yoksa
+  (boru, günlük dosyası, CI) özet bunun yerine `grep APP_UI_TOKEN <kurulum-dizini>/.env` yazar;
+  GitHub Actions'ta değer günlükte maskelenir. `.env` içinde `APP_UI_TOKEN` olarak kalır.
 
 ## Platformlar
 
@@ -290,7 +309,7 @@ bir sanal makine ya da Docker için iç içe sanallaştırması (nesting) açık
 sudo apt install git age python3      # Fedora: sudo dnf install git age python3
 sudo systemctl enable --now docker
 docker compose version
-curl -fsSL https://raw.githubusercontent.com/M3rgen/HealthOS/main/install.sh | bash -s -- --lang tr
+curl -fsSL https://raw.githubusercontent.com/M3rgen/HealthOS/v0.2.2.1/install.sh | bash -s -- --lang tr
 ```
 
 **root ya da kendi kullanıcınız.**
@@ -443,7 +462,7 @@ Git (`xcode-select --install` ya da Homebrew); yedekler için `brew install age`
 (`brew install python`; Xcode komut satırı araçlarındaki `python3` çok eski).
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/M3rgen/HealthOS/main/install.sh | bash -s -- --lang tr
+curl -fsSL https://raw.githubusercontent.com/M3rgen/HealthOS/v0.2.2.1/install.sh | bash -s -- --lang tr
 ```
 
 Kurulum aracı macOS'u algılar ve önceden seçer. Kurulum dizini: `~/healthos`. Yedek anahtarı:
@@ -470,7 +489,7 @@ yedekler için `winget install FiloSottile.age`. Windows PowerShell 5.1 ve Power
 de çalışır.
 
 ```powershell
-irm https://raw.githubusercontent.com/M3rgen/HealthOS/main/install.ps1 | iex
+irm https://raw.githubusercontent.com/M3rgen/HealthOS/v0.2.2.1/install.ps1 | iex
 ```
 
 Kurulum aracı Windows'u algılar ve önceden seçer. Bütün platformları listeler ama bu bilgisayara
@@ -519,7 +538,7 @@ yeniden çalıştırın: kaynağın ayarlarını doldurur, `…_ENABLED` anahtar
 | Kaynak | Cihazlar | Gereken | Varsayılan |
 | --- | --- | --- | --- |
 | Google Health API v4 | Fitbit, Pixel Watch, Google Health uygulaması | Uygun bir Google Cloud projesi, OAuth web istemcisi | yapılandırılana kadar kapalı |
-| Garmin Connect Personal API | Garmin saatleri ve cihazları | Personal API anahtar dosyası | kapalı (`GARMIN_ENABLED=false`) |
+| Garmin Connect Personal API | Garmin saatleri ve cihazları | Personal API anahtar dosyası | kapalı (`HEALTHOS_SOURCES` içinde değil) |
 | Apple Sağlık | Apple Watch, iPhone | `export.zip` için hiçbir şey; otomatik yükleme için Health Auto Export uygulaması | yükleme hazır; alıcı kapalı |
 | Yok | — | Hiçbir şey; elle girişler ve boş pano | — |
 
@@ -537,8 +556,8 @@ Google, 3 Ekim 2026 itibarıyla yeni Google Health API projelerinin kabul edilme
 3. <http://localhost:8000/auth/google/start> adresini açıp izni verin, sonra:
 
    ```sh
-   docker compose exec app health-mirror probe --days 30
-   docker compose exec app health-mirror backfill
+   docker compose exec app healthos probe --days 30
+   docker compose exec app healthos backfill
    ```
 
 Tam kip ayrıca `GOOGLE_HEALTH_WEBHOOK_ENDPOINT_URI` (HTTPS) ve `GOOGLE_HEALTH_WEBHOOK_AUTHORIZATION`
@@ -559,10 +578,19 @@ Kendi Garmin Connect hesabınız için salt okunur, yalnızca çekme yapan bir k
    ```
 
 2. Kurulum aracında Garmin'i seçin (ya da `--sources garmin --garmin-key-file YOL`).
-   `GARMIN_ENABLED=true`, `GARMIN_API_KEY_HOST_FILE` ve `GARMIN_API_KEY_HOST_GID` yazar ve
+   `HEALTHOS_SOURCES` değerine `garmin` (yazdığı tek kaynak anahtarı; var olan eski
+   `GARMIN_ENABLED` satırı olduğu gibi kalır ve `HEALTHOS_SOURCES` yazılınca yok sayılır),
+   `GARMIN_API_KEY_HOST_FILE` ve `GARMIN_API_KEY_HOST_GID` yazar ve
    `COMPOSE_FILE` satırına `docker-compose.garmin.yml` ekler; bu ek dosya anahtar dosyasını
    uygulamaya salt okunur bağlar. Uygulama kapsayıcısı kendi kullanıcısıyla (uid 10001) çalıştığı
-   için kurulum aracı Linux'ta dosyayı okunur yapar. root iken grubu 10001, modu 640 yapar. Birincil
+   için kurulum aracı Linux'ta dosyayı okunur yapar. root iken dosyayı 10001 grubuna (ya da `.env`
+   içinde zaten yazılı `GARMIN_API_KEY_HOST_GID` grubuna) 640 moduyla verir; ama yalnız bu
+   bilgisayarda o grupta başka hiçbir hesap yoksa (ne listelenmiş üye ne de birincil grup olarak):
+   kapsayıcının numarasını taşıyan bir host grubuna yalnız bu yüzden güvenilmez. Aksi halde dosyanın
+   izinleri değişmez, Garmin kapalı kalır ve kurulum aracı kapsayıcıya kendine ait bir grubun nasıl
+   verileceğini anlatır (hiçbir hesabın üye olmadığı bir grup oluşturun, `*_HOST_GID` anahtarına
+   yazın, yeniden çalıştırın). `chgrp` ya da `chmod` başarısız olursa kurulum aracı başarı bildirmek
+   yerine çıkış kodu 1 ile durur; mod yalnız grup değiştikten sonra değişir. Birincil
    grubu paylaşılan olan normal kullanıcıda (1000'in altında bir grup kimliği, örneğin `users`, ya da
    başka üyeleri olan bir grup) dosyayı **gevşetmez**; çalıştırmanız gereken komutu
    (`sudo chgrp 10001 DOSYA && sudo chmod 640 DOSYA`) yazdırır ve komutu çalıştırıp kurulum aracını
@@ -574,8 +602,8 @@ Kendi Garmin Connect hesabınız için salt okunur, yalnızca çekme yapan bir k
    kullanıcınızın okuyabildiği bir dosyayı okuyamayabilir; uygulama anahtarı okuyamıyorsa dosya
    izinlerini ve Colima bağlamalarını (`colima start --mount`) denetleyin ya da Docker Desktop ya da
    OrbStack kullanın. Aynı kurallar Apple alıcısı belirteç dosyası için de geçerlidir. Windows'ta varsayılan yol `%USERPROFILE%\.config\garmin\connect-personal-api-key`.
-3. Denetim: `docker compose exec app health-mirror garmin-status`. Daha eski geçmiş:
-   `docker compose exec app health-mirror garmin-backfill --since 2026-06-01`.
+3. Denetim: `docker compose exec app healthos garmin-status`. Daha eski geçmiş:
+   `docker compose exec app healthos garmin-backfill --since 2026-06-01`.
 
 Anahtarın süresi sınırlıdır; yenilemek için dosyanın içeriğini değiştirin. Ayrıntılar:
 [Garmin başvurusu](REFERENCE.md#garmin-connect-personal-api).
@@ -640,12 +668,15 @@ olarak yazılır.
 
 ## Güncelleme
 
-Güncelleme her platformda aynıdır: yedek alın, çekin, kurulum aracını yeniden çalıştırın.
+Güncelleme her platformda aynıdır: yedek alın, yeni sürümün etiketine geçin, kurulum aracını
+yeniden çalıştırın. Kurulum aracının yaptığı klon bir sürüm etiketindedir (dal yok), bu yüzden
+`git pull` işe yaramaz; istediğiniz sürümün etiketini kullanın (burada bir sonraki, v0.2.2.1):
 
 ```sh
 cd ~/healthos                 # ya da /opt/healthos, ya da %USERPROFILE%\healthos
 make backup                  # ya da: bash scripts/backup.sh  (Windows: .\scripts\backup.ps1)
-git pull --ff-only
+git fetch --tags
+git checkout v0.2.2.1          # main dalındaki bir klonda bunun yerine: git pull --ff-only
 ./install.sh --lang tr       # Windows: .\install.ps1 -Lang tr
 ```
 
@@ -659,8 +690,7 @@ Kurulum aracı olmadan `docker compose up -d --build` yeniden derlemeyi yapar. 0
 penceresinin dışında güncelleyin. Sürüm notları: [CHANGELOG](../CHANGELOG.md); migration
 ayrıntıları: [işletim rehberi](RUNBOOK.md#update-the-application).
 
-Bir sürümde kalmak için kurulum aracını çalıştırmadan önce onun etiketine geçin
-(`git fetch --tags && git checkout v0.2.2`).
+Yeni bir `git checkout` yapılmazsa kurulum aracı klondaki sürümde kalır.
 
 ### 0.2.2 ya da daha eski bir kurulumu güncellemek (eski ad "HealtOS")
 
@@ -708,7 +738,8 @@ HealthOS'u bir makineden, verileri koruyarak kaldırmak için:
      `~/Library/LaunchAgents/` altındaki `.plist` dosyaları kalabilir.
    - Windows: `Disable-ScheduledTask -TaskPath '\HealthOS\' -TaskName 'HealthOS Backup'` (ve
      `'HealthOS Umay bridge'`), ya da Görev Zamanlayıcı'da *Devre Dışı Bırak*.
-4. Klonu, `.env` dosyasını, `.env.bak-*` kopyalarını ve `backups` klasörünü yerinde bırakın ya da
+4. Klonu, `.env` dosyasını, `.env` kopyalarını (`~/.local/state/healthos/env-backups/`, `.env` yanındaki eski `.env.bak-*`) ve
+   `backups` klasörünü yerinde bırakın ya da
    bir arşive taşıyın. `postgres_data` birimi siz başka bir karar verene kadar Docker'da kalır.
 
 Aynı klonda kurulum aracını sonra yeniden çalıştırmak aynı `.env` dosyasını ve aynı birimi
@@ -726,7 +757,7 @@ kullanır.
 | 8000 portu kullanımda | `.env` içinde `APP_PORT` ayarlayıp `docker compose up -d` çalıştırın. Google'ın yönlendirme adresi 8000 portunda kalır; Google kullanıyorsanız portu boşaltmak daha iyidir. |
 | `/health` `configuration_incomplete` listeliyor | Google bağlanıp webhook değerleri girilene kadar beklenen durum. |
 | Yedek durumu `failed` | `BACKUP_HOST_DIR` içindeki `last-backup-status.json` dosyasını okuyun; olağan nedenler eksik anahtar, kurulu olmayan `age` ya da yetersiz boş disk alanıdır. |
-| Güncellemeden sonra bir şey yanlış görünüyor | `docker compose logs --tail=200 app`. Önceki `.env` `.env.bak-<damga>` dosyasındadır. |
+| Güncellemeden sonra bir şey yanlış görünüyor | `docker compose logs --tail=200 app`. Önceki `.env` `~/.local/state/healthos/env-backups/` (Windows: `%LOCALAPPDATA%\HealthOS\env-backups\`) içindedir. |
 
 **Linux, Raspberry Pi, VPS**
 

@@ -1,23 +1,28 @@
 // Let the browser own modal focus containment and Escape/cancel. Only opening,
 // return focus and focus lost through DOM replacement need application policy.
+/** @param {Element | null | undefined} element */
 export function canFocus(element) {
   const modal = document.querySelector('dialog:modal');
-  return Boolean(element?.isConnected && !element.disabled &&
+  return Boolean(element?.isConnected && !(/** @type {HTMLButtonElement} */ (element)).disabled &&
     !element.closest('[hidden], [inert]') && element.getClientRects().length &&
     getComputedStyle(element).visibility === 'visible' && (!modal || modal.contains(element)));
 }
 
+/** @param {Element | null | undefined} element */
 export function focusVisible(element) {
   if (!canFocus(element)) return false;
-  element.focus(); // Native scrolling reveals controls inside their own panels.
+  /** @type {HTMLElement} */ (element).focus(); // Native scrolling reveals controls inside their own panels.
   return document.activeElement === element;
 }
 
+/** @param {Element | null | undefined} opener */
 export function returnFocus(opener) {
   if (!focusVisible(opener)) focusVisible(document.querySelector('.nav-button[aria-current="page"]'));
 }
 
+/** @param {HTMLDialogElement} dialog */
 export function setupDialog(dialog) {
+  /** @type {Element | null | undefined} */
   let opener;
   // The close event runs a task after the native focus restore; by then the user may already
   // have moved on (Tab, another control). Only recover focus that was actually lost.
@@ -26,6 +31,7 @@ export function setupDialog(dialog) {
     if (!dialog.open && (!current || current === document.body || dialog.contains(current))) returnFocus(opener);
   });
   return {
+    /** @param {{initial?: Element | null, trigger?: Element | null}} [options] */
     open({ initial, trigger = document.activeElement } = {}) {
       if (dialog.open) return;
       opener = trigger;
@@ -37,9 +43,13 @@ export function setupDialog(dialog) {
 
 // Restore only focus which this synchronous render removed or hid. A response
 // arriving after the user left the panel must never pull focus back into it.
+/**
+ * @param {Element} container @param {() => void} render
+ * @param {(previous: Element) => Element | null} replacement @param {Element} [fallback]
+ */
 export function replaceWithFocus(container, render, replacement, fallback) {
   const previous = document.activeElement;
   const owned = container.contains(previous);
   render();
-  if (owned && !canFocus(previous)) returnFocus(replacement(previous) || fallback);
+  if (owned && !canFocus(previous)) returnFocus(replacement(/** @type {Element} */ (previous)) || fallback);
 }

@@ -4,53 +4,12 @@ import asyncio
 from types import SimpleNamespace
 
 import pytest
-from fastapi import WebSocketDisconnect
-from test_codex_chat import RPC, Browser, take
+from support.chat import RPC, Browser, HeldQuery, take, tool_request
 from websockets.exceptions import ConnectionClosed
 
-from app.api import codex
-from app.services import chat_tools
-
-
-class HeldQuery:
-    def __init__(self, *, late=False, error=False):
-        self.entered = asyncio.Event()
-        self.release = asyncio.Event()
-        self.cancelled = asyncio.Event()
-        self.cleaned = asyncio.Event()
-        self.late = late
-        self.error = error
-        self.task = None
-
-    async def __call__(self, _arguments):
-        self.task = asyncio.current_task()
-        self.entered.set()
-        try:
-            try:
-                await self.release.wait()
-            except asyncio.CancelledError:
-                self.cancelled.set()
-                if not self.late:
-                    raise
-                await self.release.wait()
-            if self.error:
-                raise RuntimeError("synthetic query failure")
-            return {"streams": [{"data_type": "heart-rate"}]}
-        finally:
-            self.cleaned.set()
-
-
-def tool_request(identifier="tool", turn="turn-1", thread="site-thread"):
-    return {
-        "id": identifier,
-        "method": "item/tool/call",
-        "params": {
-            "threadId": thread,
-            "turnId": turn,
-            "tool": "health_archive",
-            "arguments": {"action": "inventory"},
-        },
-    }
+from app.services.umay import chat_relay as codex
+from app.services.umay import chat_tools
+from app.services.umay.chat_socket import ChatDisconnected as WebSocketDisconnect
 
 
 @pytest.fixture
@@ -77,7 +36,7 @@ async def running(monkeypatch, request):
         if known_turn:
             await rpc.incoming.put({"id": start["id"], "result": {"turn": {"id": "turn-1"}}})
         await rpc.incoming.put(tool_request(turn="turn-1" if known_turn else None))
-        await asyncio.wait_for(query.entered.wait(), 2)
+        await asyncio.wait_for(query.entered.wait(), 30)
         await take(browser.outgoing)  # thinking
         await take(browser.outgoing)  # querying
         yield SimpleNamespace(
@@ -102,7 +61,7 @@ async def test_cancel_reaches_bridge_before_query_release(running):
     assert interrupt["method"] == "turn/interrupt"
     assert interrupt["params"]["turnId"] == "turn-1"
     assert not r.query.release.is_set()
-    await asyncio.wait_for(r.query.cleaned.wait(), 2)
+    await asyncio.wait_for(r.query.cleaned.wait(), 30)
     assert r.query.task.cancelled() and r.chat.transfer.calls == []
     assert r.chat.context.cancelled
     # No fresh health query may sneak in after interrupt acknowledgement.
@@ -139,7 +98,7 @@ async def test_exit_cleans_pending_query_and_all_owned_tasks(running, monkeypatc
         # Expire deterministically on the next socket message; no wall-clock sleep.
         monkeypatch.setattr(codex, "ACTIVE_TURN_TIMEOUT_SECONDS", 0)
         await r.browser.incoming.put({"text": "busy"})
-        await asyncio.wait_for(r.task, 2)
+        await asyncio.wait_for(r.task, 30)
     else:
         if exit_kind == "cancelled":
             r.task.cancel()
@@ -153,7 +112,7 @@ async def test_exit_cleans_pending_query_and_all_owned_tasks(running, monkeypatc
                 ConnectionClosed(None, None) if exit_kind == "bridge" else error()
             )
         with pytest.raises(error):
-            await asyncio.wait_for(r.task, 2)
+            await asyncio.wait_for(r.task, 30)
     assert r.query.cleaned.is_set() and r.query.task.done()
     assert not r.chat.tools.tasks and not r.chat.tools.seen
     assert r.chat.transfer.calls == [] and r.chat.context.current is None
@@ -178,7 +137,7 @@ async def test_turn_notification_cancels_query_without_waiting_for_result(runnin
     if status == "failed":
         assert (await take(r.browser.outgoing))["type"] == "error"
     assert (await take(r.browser.outgoing)) == {"type": "done", "status": status}
-    await asyncio.wait_for(r.query.cleaned.wait(), 2)
+    await asyncio.wait_for(r.query.cleaned.wait(), 30)
     assert r.query.task.cancelled() and not r.query.release.is_set()
     assert r.chat.transfer.calls == [] and r.chat.transfer.status == status
 
@@ -187,7 +146,7 @@ async def test_success_is_sent_once_to_its_rpc_and_duplicates_do_not_run(running
     r = running
     await r.rpc.incoming.put(tool_request())  # duplicate while pending
 
-    async def immediate(_arguments):
+    async def immediate(_sessions, _arguments):
         return {"streams": []}
 
     monkeypatch.setattr(codex, "read_health", immediate)
@@ -217,7 +176,7 @@ async def test_task_limit_includes_cancelled_queries_until_cleanup_finishes(monk
         for index, query in enumerate(held):
             monkeypatch.setattr(codex, "read_health", query)
             await chat.on_codex(tool_request(str(index)))
-            await asyncio.wait_for(query.entered.wait(), 2)
+            await asyncio.wait_for(query.entered.wait(), 30)
         tasks = list(chat.tools.tasks)
         await chat.on_codex(tool_request("over-limit"))
         assert (await take(rpc.outgoing))["method"] == "turn/start"
@@ -263,21 +222,21 @@ async def test_invalidated_task_exception_is_consumed(monkeypatch, cleanup):
     chat = codex.ChatRelay(Browser(), RPC(), "site-thread")
     query = HeldQuery(late=True, error=True)
 
-    async def failing_tool(_params):
+    async def failing_tool(_params, _sessions):
         # Exercise a task failure outside run_health_tool's normal error conversion.
         return await query({}), True
 
     monkeypatch.setattr(codex, "run_health_tool", failing_tool)
     await chat.on_browser({"text": "Arşivi incele"})
     await chat.on_codex(tool_request())
-    await asyncio.wait_for(query.entered.wait(), 2)
+    await asyncio.wait_for(query.entered.wait(), 30)
     task = next(iter(chat.tools.tasks))
     try:
         chat.tools.cancel()
-        await asyncio.wait_for(query.cancelled.wait(), 2)
+        await asyncio.wait_for(query.cancelled.wait(), 30)
         query.release.set()
         if cleanup == "reap":
-            await asyncio.wait_for(query.cleaned.wait(), 2)
+            await asyncio.wait_for(query.cleaned.wait(), 30)
             assert task.done()
             await chat.on_tool_result(task)
         else:
@@ -295,15 +254,15 @@ async def test_close_does_not_wait_forever_for_a_query_that_ignores_cancellation
     monkeypatch.setattr(codex, "read_health", query)
     await chat.on_browser({"text": "Arşivi incele"})
     await chat.on_codex(tool_request())
-    await asyncio.wait_for(query.entered.wait(), 2)
+    await asyncio.wait_for(query.entered.wait(), 30)
     try:
-        await asyncio.wait_for(chat.tools.close(), 2)
+        await asyncio.wait_for(chat.tools.close(), 30)
         assert query.cancelled.is_set() and not query.task.done()
         assert not chat.tools.tasks and not chat.tools.seen
         assert chat.transfer.calls == []
     finally:
         query.release.set()
-        await asyncio.wait_for(query.cleaned.wait(), 2)
+        await asyncio.wait_for(query.cleaned.wait(), 30)
     await asyncio.sleep(0)
     assert query.task.done() and query.task not in chat_tools._ABANDONED
 
@@ -315,5 +274,5 @@ async def test_delivered_tool_result_renews_the_turn_deadline(running, monkeypat
     monkeypatch.setattr(codex, "ACTIVE_TURN_TIMEOUT_SECONDS", 0)
     r.query.release.set()
     assert (await take(r.rpc.outgoing))["id"] == "tool"
-    await asyncio.wait_for(r.task, 2)
+    await asyncio.wait_for(r.task, 30)
     assert r.chat.transfer.status == "timed_out" and len(r.chat.transfer.calls) == 1

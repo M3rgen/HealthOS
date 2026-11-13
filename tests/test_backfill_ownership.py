@@ -2,42 +2,25 @@
 
 import asyncio
 from contextlib import asynccontextmanager
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 import pytest
 from retrieval_records import END, START, Client, point
 from sqlalchemy import select
+from support.ownership import contention as contention
+from support.ownership import horizon as horizon
+from support.ownership import independent as independent
+from support.ownership import runner
+from support.ownership import sessions as sessions
+from support.waits import until
 from sync_ownership_records import PausedClient, service, snapshot
-from test_sync_ownership import contention as contention
-from test_sync_ownership import independent as independent
-from test_sync_ownership import sessions as sessions
 
-from app.core.config import Settings
 from app.core.timeutil import as_utc
 from app.google_health.client import InvalidPageTokenError, Page
-from app.google_health.data_types import REGISTRY
 from app.models.state import BackfillJob, JobStatus
-from app.services.retrieval import token_hash
+from app.services.providers import ingestion
+from app.services.synchronization.retrieval import token_hash
 from app.sync import backfill, ownership
-
-
-def runner(sessions, client):
-    return backfill.BackfillService(
-        Settings(_env_file=None, backfill_start_date=START.date(), backfill_window_days=1),
-        sessions,
-        client,
-        dict(REGISTRY),
-    )
-
-
-@pytest.fixture(autouse=True)
-def horizon(monkeypatch):
-    class Frozen(datetime):
-        @classmethod
-        def now(cls, tz=None):
-            return END
-
-    monkeypatch.setattr(backfill, "datetime", Frozen)
 
 
 async def add_job(sessions, status=JobStatus.pending):
@@ -62,29 +45,29 @@ async def test_waiter_rechecks_jobs_and_only_resumes_durable_pages(
     client = PausedClient(*pages)
     first, second = runner(sessions, client), runner(independent, Client(Page([], None)))
     if ending == "rollback":
-        original = backfill.store_page
+        original = ingestion.store_page
 
         async def store(session, spec, page, **kwargs):
             await original(session, spec, page, **kwargs)
             if page is pages[1]:
                 raise RuntimeError("page rollback")
 
-        monkeypatch.setattr(backfill, "store_page", store)
+        monkeypatch.setattr(ingestion, "store_page", store)
     task = asyncio.create_task(first.run(["heart-rate"]))
     waiter = None
     try:
-        await asyncio.wait_for(client.entered.wait(), 5)
+        await asyncio.wait_for(client.entered.wait(), 30)
         before = await snapshot(sessions)
         waiter = asyncio.create_task(second.run(["heart-rate"]))
-        await asyncio.wait_for(contention[0].wait(), 5)
-        assert second.client.tokens == [] and await snapshot(sessions) == before
+        await asyncio.wait_for(contention[0].wait(), 30)
+        assert second.source.client.tokens == [] and await snapshot(sessions) == before
         if ending == "cancelled":
             task.cancel()
             with pytest.raises(asyncio.CancelledError):
                 await task
         else:
             client.release.set()
-            assert await asyncio.wait_for(task, 10) == int(ending in {"completed", "reset"})
+            assert await asyncio.wait_for(task, 30) == int(ending in {"completed", "reset"})
         partial = await snapshot(sessions)
         resumed = ending in {"failed", "cancelled", "rollback"}
         if resumed:
@@ -92,8 +75,8 @@ async def test_waiter_rechecks_jobs_and_only_resumes_durable_pages(
             assert partial["retrieval_checkpoints"] == before["retrieval_checkpoints"]
             assert partial["fetch_rounds"] == before["fetch_rounds"]
         contention[1].set()
-        assert await asyncio.wait_for(waiter, 10) == int(resumed)
-        assert second.client.tokens == (["p2"] if resumed else [])
+        assert await asyncio.wait_for(waiter, 30) == int(resumed)
+        assert second.source.client.tokens == (["p2"] if resumed else [])
         final = await snapshot(sessions)
         job = final["backfill_jobs"][0]
         assert job["status"] == JobStatus.completed and job["page_token"] is None
@@ -152,15 +135,15 @@ async def test_concurrent_planners_read_boundaries_after_waiting(
     task = asyncio.create_task(first.run([kind]))
     waiter = None
     try:
-        await asyncio.wait_for(entered.wait(), 5)
+        await asyncio.wait_for(entered.wait(), 30)
         waiter = asyncio.create_task(second.run([kind]))
-        await asyncio.wait_for(contention[0].wait(), 5)
+        await asyncio.wait_for(contention[0].wait(), 30)
         release.set()
         contention[1].set()
         # Windows interleave between the two runs, but each planned window runs once.
-        done = await asyncio.wait_for(task, 5) + await asyncio.wait_for(waiter, 5)
+        done = await asyncio.wait_for(task, 30) + await asyncio.wait_for(waiter, 30)
         assert done == (1 if catalog else 2 if mode == "extend" else 3)
-        assert len(first.client.tokens + second.client.tokens) == done
+        assert len(first.source.client.tokens + second.source.client.tokens) == done
         async with sessions() as session:
             jobs = list(
                 await session.scalars(select(BackfillJob).order_by(BackfillJob.window_start))
@@ -198,20 +181,20 @@ async def test_incremental_shares_owner_other_type_progresses_and_waiter_cancels
     task = asyncio.create_task(invoke(first, "heart-rate"))
     waiter = None
     try:
-        await asyncio.wait_for(paused.entered.wait(), 5)
+        await asyncio.wait_for(paused.entered.wait(), 30)
         # The same instance must permit a different type during a slow Google call.
-        await asyncio.wait_for(invoke(first, "steps"), 5)
+        await asyncio.wait_for(invoke(first, "steps"), 30)
         before = await snapshot(sessions)
         waiter = asyncio.create_task(invoke(second, "heart-rate"))
-        await asyncio.wait_for(contention[0].wait(), 5)
+        await asyncio.wait_for(contention[0].wait(), 30)
         waiter.cancel()
         with pytest.raises(asyncio.CancelledError):
             await waiter
-        assert second.client.tokens == [] and await snapshot(sessions) == before
+        assert second.source.client.tokens == [] and await snapshot(sessions) == before
         paused.release.set()
-        await asyncio.wait_for(task, 5)
-        await asyncio.wait_for(invoke(second, "heart-rate"), 5)
-        assert second.client.tokens == [None]
+        await asyncio.wait_for(task, 30)
+        await asyncio.wait_for(invoke(second, "heart-rate"), 30)
+        assert second.source.client.tokens == [None]
     finally:
         task.cancel()
         if waiter is not None:
@@ -245,13 +228,13 @@ async def test_lost_owner_cannot_change_replacements_success(
     monkeypatch.setattr(backfill, "run_ownership", owned)
     task = asyncio.create_task(runner(sessions, client).run(["heart-rate"]))
     try:
-        await asyncio.wait_for(client.entered.wait(), 5)
+        await asyncio.wait_for(client.entered.wait(), 30)
         before = await snapshot(sessions)
         lost = True
         monkeypatch.setattr(backfill, "run_ownership", original)
         replacement = runner(independent, Client(Page([], None)))
         assert await replacement.run(["heart-rate"]) == 1
-        assert replacement.client.tokens == ["p2"]
+        assert replacement.source.client.tokens == ["p2"]
         completed = await snapshot(sessions)
         client.release.set()
         # The lost owner's window ends without any write; the type pauses.
@@ -298,12 +281,12 @@ async def test_waiting_incremental_runs_between_backfill_windows(
     client = Logged(Page([], None), Page([], None), pause_at=1)
     task = asyncio.create_task(runner(sessions, client).run(["heart-rate"]))
     try:
-        await asyncio.wait_for(client.entered.wait(), 5)
+        await asyncio.wait_for(client.entered.wait(), 30)
         sync = asyncio.create_task(service(independent, Recent()).run("heart-rate", START, END))
-        await asyncio.wait_for(queued.wait(), 5)
+        await asyncio.wait_for(queued.wait(), 30)
         client.release.set()
-        assert await asyncio.wait_for(task, 5) == 2
-        await asyncio.wait_for(sync, 5)
+        assert await asyncio.wait_for(task, 30) == 2
+        await asyncio.wait_for(sync, 30)
     finally:
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
@@ -317,10 +300,7 @@ async def test_type_waiting_for_its_owner_leaves_the_fetch_slot_to_others(sessio
     async with ownership.run_ownership(independent, "heart-rate"):
         # Listed first, the busy type must not hold the only slot while it waits.
         task = asyncio.create_task(service.run(["heart-rate", "steps"]))
-        for _ in range(100):
-            if client.tokens:
-                break
-            await asyncio.sleep(0.01)
+        await until(lambda: client.tokens, "the free type's fetch")
         assert client.tokens == [("steps", None)]
-    assert await asyncio.wait_for(task, 5) == 2
+    assert await asyncio.wait_for(task, 30) == 2
     assert client.tokens == [("steps", None), ("heart-rate", None)]

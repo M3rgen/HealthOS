@@ -1,11 +1,38 @@
 @charset "UTF-8";
+/*
+ * Cascade layers decide precedence, not import order:
+ *   base        tokens (:root), element defaults and the page layout (styles/base.css)
+ *   components  panels, pages, dialogs, Umay and their visual treatment
+ *   overrides   accessibility guarantees that must win over any component rule
+ * Unlayered rules would beat every layer, so every stylesheet below is imported into one.
+ */
+@layer base, components, overrides;
+
 /* Inter (OFL-1.1, rsms.me/inter) is bundled from @fontsource-variable: weight + optical-size axes, Latin and Latin-ext (Turkish) subsets load on demand. */
 @import "@fontsource-variable/inter/opsz.css";
 
-/* Preserve the cascade: base, visual polish, assets, then appearance overrides. */
-@import "./styles/base.css";
-@import "./styles/polish.css";
-@import "./styles/workouts.css";
-@import "./styles/assets.css";
-@import "./styles/appearance.css";
-@import "./styles/accessibility.css";
+@import "./styles/base.css" layer(base);
+@import "./styles/shell.css" layer(components);
+@import "./styles/controls.css" layer(components);
+@import "./styles/tables.css" layer(components);
+@import "./styles/topbar.css" layer(components);
+@import "./styles/calendar.css" layer(components);
+@import "./styles/overview.css" layer(components);
+@import "./styles/overview-profile.css" layer(components);
+@import "./styles/overview-connection.css" layer(components);
+@import "./styles/overview-metrics.css" layer(components);
+@import "./styles/overview-history.css" layer(components);
+@import "./styles/pages.css" layer(components);
+@import "./styles/workouts.css" layer(components);
+@import "./styles/month-field.css" layer(components);
+@import "./styles/metric-history.css" layer(components);
+@import "./styles/chat-assistant.css" layer(components);
+@import "./styles/appearance.css" layer(components);
+@import "./styles/chat-transfer.css" layer(components);
+@import "./measurement-flags.css" layer(components);
+@import "./styles/coverage.css" layer(components);
+@import "./styles/webhook-status.css" layer(components);
+@import "./styles/devices.css" layer(components);
+@import "./styles/apple-import.css" layer(components);
+@import "./styles/login-warning.css" layer(components);
+@import "./styles/accessibility.css" layer(overrides);

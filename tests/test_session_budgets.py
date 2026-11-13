@@ -6,12 +6,11 @@ from unittest.mock import Mock
 import pytest
 from derived_records import BAND, T0, snapshot, store
 from interpretation_records import SCOPE_ERROR, call, exercise
-from interpretation_records import production_reader as production_reader
 
 from app.models.manual import ManualWorkout
 from app.parsers.common import payload_hash
-from app.services import health_interpretation
-from app.services import interpretation_sessions as sessions_service
+from app.services.interpretation import health_interpretation
+from app.services.interpretation import interpretation_sessions as sessions_service
 
 
 async def seed(sessions, count, *, disjoint=False):
@@ -63,10 +62,12 @@ async def test_summary_limit_stops_generation_before_overlap_scan_or_models(sess
         {"definition": "google_exercise_session"},
     ):
         generated.clear()
-        assert_refusal(await call("sessions", limit=1, **filters), "summary_budget_exceeded")
+        assert_refusal(
+            await call(sessions, "sessions", limit=1, **filters), "summary_budget_exceeded"
+        )
         assert len(generated) == health_interpretation.MAX_SUMMARIES + 1 < count
-    assert (await call("sessions", source="absent"))["total_summaries"] == 0
-    assert (await call("sessions", definition="absent"))["total_summaries"] == 0
+    assert (await call(sessions, "sessions", source="absent"))["total_summaries"] == 0
+    assert (await call(sessions, "sessions", definition="absent"))["total_summaries"] == 0
     scan.assert_not_called()
     model.assert_not_called()
     async with sessions() as session:
@@ -92,7 +93,7 @@ async def test_dense_overlap_budget_stops_before_models_and_preserves_outside_so
         push = Mock(wraps=sessions_service.heappush)
         patch.setattr(sessions_service, "SessionSummary", model)
         patch.setattr(sessions_service, "heappush", push)
-        assert_refusal(await call("sessions", limit=1), "overlap_budget_exceeded")
+        assert_refusal(await call(sessions, "sessions", limit=1), "overlap_budget_exceeded")
         visited = push.call_count
         budget = sessions_service.MAX_OVERLAP_REFERENCES
         assert visited * (visited - 1) <= budget < visited * (visited + 1)
@@ -103,14 +104,16 @@ async def test_dense_overlap_budget_stops_before_models_and_preserves_outside_so
     monkeypatch.setattr(health_interpretation, "MAX_SUMMARIES", 2)
     monkeypatch.setattr(sessions_service, "MAX_OVERLAP_REFERENCES", exact_budget)
     for filters in ({"source": "manuel"}, {"definition": "manual_workout_session"}):
-        page = await call("sessions", limit=1, **filters)
+        page = await call(sessions, "sessions", limit=1, **filters)
         assert page["total_summaries"] == 2 and page["next_cursor"]
         assert len(page["summaries"][0]["overlaps"]) == count + 1
-        rest = await call("sessions", cursor=page["next_cursor"], limit=2, **filters)
+        rest = await call(sessions, "sessions", cursor=page["next_cursor"], limit=2, **filters)
         assert rest["summary_offset"] == 1 and rest["next_cursor"] is None
         assert len(rest["summaries"][0]["overlaps"]) == count + 1
     monkeypatch.setattr(sessions_service, "MAX_OVERLAP_REFERENCES", exact_budget - 1)
-    assert_refusal(await call("sessions", source="manuel", limit=1), "overlap_budget_exceeded")
+    assert_refusal(
+        await call(sessions, "sessions", source="manuel", limit=1), "overlap_budget_exceeded"
+    )
     async with sessions() as session:
         assert await snapshot(session) == before
 
@@ -145,7 +148,7 @@ async def test_disjoint_intervals_have_subquadratic_comparisons(sessions, monkey
     monkeypatch.setattr(sessions_service, "MAX_OVERLAP_REFERENCES", 0)
     async with sessions() as session:
         before = await snapshot(session)
-    result = await call("sessions", limit=1)
+    result = await call(sessions, "sessions", limit=1)
     assert result["total_summaries"] == count
     assert result["summaries"][0]["overlaps"] == []
     assert 0 < comparisons < 30 * count  # Includes sorting; a full pair scan exceeds this.
@@ -176,7 +179,7 @@ async def test_interval_order_touching_filters_and_outside_change_expire_cursor(
         )
     async with sessions() as session:
         before = await snapshot(session)
-    whole = (await call("sessions"))["summaries"]
+    whole = (await call(sessions, "sessions"))["summaries"]
     keys = [(r["start"], r["end"], r["evidence"][0]["record"]) for r in whole]
     assert keys == sorted(keys)
     for row in whole:
@@ -188,8 +191,8 @@ async def test_interval_order_touching_filters_and_outside_change_expire_cursor(
         assert ("overlapping_sessions" in row["reason_codes"]) == bool(row["overlaps"])
     google = [row for row in whole if row["definition"] == "google_exercise_session"]
     filters = {"definition": "google_exercise_session"}
-    page = await call("sessions", limit=2, **filters)
-    rest = await call("sessions", cursor=page["next_cursor"], limit=200, **filters)
+    page = await call(sessions, "sessions", limit=2, **filters)
+    rest = await call(sessions, "sessions", cursor=page["next_cursor"], limit=200, **filters)
     assert page["summaries"] + rest["summaries"] == google
     async with sessions() as session:
         assert await snapshot(session) == before
@@ -198,4 +201,6 @@ async def test_interval_order_touching_filters_and_outside_change_expire_cursor(
         session.add(
             ManualWorkout(exercise_type="walk", start_time=T0, end_time=T0 + timedelta(hours=3))
         )
-    assert_refusal(await call("sessions", cursor=page["next_cursor"], **filters), "stale_cursor")
+    assert_refusal(
+        await call(sessions, "sessions", cursor=page["next_cursor"], **filters), "stale_cursor"
+    )

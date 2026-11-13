@@ -7,8 +7,8 @@ import zlib
 import pytest
 from retrieval_records import END, START
 from sqlalchemy import text
+from support.ownership import receive, worker
 from sync_ownership_records import snapshot
-from test_pg_sync_ownership import receive, worker
 
 from app.models.state import BackfillJob, JobStatus
 from app.sync import ownership
@@ -48,11 +48,12 @@ async def test_backfill_process_waiter_and_connection_loss(pg_sessions, ending, 
         other.send("done")
         assert await receive(other) == ("result", "completed")
         async with pg_sessions() as session:
-            pid, transaction = (
+            pid, state = (
                 await session.execute(
                     text(
-                        "SELECT l.pid, a.xact_start FROM pg_locks l "
+                        "SELECT l.pid, a.state FROM pg_locks l "
                         "JOIN pg_stat_activity a ON a.pid = l.pid "
+                        "AND a.datname = current_database() "
                         "WHERE l.locktype = 'advisory' AND l.classid = :namespace "
                         "AND l.objid = :key AND l.objsubid = 2 AND l.granted"
                     ),
@@ -62,7 +63,9 @@ async def test_backfill_process_waiter_and_connection_loss(pg_sessions, ending, 
                     },
                 )
             ).one()
-        assert transaction is None  # The slow Google call holds ownership, no transaction.
+        # The slow Google call holds ownership, no transaction (an idle backend's xact_start
+        # flickers while it catches up on shared invalidations; its state does not).
+        assert state == "idle"
         if ending == "completed":
             owner.send("done")
             assert await receive(owner) == ("result", "completed")

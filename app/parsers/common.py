@@ -1,24 +1,15 @@
 from __future__ import annotations
 
-import hashlib
-import json
 from datetime import UTC, date, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
-from app.google_health.data_types import DataTypeSpec
+from app.core.normalization import canonical_json, parse_datetime, payload_hash  # noqa: F401
+from app.core.records import RecordType
 from app.parsers.text import optional_text
 
 
-def canonical_json(value: Any) -> str:
-    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
-
-
-def payload_hash(value: Any) -> str:
-    return hashlib.sha256(canonical_json(value).encode()).hexdigest()
-
-
-def payload_for(spec: DataTypeSpec, record: dict) -> dict:
+def payload_for(spec: RecordType, record: dict) -> dict:
     value = record.get(spec.json_key, record.get(spec.payload_key, record.get(spec.name, {})))
     return value if isinstance(value, dict) else {}
 
@@ -39,7 +30,7 @@ def hollow_name(name: str | None) -> bool:
     return name is not None and name.endswith("/")
 
 
-def hollow_anchor(spec: DataTypeSpec, record: object) -> str | None:
+def hollow_anchor(spec: RecordType, record: object) -> str | None:
     """The record's own time, which identifies a record with a hollow name: its start (a
     sample's time; for these sleep summaries the end of the sleep they describe), in UTC.
     A changed end of an interval is a revision of the same record, not another one."""
@@ -50,7 +41,7 @@ def hollow_anchor(spec: DataTypeSpec, record: object) -> str | None:
     return moment.astimezone(UTC).isoformat() if moment is not None else None
 
 
-def source_id(spec: DataTypeSpec, record: object) -> str:
+def source_id(spec: RecordType, record: object) -> str:
     """The record's Google id, or its v1 synthetic id (see app/parsers/identity.py for v2).
 
     v1 is frozen: rows stored under it keep it forever, and a record without a v2 alias is
@@ -92,9 +83,7 @@ def source_id(spec: DataTypeSpec, record: object) -> str:
     return f"synthetic:{payload_hash(identity)}"
 
 
-def temporal(
-    spec: DataTypeSpec, record: dict
-) -> tuple[datetime | None, datetime | None, str | None]:
+def temporal(spec: RecordType, record: dict) -> tuple[datetime | None, datetime | None, str | None]:
     payload = payload_for(spec, record)
     interval = payload.get("interval", {})
     if isinstance(interval, dict):
@@ -118,17 +107,6 @@ def temporal(
     if start or end:
         return start, end, None
     return None, None, None
-
-
-def parse_datetime(value: object) -> datetime | None:
-    if not isinstance(value, str):
-        return None
-    try:
-        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-        return parsed.replace(tzinfo=parsed.tzinfo or UTC).astimezone(UTC)
-    except (ValueError, OverflowError):
-        # A valid local datetime can overflow Python's year range when converted to UTC.
-        return None
 
 
 def _date_component(value: object) -> int | None:
@@ -199,11 +177,3 @@ def device_name(record: dict) -> str | None:
     if not isinstance(device, dict):
         return None
     return optional_text(device.get("displayName") or device.get("model"))
-
-
-def first_number(payload: dict, candidates: tuple[str, ...]) -> Decimal | None:
-    for name in candidates:
-        value = number(payload.get(name))
-        if value is not None:
-            return value
-    return None

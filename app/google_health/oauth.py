@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import hashlib
 import logging
 import math
 import time
+from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from typing import cast
 from urllib.parse import urlencode
 
 import httpx
@@ -13,6 +17,7 @@ import httpx
 from app.core.config import Settings
 from app.core.logging import event
 from app.google_health import strict_json
+from app.google_health.errors import GoogleHealthErrorCode
 from app.google_health.oauth_response import (
     TokenResponseRejected,
     finish_response,
@@ -37,9 +42,18 @@ class AccessToken:
 
 
 class OAuthError(RuntimeError):
-    def __init__(self, message: str, *, transient: bool = False):
+    def __init__(
+        self,
+        message: str,
+        *,
+        transient: bool = False,
+        http_status: int | None = None,
+        code: GoogleHealthErrorCode | None = None,
+    ) -> None:
         super().__init__(message)
         self.transient = transient
+        self.http_status = http_status
+        self.code = code
 
 
 _JSON_ERRORS = {
@@ -68,8 +82,9 @@ def _token_payload(body: bytes) -> dict:
         return strict_json.loads_object(body)
     except strict_json.StrictJsonError as exc:
         message = _JSON_ERRORS[exc.kind]
+        code = GoogleHealthErrorCode.INVALID_JSON if exc.kind == strict_json.INVALID else None
     # Token bodies hold credentials: fixed text, no parser chain, never transient.
-    raise OAuthError(message)
+    raise OAuthError(message, code=code)
 
 
 async def _check_token_status(response: httpx.Response) -> None:
@@ -89,12 +104,13 @@ async def _check_token_status(response: httpx.Response) -> None:
         OAuthError(
             f"OAuth token endpoint returned HTTP {response.status_code}",
             transient=response.status_code == 429 or 500 <= response.status_code < 600,
+            http_status=response.status_code,
         ),
     )
     # HTTPX's exception handler calls aclose again; it is already closed, so
     # malformed Location/status rejection cannot enter an unbounded close.
-    assert failure is not None
-    raise failure
+    # finish_response preserves a supplied failure unless cancellation replaces it.
+    raise cast(BaseException, failure)
 
 
 def _token_expiry(value: object) -> float:
@@ -119,13 +135,16 @@ class OAuthClient:
     token_url = "https://oauth2.googleapis.com/token"
 
     def __init__(
-        self, settings: Settings, http: httpx.AsyncClient | None = None, sleep=asyncio.sleep
+        self,
+        settings: Settings,
+        http: httpx.AsyncClient | None = None,
+        sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     ):
         self.settings = settings
         self.http = http or httpx.AsyncClient(timeout=30)
         self.sleep = sleep
 
-    def authorization_url(self, scopes: list[str], state: str) -> str:
+    def authorization_url(self, scopes: list[str], state: str, *, code_verifier: str) -> str:
         params = {
             "client_id": self.settings.google_client_id,
             "redirect_uri": self.settings.google_redirect_uri,
@@ -135,15 +154,22 @@ class OAuthClient:
             "include_granted_scopes": "true",
             "prompt": "consent",
             "state": state,
+            "code_challenge": base64.urlsafe_b64encode(
+                hashlib.sha256(code_verifier.encode("ascii")).digest()
+            )
+            .decode()
+            .rstrip("="),
+            "code_challenge_method": "S256",
         }
         return f"{self.authorize_url}?{urlencode(params)}"
 
-    async def exchange_code(self, code: str) -> dict:
+    async def exchange_code(self, code: str, *, code_verifier: str) -> dict:
         # An authorization code is single-use: a second attempt would only report
         # invalid_grant and hide the network failure that actually happened.
         return await self._token_request(
             {
                 "code": code,
+                "code_verifier": code_verifier,
                 "client_id": self.settings.google_client_id,
                 "client_secret": self.settings.google_client_secret,
                 "redirect_uri": self.settings.google_redirect_uri,
@@ -180,8 +206,8 @@ class OAuthClient:
         # each attempt. A missing network must not stall a recovery for minutes.
         try:
             async with asyncio.timeout(TOKEN_REQUEST_TIMEOUT_SECONDS) as budget:
-                deadline = budget.when()
-                assert deadline is not None
+                # A finite timeout always has a deadline.
+                deadline = cast(float, budget.when())
                 for attempt in range(1, attempts + 1):
                     try:
                         return await self._token_attempt(data, deadline)
@@ -197,12 +223,14 @@ class OAuthClient:
                             delay_seconds=delay,
                         )
                         await self.sleep(delay)
-                raise AssertionError("Token request attempts exhausted without an outcome")
+                raise ValueError("Token request attempts must be positive")
         except TimeoutError:
             # Do not retain read/close exceptions that could contain credentials.
             pass
         raise OAuthError(
-            "OAuth token endpoint connection failed", transient=True
+            "OAuth token endpoint connection failed",
+            transient=True,
+            code=GoogleHealthErrorCode.CONNECTION,
         ) from TimeoutError()
 
     async def _token_attempt(self, data: dict[str, str], deadline: float) -> dict:
@@ -229,7 +257,11 @@ class OAuthClient:
         if message:
             # Raise outside the handler: no upstream exception chain may retain
             # token chunks, transport details or decoder inputs.
-            raise OAuthError(message, transient=transient)
+            raise OAuthError(
+                message,
+                transient=transient,
+                code=GoogleHealthErrorCode.CONNECTION if transient else None,
+            )
         payload = _token_payload(body)
         access_token = payload.get("access_token")
         # Check whitespace without changing the opaque token supplied by Google.
@@ -268,10 +300,18 @@ class OAuthClient:
 
 
 class TokenProvider:
-    def __init__(self, oauth: OAuthClient, refresh_token_loader, refresh_token_saver=None):
+    def __init__(
+        self,
+        oauth: OAuthClient,
+        refresh_token_loader: Callable[[], Awaitable[str | None]],
+        refresh_token_saver: Callable[[str, str | None], Awaitable[None]] | None = None,
+        *,
+        credential_validator: Callable[[], Awaitable[bool]] | None = None,
+    ):
         self.oauth = oauth
         self.refresh_token_loader = refresh_token_loader
         self.refresh_token_saver = refresh_token_saver
+        self.credential_validator = credential_validator
         self._token: AccessToken | None = None
         self._lock = asyncio.Lock()
         self._generation = 0
@@ -287,12 +327,24 @@ class TokenProvider:
             yield
             self.invalidate()
 
+    async def _account_current(self) -> bool:
+        if self.credential_validator and not await self.credential_validator():
+            self.invalidate()
+            return False
+        return True
+
+    async def _cached_token(self) -> str | None:
+        cached = self._token
+        if cached and cached.valid() and await self._account_current() and self._token is cached:
+            return cached.value
+        return None
+
     async def get(self) -> str:
-        if self._token and self._token.valid():
-            return self._token.value
+        if cached := await self._cached_token():
+            return cached
         async with self._lock:
-            if self._token and self._token.valid():
-                return self._token.value
+            if cached := await self._cached_token():
+                return cached
             while True:
                 generation = self._generation
                 refresh_token = await self.refresh_token_loader()
@@ -301,6 +353,8 @@ class TokenProvider:
                 candidate = await self.oauth.refresh(refresh_token)
                 if generation != self._generation:
                     continue  # Relinking/invalidation made the in-flight response obsolete.
+                if not await self._account_current() or generation != self._generation:
+                    continue
                 if candidate.replacement_refresh_token and self.refresh_token_saver:
                     await self.refresh_token_saver(
                         candidate.replacement_refresh_token,

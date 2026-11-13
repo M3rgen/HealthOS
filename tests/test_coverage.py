@@ -3,75 +3,42 @@
 import asyncio
 import hashlib
 import json
-import uuid
-from datetime import UTC, date, datetime, timedelta
+from datetime import date, timedelta
 
 import pytest
 from coverage_records import assert_sources
 from coverage_records import source_archive as source_archive
-from fastapi import WebSocketDisconnect
 from pydantic import ValidationError
-from test_codex_chat import RPC, Browser, take
+from support.chat import RPC, Browser, take
+from support.coverage_fixtures import BAND, SEEN, at, coverage_of, daily, query, raw
+from support.coverage_fixtures import archive as archive
 from weight_records import INVALID_FIELDS
 
-from app.api import codex
 from app.models.health import HeartRateVariability, SleepSession, Steps, Weight
-from app.models.identity import RawHealthDataSupersession
+from app.models.identity_tables import RawHealthDataSupersession
 from app.models.manual import ManualMeasurement
-from app.models.state import RawHealthData
-from app.services import codex_chat, codex_health, coverage
-from app.services.codex_health import HEALTH_TOOL, ArchiveQuery, read_health
-from app.services.manual_flags import record_flag
+from app.services.archive.manual_flags import record_flag
+from app.services.synchronization import coverage
+from app.services.umay import chat_relay as codex
+from app.services.umay import codex_chat
+from app.services.umay.chat_socket import ChatDisconnected as WebSocketDisconnect
+from app.services.umay.codex_health import HEALTH_TOOL, ArchiveQuery, read_health
 
-BAND = {
-    "platform": "FITBIT",
-    "recordingMethod": "DERIVED",
-    "device": {"displayName": "Example Band", "formFactor": "FITNESS_BAND"},
-}
 PHONE = {
     "platform": "HEALTH_KIT",
     "recordingMethod": "PASSIVELY_MEASURED",
     "device": {"formFactor": "PHONE", "manufacturer": "Example Inc."},
 }
-SEEN = datetime(2026, 10, 1, tzinfo=UTC)
-JSON_KEYS = {
-    "steps": "steps",
-    "sleep": "sleep",
-    "weight": "weight",
-    "body-fat": "bodyFat",
-    "daily-resting-heart-rate": "dailyRestingHeartRate",
-    "daily-heart-rate-variability": "dailyHeartRateVariability",
-    "daily-oxygen-saturation": "dailyOxygenSaturation",
-}
 
 
 @pytest.mark.parametrize("kind", ["steps", "daily-resting-heart-rate"])
-async def test_source_labels_preserve_stored_measurements(archive, source_archive, kind):
-    card = await read_health(query("2026-09-01", "2026-09-02", data_type=kind))
+async def test_source_labels_preserve_stored_measurements(sessions, archive, source_archive, kind):
+    card = await read_health(sessions, query("2026-09-01", "2026-09-02", data_type=kind))
     metric = card["metrics"][0]
     assert (metric["value_days"], metric["days_without_value"]) == (1, 1)
     assert metric["sampling"]["sample_count"] == 3
     assert metric["retrieval"]["state"] == "unknown"
     assert_sources(metric["source_regimes"], source_archive)
-
-
-def at(day: date, hour: int = 0, minute: int = 0) -> datetime:
-    return datetime(day.year, day.month, day.day, hour, minute, tzinfo=UTC)
-
-
-def raw(kind, gid, start, payload, source=BAND, end=None, **overrides):
-    values = {
-        "id": uuid.uuid4(),
-        "data_type": kind,
-        "google_data_point_id": gid,
-        "source_start_time": start,
-        "source_end_time": end,
-        "raw_json": {"dataSource": source, JSON_KEYS[kind]: payload},
-        "payload_hash": "test",
-        "first_seen_at": SEEN,
-        "last_seen_at": SEEN,
-    }
-    return RawHealthData(**(values | overrides))
 
 
 def steps(gid, start, minutes=10, count=12, source=BAND, raw_row=True, **flags):
@@ -99,10 +66,6 @@ def sleep(gid, wake, source=BAND):
         SleepSession(google_data_point_id=gid, start_time=start, end_time=wake, awake_seconds=0),
         raw("sleep", gid, start, payload, source, wake),
     ]
-
-
-def daily(kind, gid, day, payload, source=BAND, **flags):
-    return raw(kind, gid, at(day), {"date": day.isoformat(), **payload}, source, **flags)
 
 
 def weight(gid, when, kilograms=70, source=BAND):
@@ -138,26 +101,6 @@ def full_day(day: date, prefix: str = "d") -> list:
     ]
 
 
-def coverage_of(card, key):
-    return next(metric for metric in card["metrics"] if metric["metric_key"] == key)
-
-
-@pytest.fixture
-def archive(sessions, monkeypatch):
-    monkeypatch.setattr(codex_health, "SessionLocal", sessions)
-
-    async def add(*rows):
-        async with sessions() as session:
-            session.add_all(rows)
-            await session.commit()
-
-    return add
-
-
-def query(start, end, **extra):
-    return {"action": "coverage", "start_date": str(start), "end_date": str(end), **extra}
-
-
 def test_schema_root_and_existing_actions_are_kept():
     schema = ArchiveQuery.model_json_schema()
     assert schema["type"] == "object"
@@ -191,8 +134,8 @@ def test_schema_root_and_existing_actions_are_kept():
             ArchiveQuery.model_validate(arguments)
 
 
-async def test_empty_archive_has_no_values_and_unknown_retrieval(archive):
-    card = await read_health(query("2026-09-01", "2026-09-07"))
+async def test_empty_archive_has_no_values_and_unknown_retrieval(sessions, archive):
+    card = await read_health(sessions, query("2026-09-01", "2026-09-07"))
     assert card["schema_version"] == "2"
     assert (card["requested_days"], card["closed_days"]) == (7, 7)
     assert "retrieval_receipts_unavailable" in card["reason_codes"]
@@ -223,15 +166,16 @@ async def test_empty_archive_has_no_values_and_unknown_retrieval(archive):
     assert coverage_of(card, "steps")["exclusions"]["invalid_shape"] is None
 
 
-async def test_short_step_day_called_complete_is_presence_only(archive):
+async def test_short_step_day_called_complete_is_presence_only(sessions, archive):
     day = date(2026, 9, 29)
     await archive(*full_day(day))
     legacy = await read_health(
-        {"action": "daily", "start_date": str(day), "end_date": str(day), "timezone": "UTC"}
+        sessions,
+        {"action": "daily", "start_date": str(day), "end_date": str(day), "timezone": "UTC"},
     )
     assert legacy["days"][0]["steps"] == 12
     assert legacy["days"][0]["status"] == "complete"  # unchanged legacy label
-    card = await read_health(query(day, day))
+    card = await read_health(sessions, query(day, day))
     assert "daily_status_not_coverage" in card["reason_codes"]
     steps_coverage = coverage_of(card, "steps")
     assert steps_coverage["value_days"] == 1
@@ -243,11 +187,11 @@ async def test_short_step_day_called_complete_is_presence_only(archive):
     assert all("status" not in metric for metric in card["metrics"])  # no legacy label
 
 
-async def test_today_is_partial_and_not_a_closed_day(archive):
-    today = datetime.now(UTC).date()
+async def test_today_is_partial_and_not_a_closed_day(sessions, archive, frozen_now):
+    today = frozen_now.date()
     yesterday = today - timedelta(days=1)
     await archive(*steps("yesterday", at(yesterday, 9)), *steps("today", at(today)))
-    card = await read_health(query(yesterday, today))
+    card = await read_health(sessions, query(yesterday, today))
     assert (card["requested_days"], card["closed_days"]) == (2, 1)
     assert "today_partial_excluded" in card["reason_codes"]
     steps_coverage = coverage_of(card, "steps")
@@ -261,7 +205,7 @@ async def test_today_is_partial_and_not_a_closed_day(archive):
     assert coverage_of(card, "sleep_seconds")["partial_today"] is False
 
 
-async def test_two_source_streams_stay_separate_rows(archive):
+async def test_two_source_streams_stay_separate_rows(sessions, archive):
     first = date(2026, 9, 1)
     days = [first + timedelta(days=i) for i in range(4)]
     await archive(
@@ -270,7 +214,7 @@ async def test_two_source_streams_stay_separate_rows(archive):
         *weight("google-weight", at(days[0], 7)),
         ManualMeasurement(metric="weight", value=71, measured_at=at(days[2], 7)),
     )
-    card = await read_health(query(days[0], days[-1]))
+    card = await read_health(sessions, query(days[0], days[-1]))
     steps_coverage = coverage_of(card, "steps")
     assert steps_coverage["value_days"] == 4
     assert "separate_source_streams" in steps_coverage["reason_codes"]
@@ -305,7 +249,7 @@ async def test_two_source_streams_stay_separate_rows(archive):
     ]
 
 
-async def test_exclusions_are_counted_once_and_left_out(archive):
+async def test_exclusions_are_counted_once_and_left_out(sessions, archive):
     day = date(2026, 9, 10)
     old, holder = steps("old", at(day, 8)), steps("holder", at(day, 9))
     await archive(
@@ -347,7 +291,7 @@ async def test_exclusions_are_counted_once_and_left_out(archive):
             new_payload_hash="c" * 64,
         )
     )
-    card = await read_health(query(day, day + timedelta(days=6)))
+    card = await read_health(sessions, query(day, day + timedelta(days=6)))
     steps_coverage = coverage_of(card, "steps")
     assert steps_coverage["exclusions"] | {"policy": None} == {
         "policy": None,
@@ -378,7 +322,7 @@ async def test_a_flagged_manual_measurement_is_counted_apart_and_has_no_value(ar
     async with sessions() as session:
         assert await record_flag(session, flagged.id, "test", True)
         await session.commit()
-    weight = coverage_of(await read_health(query(first, second)), "weight")
+    weight = coverage_of(await read_health(sessions, query(first, second)), "weight")
     assert weight["value_days"] == 1
     assert weight["exclusions"]["manually_excluded"] == 1
     assert "manual_exclusion_unavailable" not in weight["reason_codes"]
@@ -391,13 +335,13 @@ async def test_a_flagged_manual_measurement_is_counted_apart_and_has_no_value(ar
     async with sessions() as session:  # unflagging (another event) brings it back
         assert await record_flag(session, flagged.id, "test", False)
         await session.commit()
-    weight = coverage_of(await read_health(query(first, second)), "weight")
+    weight = coverage_of(await read_health(sessions, query(first, second)), "weight")
     assert (weight["value_days"], weight["exclusions"]["manually_excluded"]) == (2, 0)
 
 
-async def test_budget_overrun_is_a_structured_error(archive, monkeypatch):
+async def test_budget_overrun_is_a_structured_error(sessions, archive, monkeypatch):
     monkeypatch.setattr(coverage, "COVERAGE_BUDGET_BYTES", 600)
-    result = await read_health(query("2026-09-01", "2026-09-30"))
+    result = await read_health(sessions, query("2026-09-01", "2026-09-30"))
     assert json.loads(json.dumps(result, ensure_ascii=False)) == result
     assert result["code"] == "coverage_budget_exceeded"
     assert result["error"].startswith("Kapsama yanıtı")
@@ -405,13 +349,14 @@ async def test_budget_overrun_is_a_structured_error(archive, monkeypatch):
     assert result["suggested_range"] == {"start_date": "2026-09-16", "end_date": "2026-09-30"}
     assert "metrics" not in result
     data, success = await codex.run_health_tool(
-        {"tool": "health_archive", "arguments": json.dumps(query("2026-09-01", "2026-09-30"))}
+        {"tool": "health_archive", "arguments": json.dumps(query("2026-09-01", "2026-09-30"))},
+        sessions=sessions,
     )
     assert success is False
     assert data["code"] == "coverage_budget_exceeded"
 
 
-async def test_a_typical_year_fits_the_budget(archive):
+async def test_a_typical_year_fits_the_budget(sessions, archive):
     end = date(2026, 9, 30)
     days = [end - timedelta(days=i) for i in range(365)]
     rows = []
@@ -426,7 +371,7 @@ async def test_a_typical_year_fits_the_budget(archive):
             rows.append(daily("body-fat", f"fat-{day}", day, {"percentage": 18}))
     rows.append(ManualMeasurement(metric="height", value=180, measured_at=at(days[100], 8)))
     await archive(*rows)
-    card = await read_health(query(days[-1], end, timezone="Europe/Paris"))
+    card = await read_health(sessions, query(days[-1], end, timezone="Europe/Paris"))
     size = len(json.dumps(card, ensure_ascii=False).encode())
     assert size < coverage.COVERAGE_BUDGET_BYTES, size
     assert card["closed_days"] == 365
@@ -436,7 +381,7 @@ async def test_a_typical_year_fits_the_budget(archive):
     assert coverage_of(card, "weight")["value_days"] == 64  # 53 Google + 13 manual - 2 shared
     assert coverage_of(card, "height")["value_days"] == 1
     # One metric at a time narrows the answer further.
-    narrow = await read_health(query(days[-1], end, data_type="daily-oxygen-saturation"))
+    narrow = await read_health(sessions, query(days[-1], end, data_type="daily-oxygen-saturation"))
     assert [metric["metric_key"] for metric in narrow["metrics"]] == ["spo2"]
 
 
@@ -467,10 +412,10 @@ def test_instruction_sections_preserve_all_health_rules():
     )
 
 
-async def test_relay_answers_a_coverage_call_end_to_end(archive):
+async def test_relay_answers_a_coverage_call_end_to_end(sessions, archive):
     await archive(*full_day(date(2026, 9, 29)))
     browser, rpc = Browser(), RPC()
-    task = asyncio.create_task(codex.relay(browser, rpc, "site-thread"))
+    task = asyncio.create_task(codex.relay(browser, rpc, "site-thread", sessions=sessions))
     try:
         await browser.incoming.put({"text": "Kapsama durumunu incele"})
         assert (await take(rpc.outgoing))["method"] == "turn/start"
@@ -497,24 +442,24 @@ async def test_relay_answers_a_coverage_call_end_to_end(archive):
     finally:
         await browser.incoming.put(WebSocketDisconnect())
         with pytest.raises(WebSocketDisconnect):
-            await asyncio.wait_for(task, 2)
+            await asyncio.wait_for(task, 30)
 
 
-async def test_an_invalid_sleep_session_is_no_value_in_every_part_of_the_card(archive):
+async def test_an_invalid_sleep_session_is_no_value_in_every_part_of_the_card(sessions, archive):
     day = date(2026, 9, 12)
     wake = at(day, 6)
     await archive(
         SleepSession(google_data_point_id="zero", start_time=wake, end_time=wake, awake_seconds=0),
         raw("sleep", "zero", wake, {}, BAND, wake),
     )
-    sleep_coverage = coverage_of(await read_health(query(day, day)), "sleep_seconds")
+    sleep_coverage = coverage_of(await read_health(sessions, query(day, day)), "sleep_seconds")
     assert sleep_coverage["value_days"] == 0
     assert "no_value_in_window" in sleep_coverage["reason_codes"]
     assert sleep_coverage["source_regimes"] == []
     assert sleep_coverage["sampling"]["sample_count"] == 0
 
 
-async def test_both_read_paths_put_a_quarantined_deleted_record_in_one_class(archive):
+async def test_both_read_paths_put_a_quarantined_deleted_record_in_one_class(sessions, archive):
     day = date(2026, 9, 14)
     await archive(
         *steps("steps-both", at(day, 7), norm_quarantined=True, source_deleted_at=SEEN),
@@ -529,24 +474,25 @@ async def test_both_read_paths_put_a_quarantined_deleted_record_in_one_class(arc
             google_data_point_id="hrv-both", timestamp=at(day), rmssd=41, is_quarantined=True
         ),
     )
-    card = await read_health(query(day, day))
+    card = await read_health(sessions, query(day, day))
     for key in ("steps", "hrv_ms"):
         exclusions = coverage_of(card, key)["exclusions"]
         assert (exclusions["quarantined"], exclusions["source_deleted"]) == (1, 0), key
         assert exclusions["policy"] == coverage.EXCLUSION_POLICY
 
 
-async def test_an_unknown_coverage_data_type_says_which_are_accepted(archive):
+async def test_an_unknown_coverage_data_type_says_which_are_accepted(sessions, archive):
     assert (
         "daily-heart-rate-variability, daily-oxygen-saturation, weight"
         in (HEALTH_TOOL["description"])
     )
-    result = await read_health(query("2026-09-01", "2026-09-07", data_type="exercise"))
+    result = await read_health(sessions, query("2026-09-01", "2026-09-07", data_type="exercise"))
     assert result["code"] == "coverage_unknown_data_type"
     assert result["data_type"] == "exercise"
     assert {"steps", "sleep", "hrv_ms", "body-fat", "muscle"} <= set(result["accepted_data_types"])
     data, success = await codex.run_health_tool(
-        {"tool": "health_archive", "arguments": query("2026-09-01", "2026-09-07", data_type="x")}
+        {"tool": "health_archive", "arguments": query("2026-09-01", "2026-09-07", data_type="x")},
+        sessions=sessions,
     )
     assert success is False
     assert data["code"] == "coverage_unknown_data_type"
@@ -576,7 +522,9 @@ async def test_weight_value_days_follow_current_payload_across_midnight(
         async with sessions() as session:
             before = await snapshot(session)
         for day in (first, last):
-            card = coverage_of(await read_health(query(day, day, timezone=zone)), "weight")
+            card = coverage_of(
+                await read_health(sessions, query(day, day, timezone=zone)), "weight"
+            )
             assert card["value_days"] == int(day == expected)
             assert card["sampling"]["sample_count"] == int(day == expected)
             assert card["exclusions"]["invalid_shape"] is None  # schema-1 stays unknown

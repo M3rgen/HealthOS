@@ -4,8 +4,8 @@ from argparse import Namespace
 
 import pytest
 from alembic import command
+from rejection_records import KINDS
 from sqlalchemy import create_engine, text
-from test_sync_rejections import KINDS
 from test_sync_rejections import (
     test_a_failed_page_rolls_back_its_rejections_but_keeps_the_exchange as check_rollback,
 )

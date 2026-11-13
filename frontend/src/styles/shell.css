@@ -1,0 +1,172 @@
+.notice {
+  padding: 12px 18px;
+  border: 1px solid color-mix(in srgb, var(--amber) 30%, transparent);
+  margin-bottom: 18px;
+  font-size: 0.875rem;
+  border-radius: var(--radius-control);
+  background: color-mix(in srgb, var(--amber) 8%, var(--surface));
+  box-shadow: var(--shadow-1);
+}
+.notice.error {
+  color: #ffc7d1;
+  border-color: color-mix(in srgb, var(--heart-icon) 40%, transparent);
+  background: color-mix(in srgb, var(--heart-icon) 9%, var(--surface));
+}
+.sr-only {
+  /* Fixed, not absolute: an absolute box in a scrolled panel would extend the page itself. */
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+}
+button:focus-visible {
+  border-radius: 6px;
+}
+/* A long notice plus a state block can exceed the height under the top bar: main is the last
+   resort that scrolls, so the document never does. */
+body > main {
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+main > .notice {
+  flex-shrink: 0;
+  max-height: min(16dvh, 6em);
+}
+main > .notice:not([hidden]) {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+}
+.notice-text {
+  flex: 1;
+  min-width: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  align-self: stretch;
+}
+.notice-action {
+  flex: none;
+  align-self: flex-start;
+  margin-block: -4px;
+}
+.notice-close {
+  flex: none;
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  margin: -4px -6px -4px 0;
+  padding: 6px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+}
+.notice-close:hover {
+  color: var(--text);
+  background: rgb(255 255 255 / 0.06);
+}
+.notice-close > [data-icon] {
+  width: 16px;
+  height: 16px;
+}
+/* Icons: one rule for every slot; size comes from the wrapper. */
+[data-icon] {
+  display: inline-flex;
+  flex: none;
+}
+[data-icon] > svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+/* Empty states: decorative line illustrations, tinted with currentColor. */
+.empty-illustration {
+  content: "";
+  display: block;
+  flex: none;
+  background: currentColor;
+  -webkit-mask: var(--art) center/contain no-repeat;
+  mask: var(--art) center/contain no-repeat;
+  width: 132px;
+  height: 99px;
+  color: color-mix(in srgb, var(--amber) 75%, var(--muted));
+}
+@keyframes model-loading {
+  to {
+    opacity: 0.3;
+  }
+}
+@keyframes sync-spin {
+  to {
+    transform: rotate(-360deg);
+  }
+}
+@keyframes pulse-dot {
+  0%,
+  100% {
+    box-shadow: 0 0 0 2px color-mix(in srgb, currentColor 26%, transparent);
+  }
+  50% {
+    box-shadow: 0 0 0 5px color-mix(in srgb, currentColor 0%, transparent);
+  }
+}
+@keyframes dialog-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.985);
+  }
+}
+@keyframes page-in {
+  from {
+    opacity: 0;
+  }
+}
+/* Keyboard users skip past the top navigation straight to the page content. */
+.skip-link {
+  position: fixed;
+  top: 8px;
+  left: 8px;
+  z-index: 60;
+  padding: 10px 16px;
+  border-radius: var(--radius-control);
+  background: var(--amber);
+  color: var(--button-ink);
+  font-size: 0.875rem;
+  font-weight: 600;
+  transform: translateY(-200%);
+}
+.skip-link:focus-visible {
+  transform: none;
+}
+main:focus {
+  outline: none;
+}
+/* Short screens: every pixel of height goes to content. */
+@media (max-height: 35em) {
+  main {
+    padding: 8px;
+  }
+  main > .notice {
+    margin-bottom: 6px;
+    padding: 6px 10px;
+    max-height: min(22dvh, 5em);
+  }
+  /* Layer `overrides` keeps 44 px on touch screens. */
+  .notice-action {
+    min-height: 2rem;
+    padding-block: 2px;
+    margin-block: 0;
+  }
+}

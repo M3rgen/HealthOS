@@ -1,0 +1,320 @@
+.panel {
+  background: var(--surface-sheen), var(--surface);
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-panel);
+  box-shadow: var(--shadow-1);
+}
+.fine-print {
+  font-size: 0.75rem;
+  color: var(--muted);
+  line-height: 1.55;
+}
+.button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  padding: 10px 16px;
+  min-height: 42px;
+  border: 1px solid transparent;
+  font-size: 0.875rem;
+  /* Stays one line while it fits; a label wider than its container wraps instead of spilling. */
+  white-space: normal;
+  flex-shrink: 0;
+  max-width: 100%;
+  border-radius: var(--radius-control);
+  font-weight: 600;
+  letter-spacing: -0.005em;
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast),
+    box-shadow var(--dur) var(--ease-out),
+    transform var(--dur-fast) var(--ease-out),
+    filter var(--dur-fast);
+}
+.primary {
+  color: var(--button-ink);
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--amber) 86%, #fff),
+    var(--amber) 55%
+  );
+  border-color: color-mix(in srgb, var(--amber) 80%, #fff);
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.35),
+    0 1px 2px rgb(0 0 0 / 0.35),
+    0 8px 20px -10px var(--amber-glow);
+}
+.primary:hover {
+  filter: brightness(1.04) saturate(1.05);
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.4),
+    0 1px 2px rgb(0 0 0 / 0.35),
+    0 10px 26px -8px var(--amber-glow);
+}
+.outline:hover {
+  background: color-mix(in srgb, var(--amber) 10%, var(--inset));
+  border-color: color-mix(in srgb, var(--amber) 75%, transparent);
+}
+.panel-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.status-text {
+  font-size: 0.8125rem;
+  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 4px 10px 4px 9px;
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, currentColor 11%, transparent);
+  border: 1px solid color-mix(in srgb, currentColor 20%, transparent);
+  font-weight: 550;
+  line-height: 1.2;
+}
+.status-text:before {
+  content: "";
+  display: inline-block;
+  border-radius: 50%;
+  background: currentColor;
+  width: 7px;
+  height: 7px;
+  margin: 0;
+  box-shadow: 0 0 0 3px color-mix(in srgb, currentColor 22%, transparent);
+}
+.dot:before {
+  content: "";
+  display: inline-block;
+  border-radius: 50%;
+  background: currentColor;
+  margin: 0;
+  width: 6px;
+  height: 6px;
+  box-shadow: none;
+}
+.good {
+  color: var(--success);
+}
+.warning {
+  color: var(--amber);
+}
+.bad {
+  color: var(--heart-icon);
+}
+.dialog-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 15px;
+  margin-bottom: 12px;
+}
+form > label {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 17px;
+  color: var(--muted);
+  font-weight: 500;
+  font-size: 0.8125rem;
+}
+.dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 22px;
+  gap: 8px;
+}
+.form-error {
+  font-size: 0.8125rem;
+  color: #ffafbd;
+  margin-top: 10px;
+}
+.button-icon {
+  display: inline-flex;
+  flex: none;
+  width: var(--icon-md);
+  height: var(--icon-md);
+}
+.button-icon svg {
+  width: 100%;
+  height: 100%;
+}
+.amber-icon {
+  color: var(--amber);
+}
+.ongoing-badge {
+  padding: 4px 9px;
+  min-height: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  width: fit-content;
+  max-width: 100%;
+  align-self: center;
+  margin-inline: auto;
+  background: color-mix(in srgb, var(--ongoing) 75%, transparent);
+  border: 1px solid color-mix(in srgb, var(--success) 26%, transparent);
+  color: color-mix(in srgb, var(--success) 55%, var(--text));
+  border-radius: var(--radius-pill);
+  font-weight: 550;
+  white-space: nowrap;
+}
+.primary .button-icon {
+  color: var(--button-ink);
+}
+.panel-heading h2 {
+  letter-spacing: -0.02em;
+}
+.status-text.good:before {
+  animation: pulse-dot 2.4s ease-in-out infinite;
+}
+.dot {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 2px 9px 2px 8px;
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, currentColor 10%, transparent);
+  font-weight: 550;
+  font-size: max(0.75rem, 0.94em);
+  line-height: 1.5;
+}
+.ongoing-badge:before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--success);
+  flex: none;
+}
+.button:active:not(:disabled) {
+  transform: translateY(1px) scale(0.985);
+}
+.outline {
+  background: color-mix(in srgb, var(--amber) 4%, var(--inset));
+  border-color: var(--amber-line);
+  color: var(--text);
+  font-weight: 550;
+}
+.outline .button-icon {
+  color: var(--amber);
+}
+.icon-button {
+  width: 36px;
+  height: 36px;
+  background: none;
+  border: 1px solid transparent;
+  font-size: 1.5625rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px;
+  border-radius: var(--radius-control);
+  color: var(--muted);
+  transition:
+    background var(--dur-fast),
+    color var(--dur-fast);
+}
+.icon-button:hover {
+  background: rgb(255 255 255 / 0.06);
+  color: var(--text);
+}
+.icon-button span,
+.icon-button svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+.text-link {
+  font-size: 0.875rem;
+  color: var(--amber);
+  margin-left: 20px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-weight: 550;
+  border-radius: 6px;
+  text-underline-offset: 4px;
+}
+.text-link:hover {
+  text-decoration: underline;
+}
+.text-link .button-icon {
+  width: var(--icon-sm);
+  height: var(--icon-sm);
+}
+.logout-form {
+  display: inline;
+}
+:is(.logout-form, .sample-banner, .source-guide) .text-link {
+  background: none;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  font-size: 0.875rem;
+  font-weight: 550;
+  color: var(--amber);
+}
+input:hover,
+select:hover {
+  border-color: var(--muted);
+}
+/* Native targets keep their own size even in a flex row; preset radios may still
+   fill their tile through the more specific .tile-input rule. */
+input:where([type="checkbox"], [type="radio"]) {
+  inline-size: 1.5rem;
+  block-size: 1.5rem;
+  min-inline-size: 24px;
+  min-block-size: 24px;
+  flex-shrink: 0;
+  cursor: pointer;
+}
+form > label :is(input, select) {
+  color: var(--text);
+  font-size: 0.875rem;
+}
+dialog[open] {
+  animation: dialog-in var(--dur) var(--ease-out);
+}
+@media (max-width: bp(w540)) {
+  .fine-print {
+    font-size: 0.75rem;
+  }
+  .panel-heading h2 {
+    font-size: 1.375rem;
+  }
+  .status-text {
+    font-size: 0.75rem;
+  }
+}
+@media (min-width: bp(w901)) and (min-height: 30.0625em) {
+  .panel-heading h2 {
+    font-size: 1.3125rem;
+  }
+  .status-text {
+    font-size: 0.75rem;
+  }
+}
+@media (min-width: bp(w901)) and (min-height: 30.0625em) and (max-height: 46.25em) {
+  .panel-heading h2 {
+    font-size: 1.125rem;
+  }
+}
+@media (min-width: bp(w901)) and (min-height: 51.3125em) {
+  .panel-heading h2 {
+    font-size: 1.5rem;
+  }
+  .status-text {
+    font-size: 0.75rem;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .status-text.good:before {
+    animation: none;
+  }
+}
+#sync-button.syncing .button-icon {
+  animation: sync-spin 1s linear infinite;
+}

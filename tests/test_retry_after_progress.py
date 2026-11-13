@@ -15,7 +15,7 @@ from app.google_health.client import GoogleHealthError
 from app.google_health.data_types import REGISTRY
 from app.models.retrieval import RetrievalCheckpoint, RetrievalEvent
 from app.models.state import BackfillJob, JobStatus, RawHealthData, SyncState
-from app.services.storage import store_records
+from app.services.archive.storage import store_records
 from app.sync.errors import error_summary, is_transient
 
 

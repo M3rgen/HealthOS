@@ -1,0 +1,68 @@
+#!/usr/bin/env bash
+# Installed by `make hooks`. Protect the public remote; private mirrors are unaffected.
+# Git supplies: local-ref local-object remote-ref remote-object, once per pushed ref.
+set -euo pipefail
+[ "${1:-}" = origin ] || exit 0
+
+fail() { echo "pre-push: $*" >&2; exit 1; }
+
+# `make ci-gate` writes one receipt per commit after every ci.yml job passed under act.
+require_gate() {
+  local commit tree receipt recorded
+  commit="$(git rev-parse --verify "$1^{commit}")" || fail "$1 is not a commit"
+  tree="$(git rev-parse --verify "$commit^{tree}")"
+  receipt="$(git rev-parse --git-common-dir)/healthos-ci-gate/$commit"
+  recorded="$(sed -n 's/^tree //p' "$receipt" 2>/dev/null || true)"
+  [ "$recorded" = "$tree" ] || fail "no CI gate receipt for $commit; run: make ci-gate REV=$commit"
+}
+
+check_release_tag() {
+  local tag="$1" oid="$2" remote_oid="$3" commit version
+  # Check the raw record too: read would otherwise erase whitespace inside a ref.
+  [ "$4" = "$tag $oid $tag $remote_oid" ] || return 1
+  [[ "$tag" =~ ^refs/tags/v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(\.[1-9][0-9]*)?$ ]] || return 1
+  [[ "$remote_oid" =~ ^0+$ ]] || fail "release tags are immutable: $tag already exists on origin"
+  commit="$(git rev-parse --verify "$oid^{commit}")" || fail "$tag does not name a commit"
+  version="$(git show "$commit:pyproject.toml" | sed -n 's/^version = "\(.*\)"$/\1/p' | head -n 1)"
+  [ "refs/tags/v$version" = "$tag" ] || fail "$tag does not match project version $version"
+  git merge-base --is-ancestor "$commit" refs/heads/github-main ||
+    fail "$tag is not on the published snapshot branch github-main"
+}
+
+branch_updates=()
+tag_updates=()
+while IFS= read -r update; do
+  read -r local_ref local_oid remote_ref remote_oid <<< "$update"
+  # GitHub main receives only the local snapshot branch; tags only well-formed release tags.
+  if [ "$local_ref" = refs/heads/github-main ] && [ "$remote_ref" = refs/heads/main ]; then
+    branch_updates+=("$remote_oid $local_oid")
+  elif [ "$local_ref" = "$remote_ref" ] && check_release_tag "$remote_ref" "$local_oid" "$remote_oid" "$update"; then
+    tag_updates+=("$remote_ref $local_oid")
+  else
+    fail "origin accepts only github-main:main or a release tag vMAJOR.MINOR.PATCH or vMAJOR.MINOR.PATCH.N (interim, N ≥ 1)"
+  fi
+done
+[ "$(( ${#branch_updates[@]} + ${#tag_updates[@]} ))" -gt 0 ] || exit 0
+command -v gitleaks >/dev/null || fail "gitleaks is required before pushing to origin"
+for update in ${branch_updates[@]+"${branch_updates[@]}"}; do
+  read -r old_oid new_oid <<< "$update"
+  require_gate "$new_oid"
+  if [[ "$old_oid" =~ ^0+$ ]]; then
+    range="$new_oid"  # new remote branch: scan all reachable history
+  else
+    git cat-file -e "$old_oid^{commit}" 2>/dev/null ||
+      fail "remote base is missing locally; fetch origin before pushing"
+    range="$old_oid..$new_oid"
+  fi
+  gitleaks git --log-opts="$range" --redact --no-banner || fail "gitleaks rejected the push"
+done
+for update in ${tag_updates[@]+"${tag_updates[@]}"}; do
+  read -r tag oid <<< "$update"
+  require_gate "$oid"
+  gitleaks git --log-opts="$oid" --redact --no-banner || fail "gitleaks rejected the push"
+  # An annotated tag's message is not part of commit history; scan it separately.
+  if [ "$(git cat-file -t "$oid")" = tag ]; then
+    gitleaks stdin --redact --no-banner < <(git cat-file -p "$oid") ||
+      fail "gitleaks rejected the tag $tag"
+  fi
+done

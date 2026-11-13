@@ -5,15 +5,15 @@ import httpx
 import pytest
 from retrieval_records import point
 from sqlalchemy import select
-from test_webhook_date_windows import bounded
-from test_webhook_date_windows import fetching_receiver as fetching_receiver
-from test_webhook_status_http import receiver as receiver
+from support.webhooks import bounded
+from support.webhooks import fetching_receiver as fetching_receiver
+from support.webhooks import receiver as receiver
 
 from app.core.timeutil import as_utc
 from app.google_health.data_types import REGISTRY, query_iso, query_time
 from app.models.retrieval import RetrievalReceipt
 from app.models.state import RawHealthData, WebhookEvent, WebhookNotification
-from app.sync.deletions import deletion_scope
+from app.services.archive.source_deletions import deletion_scope
 
 
 @pytest.mark.parametrize("kind", ["weight", "body-fat"])
@@ -38,7 +38,7 @@ async def test_subsecond_delivery_and_failed_replay(
         return httpx.Response(400 if failing else 200, json={"dataPoints": [record]})
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(google)) as http:
-        r.incremental.client.http = http
+        r.incremental.source.client.http = http
         assert (await r.post(json.dumps(item).encode())).status_code == 204
         await r.finish()
         if retry:

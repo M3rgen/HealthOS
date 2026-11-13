@@ -1,11 +1,7 @@
 import asyncio
-import base64
-import hashlib
-import hmac
 import json
 import logging
 import math
-import time
 import traceback
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -15,26 +11,28 @@ import pytest
 import pytest_asyncio
 from compressed_records import compressed
 from cryptography.fernet import Fernet
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 from oauth_streams import LIMIT, TokenStream
-from sqlalchemy import delete, func, select
+from sqlalchemy import event, func, select
 
 from app.api import auth
 from app.core.config import Settings
 from app.core.host_validation import HostValidationMiddleware
+from app.core.oauth_state import COOKIE_NAME, OAuthStateStore
 from app.google_health import oauth
 from app.google_health.client import GoogleHealthError
 from app.google_health.oauth import AccessToken, OAuthClient, OAuthError, TokenProvider
+from app.models.oauth_credentials import OAuthCredentialVersion, current_credential
 from app.models.raw_versions import RawApiResponse
-from app.models.state import OAuthToken
-from app.services.credentials import CredentialStore
+from app.services.providers.credentials import CredentialStore
 
 
 @pytest_asyncio.fixture
-async def linked(sessions):
+async def linked(sessions, request):
     settings = Settings(_env_file=None, google_token_encryption_key=Fernet.generate_key().decode())
     store = CredentialStore(settings, sessions)
-    await store.save_connection("refresh-A", "scope-A", "account-A", "legacy-A")
+    if getattr(request, "param", True):
+        await store.save_connection("refresh-A", "scope-A", "account-A", "legacy-A")
     oauth = SimpleNamespace(
         exchange_code=AsyncMock(
             return_value={
@@ -49,13 +47,14 @@ async def linked(sessions):
     tokens._token = AccessToken("cached-access-A", 99999999999)
     google = SimpleNamespace(
         get_identity=AsyncMock(
-            return_value={"healthUserId": "account-B", "legacyUserId": "legacy-B"}
+            return_value={"healthUserId": "account-A", "legacyUserId": "legacy-A"}
         )
     )
     application = FastAPI()
     application.add_middleware(HostValidationMiddleware)
     application.include_router(auth.router)
     application.state.settings = settings
+    application.state.oauth_states = OAuthStateStore()
     application.state.runtime = SimpleNamespace(
         credentials=store, tokens=tokens, oauth=oauth, google=google
     )
@@ -67,15 +66,22 @@ async def callback(application, *, raise_app_exceptions=False):
         transport=httpx.ASGITransport(app=application, raise_app_exceptions=raise_app_exceptions),
         base_url="http://localhost:8000",
     ) as client:
+        cookie = "synthetic-browser-session"
         return await client.get(
             "/auth/google/callback",
-            params={"code": "synthetic-code", "state": auth._state(application.state.settings)},
+            headers={"Cookie": f"{COOKIE_NAME}={cookie}"},
+            params={
+                "code": "synthetic-code",
+                "state": application.state.oauth_states.issue(
+                    application.state.settings, cookie, code_verifier="synthetic-verifier"
+                ),
+            },
         )
 
 
 async def connection(sessions):
     async with sessions() as session:
-        row = await session.scalar(select(OAuthToken).where(OAuthToken.subject == "me"))
+        row = await current_credential(session)
         return row.encrypted_refresh_token, row.scopes, row.health_user_id, row.legacy_user_id
 
 
@@ -297,7 +303,7 @@ async def test_invalid_tokens_preserve_connection_then_recover(
         sleep.assert_not_awaited()
     assert handler.await_count == (4 if both_grants else 2)
     assert await runtime.credentials.load_refresh_token() == recovered["refresh_token"]
-    account = ("account-B", "legacy-B") if both_grants else ("account-A", "legacy-A")
+    account = ("account-A", "legacy-A")
     assert (await connection(sessions))[1:] == ("new-scope", *account)
     assert [getattr(row, "event", None) for row in caplog.records].count("TOKEN_REFRESHED") == 1
     assert "synthetic-private" not in repr([vars(row) for row in caplog.records])
@@ -358,22 +364,60 @@ async def test_success_commits_candidate_token_and_its_identity(linked, sessions
     runtime = linked.state.runtime
     response = await callback(linked)
     assert response.status_code == 200
-    assert response.json() == {"status": "connected", "health_user_id": "account-B"}
+    assert response.json() == {"status": "connected", "health_user_id": "account-A"}
     assert await runtime.credentials.load_refresh_token() == "refresh-B"
-    assert (await connection(sessions))[1:] == ("scope-B", "account-B", "legacy-B")
+    assert (await connection(sessions))[1:] == ("scope-B", "account-A", "legacy-A")
     assert runtime.tokens._token is None
     runtime.google.get_identity.assert_awaited_once_with(access_token="candidate-access-B")
     runtime.oauth.refresh.assert_not_awaited()
 
 
+@pytest.mark.parametrize("refresh", [None, "synthetic-new-refresh"])
+async def test_different_account_is_rejected_without_persisting_credentials(
+    linked, sessions, refresh
+):
+    runtime = linked.state.runtime
+    runtime.oauth.exchange_code.return_value = {
+        "access_token": "candidate-access-B",
+        "refresh_token": refresh,
+    }
+    runtime.google.get_identity.return_value = {"healthUserId": "account-B"}
+    # Account conflicts still win over any need to renew encryption-key consent.
+    linked.state.settings.google_token_encryption_keys_old = [
+        linked.state.settings.google_token_encryption_key
+    ]
+    linked.state.settings.google_token_encryption_key = Fernet.generate_key().decode()
+    before, generation = await connection(sessions), runtime.tokens._generation
+    response = await callback(linked)
+    assert response.status_code == 409
+    assert response.json() == {"detail": "Bu arşiv başka bir Google hesabına bağlı."}
+    assert await connection(sessions) == before
+    async with sessions() as session:
+        assert await session.scalar(select(func.count()).select_from(OAuthCredentialVersion)) == 1
+    runtime.oauth.refresh.assert_not_awaited()
+    assert runtime.tokens._generation == generation
+    assert await runtime.tokens.get() == "cached-access-A"
+
+
+@pytest.mark.parametrize("linked", [False], indirect=True)
+async def test_first_link_accepts_verified_account(linked, sessions):
+    assert (await callback(linked)).status_code == 200
+    assert (await connection(sessions))[2] == "account-A"
+
+
 async def test_commit_failure_keeps_old_connection_and_cache(linked, sessions):
     before = await connection(sessions)
-    async with sessions.begin() as session:
-        session.add(
-            OAuthToken(subject="other", encrypted_refresh_token="synthetic", health_user_id="taken")
-        )
-    linked.state.runtime.google.get_identity.return_value = {"healthUserId": "taken"}
-    assert (await callback(linked)).status_code == 500
+
+    def reject_insert(conn, cursor, statement, parameters, context, executemany):
+        if statement.startswith("INSERT INTO oauth_credential_versions"):
+            raise RuntimeError("Synthetic commit failure")
+
+    engine = sessions.kw["bind"].sync_engine
+    event.listen(engine, "before_cursor_execute", reject_insert)
+    try:
+        assert (await callback(linked)).status_code == 500
+    finally:
+        event.remove(engine, "before_cursor_execute", reject_insert)
     assert await connection(sessions) == before
     assert await linked.state.runtime.tokens.get() == "cached-access-A"
 
@@ -402,6 +446,57 @@ async def test_without_new_refresh_token_reuses_only_verified_matching_account(
     assert (await connection(sessions))[1:] == ("updated-scope-A", "account-A", "new-legacy-A")
 
 
+@pytest.mark.parametrize("refresh_field", [{}, {"refresh_token": None}, {"refresh_token": ""}])
+async def test_key_rotation_requires_a_new_offline_grant(linked, sessions, refresh_field):
+    runtime = linked.state.runtime
+    settings = linked.state.settings
+    retired = settings.google_token_encryption_key
+    settings.google_token_encryption_key = Fernet.generate_key().decode()
+    settings.google_token_encryption_keys_old = [retired]
+    runtime.oauth.exchange_code.return_value = dict(
+        access_token="candidate-access-A", **refresh_field
+    )
+    before = await connection(sessions)
+    response = await callback(linked)
+    assert response.status_code == 400
+    assert "yeniden onay" in response.json()["detail"]
+    assert await connection(sessions) == before
+    runtime.oauth.refresh.assert_not_awaited()
+    runtime.oauth.exchange_code.return_value["refresh_token"] = "newly-consented-refresh"
+    assert (await callback(linked)).status_code == 200
+    assert await runtime.credentials.load_refresh_token() == "newly-consented-refresh"
+    async with sessions() as session:
+        rows = (
+            await session.scalars(
+                select(OAuthCredentialVersion).order_by(OAuthCredentialVersion.id)
+            )
+        ).all()
+    assert len(rows) == 2 and rows[0].encrypted_refresh_token == before[0]
+
+
+async def test_inflight_callback_cannot_reactivate_token_after_key_consent(linked, sessions):
+    runtime = linked.state.runtime
+    runtime.oauth.exchange_code.return_value = {"access_token": "candidate-access-A"}
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    async def refresh(token):
+        entered.set()
+        await release.wait()
+        return AccessToken("verified-access-A", 99999999999)
+
+    runtime.oauth.refresh.side_effect = refresh
+    pending = asyncio.create_task(callback(linked))
+    await asyncio.wait_for(entered.wait(), 30)
+    settings = Settings(_env_file=None, google_token_encryption_key=Fernet.generate_key().decode())
+    fresh = CredentialStore(settings, sessions)
+    await fresh.save_connection("new-consent", None, "account-A", "legacy-A")
+    before = await connection(sessions)
+    release.set()
+    assert (await asyncio.wait_for(pending, 30)).status_code == 400
+    assert await connection(sessions) == before
+    assert await fresh.load_refresh_token() == "new-consent"
+
+
 async def test_missing_refresh_cannot_pair_account_B_identity_with_account_A_token(
     linked, sessions
 ):
@@ -412,14 +507,50 @@ async def test_missing_refresh_cannot_pair_account_B_identity_with_account_A_tok
         {"healthUserId": "account-B"},
         {"healthUserId": "account-A"},
     ]
-    assert (await callback(linked)).status_code == 400
+    assert (await callback(linked)).status_code == 409
+    runtime.oauth.refresh.assert_not_awaited()
     assert await connection(sessions) == before
     assert await runtime.tokens.get() == "cached-access-A"
 
 
-async def test_first_link_requires_offline_token(linked, sessions):
-    async with sessions.begin() as session:
-        await session.execute(delete(OAuthToken))
+@pytest.mark.parametrize(
+    "existing_identity", [{"healthUserId": "account-B"}, {}, {"healthUserId": ""}]
+)
+async def test_reused_offline_token_must_belong_to_verified_account(
+    linked, sessions, existing_identity
+):
+    runtime = linked.state.runtime
+    before = await connection(sessions)
+    cached, generation = runtime.tokens._token, runtime.tokens._generation
+    runtime.oauth.exchange_code.return_value = {"access_token": "candidate-access-A"}
+    runtime.oauth.refresh.return_value = AccessToken(
+        "existing-access-B", 99999999999, "rotated-refresh-B", "scope-B"
+    )
+    runtime.google.get_identity.side_effect = [
+        {"healthUserId": "account-A", "legacyUserId": "new-legacy-A"},
+        existing_identity,
+    ]
+
+    response = await callback(linked)
+
+    assert response.status_code == 400
+    assert response.json() == {
+        "detail": "Google did not return an offline token for this account; retry consent"
+    }
+    runtime.oauth.refresh.assert_awaited_once_with("refresh-A")
+    assert [call.kwargs for call in runtime.google.get_identity.await_args_list] == [
+        {"access_token": "candidate-access-A"},
+        {"access_token": "existing-access-B"},
+    ]
+    assert await connection(sessions) == before
+    async with sessions() as session:
+        assert await session.scalar(select(func.count()).select_from(OAuthCredentialVersion)) == 1
+    assert runtime.tokens._token is cached and runtime.tokens._generation == generation
+    assert await runtime.tokens.get() == "cached-access-A"
+
+
+@pytest.mark.parametrize("linked", [False], indirect=True)
+async def test_first_link_requires_offline_token(linked):
     linked.state.runtime.oauth.exchange_code.return_value = {"access_token": "candidate-access-B"}
     assert (await callback(linked)).status_code == 400
     assert await linked.state.runtime.credentials.load_refresh_token() is None
@@ -441,35 +572,24 @@ async def test_callback_and_inflight_refresh_leave_new_connection_active(linked,
     async def identity(*, access_token):
         assert access_token == "candidate-access-B"
         identity_checked.set()
-        return {"healthUserId": "account-B", "legacyUserId": "legacy-B"}
+        return {"healthUserId": "account-A", "legacyUserId": "legacy-A"}
 
     runtime.oauth.refresh.side_effect = refresh
     runtime.google.get_identity.side_effect = identity
     pending = asyncio.create_task(runtime.tokens.get())
-    await asyncio.wait_for(entered.wait(), 2)
+    await asyncio.wait_for(entered.wait(), 30)
     updating = asyncio.create_task(callback(linked))
     try:
-        await asyncio.wait_for(identity_checked.wait(), 2)
+        await asyncio.wait_for(identity_checked.wait(), 30)
         await asyncio.sleep(0)
         assert not updating.done()
         assert await runtime.credentials.load_refresh_token() == "refresh-A"
     finally:
         release.set()
-        old_access, response = await asyncio.wait_for(asyncio.gather(pending, updating), 2)
+        old_access, response = await asyncio.wait_for(asyncio.gather(pending, updating), 30)
     assert old_access == "old-access-A"  # This read completed before the new connection committed.
     assert response.status_code == 200
     assert await runtime.credentials.load_refresh_token() == "refresh-B"
-    assert (await connection(sessions))[1:] == ("scope-B", "account-B", "legacy-B")
+    assert (await connection(sessions))[1:] == ("scope-B", "account-A", "legacy-A")
     assert await runtime.tokens.get() == "new-access-B"
     assert await runtime.credentials.load_refresh_token() == "refresh-B"
-
-
-def test_oauth_state_signed_with_an_empty_key_is_rejected():
-    """An unset key may arrive as "" from the environment; it must not verify anything."""
-    payload = f"{int(time.time())}.nonce"
-    signature = hmac.new(b"", payload.encode(), hashlib.sha256).digest()
-    forged = f"{payload}.{base64.urlsafe_b64encode(signature).decode().rstrip('=')}"
-    settings = Settings(_env_file=None, google_token_encryption_key="")
-    with pytest.raises(HTTPException) as rejected:
-        auth._verify_state(settings, forged)
-    assert rejected.value.status_code == 400

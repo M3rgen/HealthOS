@@ -6,15 +6,18 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.api.deps import runtime as runtime_dep
-from app.services.runtime import Runtime
+from app.runtime import Runtime
+from app.schemas.status import GarminDaily, GarminStatus
 
 router = APIRouter(prefix="/api/garmin", tags=["garmin"])
 # One request covers at most a quarter: the summary is read from the newest record per day.
 MAX_DAYS = 92
 
 
-@router.get("/status")
-async def garmin_status(response: Response, runtime: Runtime = Depends(runtime_dep)) -> dict:
+@router.get("/status", response_model=GarminStatus)
+async def garmin_status(
+    response: Response, runtime: Runtime = Depends(runtime_dep)
+) -> GarminStatus:
     """Pull state of the Garmin Connect Personal API archive (no values, no secrets)."""
     response.headers["Cache-Control"] = "no-store"
     if runtime.garmin is None:
@@ -25,13 +28,13 @@ async def garmin_status(response: Response, runtime: Runtime = Depends(runtime_d
         raise HTTPException(503, "Garmin status unavailable") from exc
 
 
-@router.get("/daily")
+@router.get("/daily", response_model=GarminDaily)
 async def garmin_daily(
     response: Response,
     start: date = Query(..., alias="from"),
     end: date = Query(..., alias="to"),
     runtime: Runtime = Depends(runtime_dep),
-) -> dict:
+) -> GarminDaily:
     """Steps, resting heart rate, sleep, body battery and stress per day, from Garmin only."""
     response.headers["Cache-Control"] = "no-store"
     if not 1 <= (end - start).days + 1 <= MAX_DAYS:

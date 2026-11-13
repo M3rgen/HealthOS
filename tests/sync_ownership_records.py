@@ -11,6 +11,7 @@ from app.google_health.data_types import REGISTRY
 from app.models.raw_versions import RawHealthDataVersion
 from app.models.retrieval import RetrievalCheckpoint, RetrievalEvent, RetrievalReceipt
 from app.models.state import BackfillJob, FetchRound, RawHealthData, SyncState
+from app.services.providers.ingestion import GoogleSource
 from app.sync.incremental import IncrementalSync
 
 
@@ -31,7 +32,7 @@ class PausedClient(Client):
 
 def service(sessions, client):
     factory = async_sessionmaker(sessions.kw["bind"], expire_on_commit=False)
-    return IncrementalSync(Settings(_env_file=None), factory, client, dict(REGISTRY))
+    return IncrementalSync(Settings(_env_file=None), factory, GoogleSource(client), dict(REGISTRY))
 
 
 async def snapshot(sessions):

@@ -1,0 +1,828 @@
+{
+  "/health/live": {
+    "status": "ok",
+    "service": "healthos"
+  },
+  "/health": {
+    "status": "degraded",
+    "database": "healthy",
+    "scheduler": "disabled",
+    "configuration": "degraded",
+    "checked_at": "2026-09-29T12:00:00Z",
+    "last_webhook_received": null,
+    "last_webhook_processed": null,
+    "last_sync_success": null,
+    "oldest_frequent_sync": null,
+    "last_reconciliation": null,
+    "latest_health_write": null,
+    "data_freshness_checked_at": "2026-09-29T12:00:00Z",
+    "pending_notifications": 0,
+    "failed_notifications": 0,
+    "failed_syncs": 0,
+    "rejected_records": 0,
+    "identity_lock_contention": [],
+    "stale_streams": [
+      "active-energy-burned",
+      "active-minutes",
+      "activity-level",
+      "distance",
+      "heart-rate",
+      "steps",
+      "total-calories"
+    ],
+    "reasons": [
+      "some_frequent_streams_stale",
+      "backup_missing"
+    ],
+    "data_freshness": {},
+    "active_sources": [
+      "google"
+    ],
+    "service": "healthos",
+    "ui_login_disabled": true,
+    "watchdog": "enabled",
+    "last_backup_success": null
+  },
+  "/api/status": {
+    "status": "degraded",
+    "database": "healthy",
+    "scheduler": "disabled",
+    "configuration": "degraded",
+    "checked_at": "2026-09-29T12:00:00Z",
+    "last_webhook_received": null,
+    "last_webhook_processed": null,
+    "last_sync_success": null,
+    "oldest_frequent_sync": null,
+    "last_reconciliation": null,
+    "latest_health_write": null,
+    "data_freshness_checked_at": "2026-09-29T12:00:00Z",
+    "pending_notifications": 0,
+    "failed_notifications": 0,
+    "failed_syncs": 0,
+    "rejected_records": 0,
+    "identity_lock_contention": [],
+    "stale_streams": [
+      "active-energy-burned",
+      "active-minutes",
+      "activity-level",
+      "distance",
+      "heart-rate",
+      "steps",
+      "total-calories"
+    ],
+    "reasons": [
+      "some_frequent_streams_stale",
+      "backup_missing"
+    ],
+    "data_freshness": {},
+    "active_sources": [
+      "google"
+    ],
+    "service": "healthos",
+    "ui_login_disabled": true,
+    "watchdog": "enabled",
+    "last_backup_success": null
+  },
+  "/health/backup": {
+    "status": "missing",
+    "last_attempt": null,
+    "last_success_at": null
+  },
+  "/api/dashboard?end_date=2026-09-29&days=3": {
+    "timezone": "UTC",
+    "start_date": "2026-09-27",
+    "end_date": "2026-09-29",
+    "days": [
+      {
+        "date": "2026-09-29",
+        "steps": null,
+        "sleep_seconds": null,
+        "sleep_assumptions": [],
+        "resting_bpm": null,
+        "hrv_ms": null,
+        "spo2": null,
+        "partial": true,
+        "sources": {
+          "steps": {
+            "source": null,
+            "label": null,
+            "alternatives": []
+          },
+          "sleep_seconds": {
+            "source": null,
+            "label": null,
+            "alternatives": []
+          },
+          "resting_bpm": {
+            "source": null,
+            "label": null,
+            "alternatives": []
+          },
+          "hrv_ms": {
+            "source": null,
+            "label": null,
+            "alternatives": []
+          },
+          "spo2": {
+            "source": null,
+            "label": null,
+            "alternatives": []
+          }
+        },
+        "status": "empty"
+      },
+      {
+        "date": "2026-09-28",
+        "steps": null,
+        "sleep_seconds": null,
+        "sleep_assumptions": [],
+        "resting_bpm": null,
+        "hrv_ms": null,
+        "spo2": null,
+        "partial": false,
+        "sources": {
+          "steps": {
+            "source": null,
+            "label": null,
+            "alternatives": []
+          },
+          "sleep_seconds": {
+            "source": null,
+            "label": null,
+            "alternatives": []
+          },
+          "resting_bpm": {
+            "source": null,
+            "label": null,
+            "alternatives": []
+          },
+          "hrv_ms": {
+            "source": null,
+            "label": null,
+            "alternatives": []
+          },
+          "spo2": {
+            "source": null,
+            "label": null,
+            "alternatives": []
+          }
+        },
+        "status": "empty"
+      },
+      {
+        "date": "2026-09-27",
+        "steps": null,
+        "sleep_seconds": null,
+        "sleep_assumptions": [],
+        "resting_bpm": null,
+        "hrv_ms": null,
+        "spo2": null,
+        "partial": false,
+        "sources": {
+          "steps": {
+            "source": null,
+            "label": null,
+            "alternatives": []
+          },
+          "sleep_seconds": {
+            "source": null,
+            "label": null,
+            "alternatives": []
+          },
+          "resting_bpm": {
+            "source": null,
+            "label": null,
+            "alternatives": []
+          },
+          "hrv_ms": {
+            "source": null,
+            "label": null,
+            "alternatives": []
+          },
+          "spo2": {
+            "source": null,
+            "label": null,
+            "alternatives": []
+          }
+        },
+        "status": "empty"
+      }
+    ],
+    "profile": {},
+    "charts": {
+      "steps": [
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null
+      ],
+      "heart_rate": [
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null
+      ],
+      "sources": {
+        "steps": {
+          "source": null,
+          "label": null,
+          "alternatives": []
+        },
+        "heart_rate": {
+          "source": null,
+          "label": null,
+          "alternatives": [],
+          "activity_windows": null
+        }
+      }
+    },
+    "precedence": {
+      "activity": [
+        "GARMIN",
+        "FITBIT",
+        "HEALTH_KIT"
+      ],
+      "health": [
+        "FITBIT",
+        "GARMIN",
+        "HEALTH_KIT"
+      ]
+    },
+    "sleep_method": "Uyanılan güne atanır; uyanık ve huzursuz süre çıkarılır, evre bilgisi yoksa süre üst sınırdır. Örtüşen oturumlar tek sayılır; örtüşmede süre tahminidir. Günün varsayımları sleep_assumptions alanındadır."
+  },
+  "/api/dashboard/history?metric=steps": {
+    "metric": "steps",
+    "page": 1,
+    "total_pages": 1,
+    "start_date": "2026-08-31",
+    "end_date": "2026-09-29",
+    "earliest_date": null,
+    "latest_date": null,
+    "timezone": "UTC",
+    "days": [
+      {
+        "date": "2026-09-29",
+        "value": null,
+        "partial": true
+      },
+      {
+        "date": "2026-09-28",
+        "value": null,
+        "partial": false
+      },
+      {
+        "date": "2026-09-27",
+        "value": null,
+        "partial": false
+      },
+      {
+        "date": "2026-09-26",
+        "value": null,
+        "partial": false
+      },
+      {
+        "date": "2026-09-25",
+        "value": null,
+        "partial": false
+      },
+      {
+        "date": "2026-09-24",
+        "value": null,
+        "partial": false
+      },
+      {
+        "date": "2026-09-23",
+        "value": null,
+        "partial": false
+      },
+      {
+        "date": "2026-09-22",
+        "value": null,
+        "partial": false
+      },
+      {
+        "date": "2026-09-21",
+        "value": null,
+        "partial": false
+      },
+      {
+        "date": "2026-09-20",
+        "value": null,
+        "partial": false
+      },
+      {
+        "date": "2026-09-19",
+        "value": null,
+        "partial": false
+      },
+      {
+        "date": "2026-09-18",
+        "value": null,
+        "partial": false
+      },
+      {
+        "date": "2026-09-17",
+        "value": null,
+        "partial": false
+      },
+      {
+        "date": "2026-09-16",
+        "value": null,
+        "partial": false
+      },
+      {
+        "date": "2026-09-15",
+        "value": null,
+        "partial": false
+      },
+      {
+        "date": "2026-09-14",
+        "value": null,
+        "partial": false
+      },
+      {
+        "date": "2026-09-13",
+        "value": null,
+        "partial": false
+      },
+      {
+        "date": "2026-09-12",
+        "value": null,
+        "partial": false
+      },
+      {
+        "date": "2026-09-11",
+        "value": null,
+        "partial": false
+      },
+      {
+        "date": "2026-09-10",
+        "value": null,
+        "partial": false
+      },
+      {
+        "date": "2026-09-09",
+        "value": null,
+        "partial": false
+      },
+      {
+        "date": "2026-09-08",
+        "value": null,
+        "partial": false
+      },
+      {
+        "date": "2026-09-07",
+        "value": null,
+        "partial": false
+      },
+      {
+        "date": "2026-09-06",
+        "value": null,
+        "partial": false
+      },
+      {
+        "date": "2026-09-05",
+        "value": null,
+        "partial": false
+      },
+      {
+        "date": "2026-09-04",
+        "value": null,
+        "partial": false
+      },
+      {
+        "date": "2026-09-03",
+        "value": null,
+        "partial": false
+      },
+      {
+        "date": "2026-09-02",
+        "value": null,
+        "partial": false
+      },
+      {
+        "date": "2026-09-01",
+        "value": null,
+        "partial": false
+      },
+      {
+        "date": "2026-08-31",
+        "value": null,
+        "partial": false
+      }
+    ]
+  },
+  "/api/dashboard/workouts?month=2026-09-01": [],
+  "/api/dashboard/measurements": [],
+  "/api/settings/appearance": {
+    "selection": {},
+    "updated_at": null
+  },
+  "/api/settings/display": {
+    "schema_version": 1,
+    "preferences": {},
+    "updated_at": null
+  },
+  "/api/devices": {
+    "checked_at": "2026-09-29T12:00:00+00:00",
+    "thresholds": {
+      "connected_hours": 48,
+      "delayed_days": 7
+    },
+    "google": "ok",
+    "garmin": "off",
+    "apple": "off",
+    "precedence": {
+      "activity": [
+        "GARMIN",
+        "FITBIT",
+        "HEALTH_KIT"
+      ],
+      "health": [
+        "FITBIT",
+        "GARMIN",
+        "HEALTH_KIT"
+      ]
+    },
+    "devices": [],
+    "google_unmatched": [],
+    "note": "Son veri, kaynağın arşivdeki en yeni kaydının fiziksel zamanı; eşitleme zamanı değil. Aynı cihazın eski adları tek satırda birleşir. Öncelik, aynı veriyi birden fazla cihaz verdiğinde hangisinin önde gösterildiğini söyler; diğerleri görünür kalır, toplanmaz."
+  },
+  "/api/webhooks/status": {
+    "checked_at": "2026-09-29T12:00:00Z",
+    "receiver": {
+      "configured": false
+    },
+    "last_notification_at": null,
+    "notification_basis": "verified_signature_with_valid_notification_element; excludes_challenge_and_expired_replays",
+    "silence": {
+      "state": "unconfigured",
+      "warning": false,
+      "since": null,
+      "never_received": true,
+      "threshold_seconds": 604800
+    },
+    "counters": {
+      "scope": "persistent_diagnostic_events",
+      "since": "2026-09-29T12:00:00Z",
+      "survives_restart": true,
+      "reasons": {
+        "authorization_rejected": 0,
+        "receiver_unconfigured": 0,
+        "missing_signature": 0,
+        "malformed_signature": 0,
+        "invalid_signature": 0,
+        "key_download_failed": 0,
+        "signature_valid": 0,
+        "challenge": 0,
+        "invalid_json": 0,
+        "body_rejected": 0,
+        "notification_received": 0,
+        "duplicate": 0,
+        "expired_replay": 0,
+        "ingestion_failed": 0,
+        "notification_rejected": 0,
+        "processing_failed": 0,
+        "batch_processing_failed": 0,
+        "processing_interrupted": 0
+      },
+      "semantics": "events_not_exclusive; no historical counter backfill; database outages may omit observations",
+      "valid": 0,
+      "invalid": 0,
+      "expired": 0,
+      "expired_basis": "local_signed_replay_max_age; signature has no expiry field",
+      "units": {
+        "validation": "requests; valid includes duplicates and expired replays",
+        "notification_received": "non_expired_verified_deliveries_with_valid_elements",
+        "notification_rejected": "rejected_batch_elements",
+        "processing_failed": "failed_element_attempts",
+        "batch_processing_failed": "unhandled_batch_attempt_errors",
+        "processing_interrupted": "recovery_runs_with_interrupted_elements"
+      }
+    },
+    "process_local": {
+      "scope": "this_process_since_start",
+      "since": "2026-09-29T12:00:00Z",
+      "survives_restart": false,
+      "unpersisted": {
+        "authorization_rejected": 0,
+        "receiver_unconfigured": 0
+      },
+      "semantics": "pre_authorization_rejections_persist_at_most_one_row_per_reason_per_minute; unpersisted_counts_only_the_skipped_rows",
+      "rate_limited": {
+        "authorized": 0,
+        "unauthorized": 0
+      }
+    },
+    "subscription": {
+      "status": "unknown",
+      "renewal_status": "unknown",
+      "last_renewed_at": null,
+      "basis": "no_subscription_client_or_evidence"
+    },
+    "last_error": null
+  },
+  "/api/garmin/status": {
+    "enabled": false,
+    "key_file_present": false,
+    "kinds": {}
+  },
+  "/api/garmin/daily?from=2026-09-28&to=2026-09-29": {
+    "source": "garmin",
+    "from": "2026-09-28",
+    "to": "2026-09-29",
+    "days": []
+  },
+  "/sync/status": [],
+  "/backfill/status": [],
+  "/api/sync/reconciliation": {
+    "runs": [],
+    "offset": 0,
+    "limit": 20,
+    "total": 0
+  },
+  "/api/sync/coverage?start_date=2026-09-28&end_date=2026-09-29&timezone=UTC&data_type=steps": {
+    "schema_version": "1",
+    "start_date": "2026-09-28",
+    "end_date": "2026-09-29",
+    "timezone": "UTC",
+    "types": [
+      {
+        "data_type": "steps",
+        "presence_basis": "metric_value",
+        "days": [
+          {
+            "date": "2026-09-28",
+            "has_value": false,
+            "retrieval": "unknown",
+            "returned_records": null,
+            "reason": null,
+            "closed": true
+          },
+          {
+            "date": "2026-09-29",
+            "has_value": false,
+            "retrieval": "unknown",
+            "returned_records": null,
+            "reason": "open_day",
+            "closed": false
+          }
+        ],
+        "source_regimes": [],
+        "exclusions": {
+          "quarantined": 0,
+          "without_raw_record": 0,
+          "source_deleted": 0,
+          "superseded": 0,
+          "invalid_shape": 0
+        }
+      }
+    ],
+    "supported_data_types": [
+      "active-energy-burned",
+      "active-minutes",
+      "active-zone-minutes",
+      "activity-level",
+      "altitude",
+      "blood-glucose",
+      "body-fat",
+      "calories-in-heart-rate-zone",
+      "core-body-temperature",
+      "daily-heart-rate-variability",
+      "daily-heart-rate-zones",
+      "daily-oxygen-saturation",
+      "daily-respiratory-rate",
+      "daily-resting-heart-rate",
+      "daily-sleep-temperature-derivations",
+      "daily-vo2-max",
+      "distance",
+      "electrocardiogram",
+      "exercise",
+      "floors",
+      "food",
+      "food-measurement-unit",
+      "heart-rate",
+      "heart-rate-variability",
+      "height",
+      "hydration-log",
+      "irregular-rhythm-notification",
+      "nutrition-log",
+      "oxygen-saturation",
+      "respiratory-rate-sleep-summary",
+      "run-vo2-max",
+      "sedentary-period",
+      "sleep",
+      "steps",
+      "swim-lengths-data",
+      "time-in-heart-rate-zone",
+      "total-calories",
+      "vo2-max",
+      "weight"
+    ],
+    "summary": {
+      "days_without_value": 1,
+      "unknown_days": 1,
+      "incomplete_days": 0,
+      "not_attempted_days": 0,
+      "basis": "type_days_in_page"
+    },
+    "receipts_since": null,
+    "next_offset": null,
+    "note": "Değer varlığı çekim kanıtından ayrıdır. Kaynaklar birleştirilmez. Fişsiz geçmiş bilinmiyor; fişler başladıktan sonra hiç dokunulmayan gün çekilmedi demektir. Bugün kapalı gün değildir. Dönen kayıtlar dışlananları da içerir; sayılar ölçüm sıklığı değildir."
+  },
+  "/google-health/capabilities": {
+    "lookback_days": 30,
+    "data_types": [
+      {
+        "data_type": "steps",
+        "access_method": "list",
+        "accessible": true,
+        "has_recent_data": true,
+        "sample_start": "2026-09-29T12:00:00Z",
+        "sample_end": null,
+        "top_level_fields": [
+          "name",
+          "steps"
+        ]
+      },
+      {
+        "data_type": "sleep",
+        "access_method": "list",
+        "accessible": false,
+        "has_recent_data": false,
+        "error_code": "discovery_probe_failed",
+        "error": "Veri türüne erişim denetlenemedi. Daha sonra yeniden deneyin."
+      }
+    ]
+  },
+  "/google-health/devices": {
+    "devices": []
+  },
+  "PUT /api/settings/appearance": {
+    "selection": {
+      "logo": "upload"
+    },
+    "updated_at": "2026-09-29T12:00:00Z"
+  },
+  "PUT /api/settings/display": {
+    "schema_version": 1,
+    "preferences": {
+      "timezone": "Europe/Paris",
+      "motion": false
+    },
+    "updated_at": "2026-09-29T12:00:00Z"
+  },
+  "POST /api/dashboard/measurements": {
+    "id": "00000000-0000-0000-0000-000000000014",
+    "metric": "weight",
+    "value": "71.2500",
+    "measured_at": "2026-09-29T01:00:00",
+    "source": "Manuel"
+  },
+  "POST /api/dashboard/workouts": {
+    "id": "00000000-0000-0000-0000-000000000015",
+    "exercise_type": "Koşu",
+    "start_time": "2026-09-29T01:00:00Z",
+    "end_time": "2026-09-29T02:00:00Z",
+    "duration_seconds": 3600.0,
+    "calories_kcal": 123.45,
+    "distance_meters": null,
+    "source": "Manuel",
+    "source_code": "MANUAL",
+    "provider": "MANUAL",
+    "priority": "primary",
+    "group": null,
+    "alternatives": []
+  },
+  "POST /sync/all": {
+    "status": "accepted",
+    "data_types": [
+      "active-energy-burned",
+      "active-minutes",
+      "active-zone-minutes",
+      "activity-level",
+      "altitude",
+      "blood-glucose",
+      "body-fat",
+      "core-body-temperature",
+      "calories-in-heart-rate-zone",
+      "daily-heart-rate-variability",
+      "daily-heart-rate-zones",
+      "daily-oxygen-saturation",
+      "daily-respiratory-rate",
+      "daily-resting-heart-rate",
+      "daily-sleep-temperature-derivations",
+      "daily-vo2-max",
+      "distance",
+      "electrocardiogram",
+      "exercise",
+      "floors",
+      "heart-rate",
+      "heart-rate-variability",
+      "height",
+      "hydration-log",
+      "irregular-rhythm-notification",
+      "nutrition-log",
+      "oxygen-saturation",
+      "respiratory-rate-sleep-summary",
+      "run-vo2-max",
+      "sedentary-period",
+      "sleep",
+      "steps",
+      "swim-lengths-data",
+      "time-in-heart-rate-zone",
+      "total-calories",
+      "vo2-max",
+      "weight"
+    ],
+    "sequence": 0,
+    "job_id": "0000000000000000000000000000000d"
+  },
+  "POST /sync/steps": {
+    "status": "accepted",
+    "data_type": "steps",
+    "job_id": "0000000000000000000000000000000d"
+  },
+  "POST /backfill/start": {
+    "status": "accepted",
+    "data_types": [
+      "active-energy-burned",
+      "active-minutes",
+      "active-zone-minutes",
+      "activity-level",
+      "altitude",
+      "blood-glucose",
+      "body-fat",
+      "core-body-temperature",
+      "calories-in-heart-rate-zone",
+      "daily-heart-rate-variability",
+      "daily-heart-rate-zones",
+      "daily-oxygen-saturation",
+      "daily-respiratory-rate",
+      "daily-resting-heart-rate",
+      "daily-sleep-temperature-derivations",
+      "daily-vo2-max",
+      "distance",
+      "electrocardiogram",
+      "exercise",
+      "floors",
+      "heart-rate",
+      "heart-rate-variability",
+      "height",
+      "hydration-log",
+      "irregular-rhythm-notification",
+      "nutrition-log",
+      "oxygen-saturation",
+      "respiratory-rate-sleep-summary",
+      "run-vo2-max",
+      "sedentary-period",
+      "sleep",
+      "steps",
+      "swim-lengths-data",
+      "time-in-heart-rate-zone",
+      "total-calories",
+      "vo2-max",
+      "weight"
+    ]
+  }
+}

@@ -3,11 +3,18 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import UTC, datetime
+from functools import wraps
+from inspect import signature
+from typing import Any, get_type_hints
 
 import typer
 
 from app.cli._context import context
+from app.services.identities.identity_backfill_stats import BackfillStats
+from app.services.identities.identity_options import BackfillOptions, SourceDecision
 
 DATA_TYPES_OPTION = typer.Option(
     None, "--data-type", help="Only this data type (repeatable); default: every archived type."
@@ -46,10 +53,10 @@ def identity_backfill(
     """
     import re
 
-    from app.services.identity_backfill import BackfillStats, LockUnavailable
-    from app.services.identity_backfill import identity_backfill as run_backfill
-    from app.services.identity_reconcile_window import busy_deadline
-    from app.services.source_chains import BackfillRunning
+    from app.services.identities.identity_backfill import LockUnavailable
+    from app.services.identities.identity_backfill import identity_backfill as run_backfill
+    from app.services.identities.identity_reconcile_window import busy_deadline
+    from app.services.identities.source_chain_locks import BackfillRunning
 
     if not re.fullmatch(r"[1-9][0-9]*(ms|s|min)", statement_timeout):
         raise typer.BadParameter(
@@ -73,23 +80,27 @@ def identity_backfill(
             run_backfill(
                 context.sessions,
                 data_types=data_type,
-                batch_size=batch_size,
-                dry_run=dry_run,
                 after=after.replace(tzinfo=UTC) if after else None,
                 incremental=incremental,
-                statement_timeout=statement_timeout,
-                progress=progress,
-                notice=lambda message: typer.echo(message, err=True),
-                # A data type a long sync holds (a watchdog recovery, a reconciliation) is
-                # tried again after the others for IDENTITY_RECONCILE_LOCK_WAIT_MINUTES.
                 lock_deadline=None
                 if dry_run
                 else busy_deadline(None, context.settings().identity_reconcile_lock_wait_minutes),
+                options=BackfillOptions(
+                    batch_size=batch_size,
+                    dry_run=dry_run,
+                    statement_timeout=statement_timeout,
+                    progress=progress,
+                    notice=lambda message: typer.echo(message, err=True),
+                ),
             )
         )
     except (BackfillRunning, LockUnavailable) as exc:
         typer.echo(f"identity-backfill refused: {exc}", err=True)
         raise typer.Exit(1) from exc
+    _report_backfill(results, dry_run)
+
+
+def _report_backfill(results: dict[str, BackfillStats], dry_run: bool) -> None:
     total = BackfillStats()
     for stats in results.values():
         total.add(stats)
@@ -106,19 +117,35 @@ def identity_backfill(
         raise typer.Exit(1)
 
 
-def identity_decide(
+@dataclass(frozen=True)
+class _DecisionOptions:
     decision: str = typer.Argument(
         ..., help="link, reject or confirm (a chain FROM -> TO); distinct or not-distinct."
-    ),
-    data_type: str = typer.Option(..., "--data-type"),
+    )
+    data_type: str = typer.Option(..., "--data-type")
     first: str = typer.Option(
         ..., "--from", help="Fingerprint (prefix, as reports print it) of the earlier form."
-    ),
-    second: str = typer.Option(..., "--to", help="Fingerprint (prefix) of the later form."),
-    note: str | None = typer.Option(None, "--note", help="Why (kept with the decision)."),
-    dry_run: bool = typer.Option(False, "--dry-run", help="Report the effect; write nothing."),
-    batch_size: int = typer.Option(5_000, min=100, max=100_000),
-) -> None:
+    )
+    second: str = typer.Option(..., "--to", help="Fingerprint (prefix) of the later form.")
+    note: str | None = typer.Option(None, "--note", help="Why (kept with the decision).")
+    dry_run: bool = typer.Option(False, "--dry-run", help="Report the effect; write nothing.")
+    batch_size: int = typer.Option(5_000, min=100, max=100_000)
+
+
+def _decision_command(command: Callable[[_DecisionOptions], None]) -> Callable[..., None]:
+    """Expose the option object's Typer signature while passing one immutable request."""
+
+    @wraps(command)
+    def invoke(**options: Any) -> None:
+        command(_DecisionOptions(**options))
+
+    invoke.__dict__["__signature__"] = signature(_DecisionOptions)
+    invoke.__annotations__ = get_type_hints(_DecisionOptions)
+    return invoke
+
+
+@_decision_command
+def identity_decide(options: _DecisionOptions) -> None:
     """Decide what the reconciler left open: two sources are one device, or two devices.
 
     Recorded append-only (raw_source_decisions) and applied at once; the rows whose devices
@@ -130,11 +157,11 @@ def identity_decide(
     marked deleted by the next complete fetch: permanent) and ``not-distinct`` undoes it. Run
     with --dry-run first (docs/RUNBOOK.md).
     """
-    from app.services.identity_backfill import LockUnavailable
-    from app.services.identity_decisions import DecisionRefused, decide_sources
-    from app.services.source_chains import BackfillRunning
+    from app.services.identities.identity_backfill import LockUnavailable
+    from app.services.identities.identity_decisions import DecisionRefused, decide_sources
+    from app.services.identities.source_chain_locks import BackfillRunning
 
-    def progress(name, stats, reached: datetime) -> None:
+    def progress(name: str, stats: BackfillStats, reached: datetime) -> None:
         typer.echo(
             f"{name}: {stats.rows} rows, {sum(stats.linked.values())} superseded, "
             f"up to {reached.isoformat()}",
@@ -145,15 +172,16 @@ def identity_decide(
         outcome = context.run(
             decide_sources(
                 context.sessions,
-                data_type,
-                decision,
-                first,
-                second,
-                note=note,
-                dry_run=dry_run,
-                batch_size=batch_size,
-                progress=progress,
-                notice=lambda message: typer.echo(message, err=True),
+                options.data_type,
+                options=BackfillOptions(
+                    dry_run=options.dry_run,
+                    batch_size=options.batch_size,
+                    progress=progress,
+                    notice=lambda message: typer.echo(message, err=True),
+                ),
+                request=SourceDecision(
+                    options.decision, options.first, options.second, options.note
+                ),
             )
         )
     except (DecisionRefused, BackfillRunning, LockUnavailable) as exc:
@@ -165,7 +193,7 @@ def identity_decide(
 def identity_sources(data_type: str = typer.Option(..., "--data-type")) -> None:
     """List a data type's source fingerprints: spans, devices, chains (with review state),
     pairs kept apart, the owner's decisions, and what the chain rule leaves open."""
-    from app.services.identity_decisions import list_sources
+    from app.services.identities.identity_decisions import list_sources
 
     typer.echo(
         json.dumps(context.run(list_sources(context.sessions, data_type)), indent=2, default=str)

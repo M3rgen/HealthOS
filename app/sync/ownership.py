@@ -1,48 +1,87 @@
 """Run ownership, separate from transaction-scoped identity locks.
 
-A PostgreSQL owner uses one isolated connection for both its session advisory lock and
-all short page transactions. A waiter keeps its one connection and queues in the
-server's lock manager in short slices: the lock passes in request order, no new
-connection is opened per retry and no snapshot is held for the whole wait. Checking the
-lock inside every transaction prevents SQLAlchemy reconnecting a lost connection and
-continuing to write without ownership. No transaction spans Google I/O.
+A PostgreSQL owner uses one checked-out connection for both its session advisory lock and
+all short page transactions. Coroutines of this process queue for a key on a local gate and
+hold no connection meanwhile. Only the head of a key's queue goes to the database; when
+another process owns the key, it keeps its one connection and queues in the server's lock
+manager in short slices: the lock passes in request order, no new connection is opened per
+retry and no snapshot is held for the whole wait. Checking the lock inside every transaction
+prevents SQLAlchemy reconnecting a lost connection and continuing to write without ownership.
+No transaction spans Google I/O.
+
+An owner slot is taken only around a held lock, so a queue on a busy key never occupies one:
+waiting for one data type cannot hold up another, and the limit counts the runs actually
+executing. Everything here is backend-neutral except :class:`_RunLock`.
 """
 
 from __future__ import annotations
 
 import asyncio
-import fcntl
-import zlib
-from collections.abc import Awaitable, Callable
+import random
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
-from pathlib import Path
+from typing import Any, Protocol
+from weakref import WeakKeyDictionary
 
 from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import (
     AsyncConnection,
     AsyncEngine,
+    AsyncSession,
     async_sessionmaker,
-    create_async_engine,
 )
 
-RUN_NAMESPACE = 0x48455331  # "HES1"; never the identity writers' HEI namespaces.
-NOTIFICATION_NAMESPACE = 0x48455731  # "HEW1"; independent of data-type run locks.
+from app.db import connections
+from app.db.contracts import OwnershipLost, RunOwnership, TransactionSessions
+from app.db.dialect import database_operation
+from app.db.postgres import (
+    GARMIN_NAMESPACE,
+    LOCK_NOT_AVAILABLE,
+    RUN_NAMESPACE,
+    WATCHDOG_NAMESPACE,
+    advisory_key,
+    sqlstate,
+)
+from app.db.postgres import NOTIFICATION_NAMESPACE as NOTIFICATION_NAMESPACE
+from app.sync.local_lock import LocalLock
+
+# Preserve the ownership module interface for existing callers.
+discard_connection = connections.discard_connection
+
 TRY_LOCK = text("SELECT pg_try_advisory_lock(:namespace, :key)")
 WAIT_LOCK = text("SELECT pg_advisory_lock(:namespace, :key)")
 # A slice that times out leaves the queue only for one round trip before requeueing.
 WAIT_SLICE = text("SET LOCAL lock_timeout = '2s'")
-LOCK_NOT_AVAILABLE = "55P03"
 HELD_LOCK = text(
     "SELECT EXISTS (SELECT 1 FROM pg_locks WHERE locktype = 'advisory' "
     "AND pid = pg_backend_pid() AND classid = :namespace AND objid = :unsigned_key "
     "AND objsubid = 2 AND granted AND mode = 'ExclusiveLock')"
 )
+FIRST_BACKOFF = 0.05
 MAX_BACKOFF = 2.0
 
 
-class OwnershipLost(RuntimeError):
-    """The run may no longer write; leave the last committed checkpoint resumable."""
+class _Quota:
+    """One namespace's limits: running owners, and connections parked behind another process."""
+
+    __slots__ = ("owners", "parked")
+
+    def __init__(self, limit: int) -> None:
+        self.owners = asyncio.Semaphore(limit)
+        self.parked = asyncio.Semaphore(limit)
+
+
+_slots: WeakKeyDictionary[AsyncEngine, dict[int, _Quota]] = WeakKeyDictionary()
+
+
+def _quota(engine: AsyncEngine, namespace: int, default: int = 1) -> _Quota:
+    quotas = _slots.setdefault(engine, {})
+    if namespace not in quotas:
+        limit = engine.get_execution_options().get("ownership_concurrency", default)
+        single = namespace in (WATCHDOG_NAMESPACE, GARMIN_NAMESPACE)
+        quotas[namespace] = _Quota(1 if single else limit)
+    return quotas[namespace]
 
 
 async def _contended() -> None:
@@ -61,7 +100,7 @@ class OwnedSessions:
         self.factory = async_sessionmaker(connection, expire_on_commit=False)
 
     @asynccontextmanager
-    async def begin(self):
+    async def begin(self) -> AsyncIterator[AsyncSession]:
         if self.connection.closed or self.connection.invalidated:
             raise OwnershipLost("sync ownership connection was lost")
         async with self.factory.begin() as session:
@@ -78,53 +117,111 @@ class CheckedSessions:
     In particular, a disconnected notification waiting for a data type cannot fetch.
     """
 
-    def __init__(self, sessions, check: Callable[[], Awaitable[None]]):
+    def __init__(self, sessions: TransactionSessions, check: Callable[[], Awaitable[None]]):
         self.sessions = sessions
         self.check = check
 
     @asynccontextmanager
-    async def begin(self):
+    async def begin(self) -> AsyncIterator[AsyncSession]:
         await self.check()
         async with self.sessions.begin() as session:
             yield session
 
 
-def isolated_engine(engine: AsyncEngine) -> AsyncEngine:
-    """A private pool with the driver's configured creator and connect arguments.
+@asynccontextmanager
+async def ownership_connection(engine: AsyncEngine, namespace: int, *, wait: bool = True):
+    """Bound long-lived owners while leaving room for nested work and HTTP archives.
 
-    It cannot starve OAuth or response archiving using the application's pool, even at
-    pool_size=1. Release it with `discard_isolated` on every exit.
+    Notifications and data-type runs have independent quotas: a notification can
+    wait for a data type without exhausting its quota. The shared application pool
+    reserves both quotas plus watchdog ownership and ordinary request capacity.
     """
-    return create_async_engine(engine.url, pool=engine.pool.recreate())
-
-
-async def discard_isolated(connection: AsyncConnection | None, engine: AsyncEngine) -> None:
-    """Close the physical connection and pool even when shutdown cancels repeatedly.
-
-    Closing the connection releases its session locks, including when acquisition or a
-    commit was cancelled after PostgreSQL granted one. It never returns to a pool.
-    """
-    cleanup = asyncio.create_task(_close_isolated(connection, engine))
-    interrupted = False
-    while not cleanup.done():
+    quota = _quota(engine, namespace).owners
+    if not wait and quota.locked():
+        yield None
+        return
+    async with quota:
+        connection = await engine.connect()
         try:
-            await asyncio.shield(cleanup)
-        except asyncio.CancelledError:
-            interrupted = True
-    cleanup.result()
-    if interrupted:
-        raise asyncio.CancelledError
+            yield connection
+        finally:
+            await discard_connection(connection)
 
 
-async def _close_isolated(connection: AsyncConnection | None, engine: AsyncEngine) -> None:
-    try:
-        if connection is not None:
+class _RunLock(Protocol):
+    """What differs between backends; the queueing around it is written once, below."""
+
+    name: tuple[str, int, str]
+    default_limit: int  # the owner limit of an engine that does not set one
+
+    async def attempt(self) -> bool: ...
+
+    async def wait(self) -> None: ...
+
+    async def release(self) -> None: ...
+
+    def scoped(self, sessions: Any) -> Any: ...
+
+
+class _PostgresLock:
+    default_limit = 1
+
+    def __init__(self, engine: AsyncEngine, namespace: int, data_type: str) -> None:
+        self.engine = engine
+        self.arguments = {"namespace": namespace, "key": advisory_key(data_type)}
+        # One gate per engine: separate engines stand for separate processes.
+        self.name = (f"postgres:{id(engine)}", namespace, data_type)
+        self.connection: AsyncConnection | None = None
+
+    async def attempt(self) -> bool:
+        if self.connection is None:
+            self.connection = await self.engine.connect()
+        async with self.connection.begin():
+            return bool(await self.connection.scalar(TRY_LOCK, self.arguments))
+
+    def _connected(self) -> AsyncConnection:
+        if self.connection is None:
+            raise RuntimeError("the lock has no connection before its first attempt")
+        return self.connection
+
+    async def wait(self) -> None:
+        connection = self._connected()
+        while True:
             try:
-                await connection.invalidate()
-            finally:
-                await connection.close()
-    finally:
-        await engine.dispose()
+                # Session locks survive the commit; the slice only bounds the snapshot.
+                async with connection.begin():
+                    await connection.execute(WAIT_SLICE)
+                    await connection.execute(WAIT_LOCK, self.arguments)
+                return
+            except DBAPIError as exc:
+                if sqlstate(exc) != LOCK_NOT_AVAILABLE:
+                    raise
+
+    async def release(self) -> None:
+        connection, self.connection = self.connection, None
+        if connection is not None:
+            await discard_connection(connection)
+
+    def scoped(self, sessions: Any) -> OwnedSessions:
+        return OwnedSessions(self._connected(), self.arguments)
+
+
+@database_operation
+def _run_lock(engine: AsyncEngine, namespace: int, key: str) -> _RunLock:
+    return _PostgresLock(engine, namespace, key)
+
+
+def garmin_ownership(sessions: async_sessionmaker) -> RunOwnership:
+    """Ownership of one Garmin kind (or ``normalize``); waits like a Google data-type run."""
+
+    @asynccontextmanager
+    async def owned(key: str) -> AsyncIterator[TransactionSessions]:
+        async with run_ownership(sessions, key, namespace=GARMIN_NAMESPACE) as held:
+            if held is None:
+                raise OwnershipLost("Garmin run ownership was not acquired")
+            yield held
+
+    return owned
 
 
 @asynccontextmanager
@@ -134,125 +231,98 @@ async def run_ownership(
     *,
     wait: bool = True,
     namespace: int = RUN_NAMESPACE,
+    wait_for_slot: bool = False,
 ):
-    """Yield owned transactions, or None for a busy nonblocking recovery attempt."""
+    """Yield owned transactions, or None for a busy nonblocking attempt.
+
+    ``wait=False`` never queues behind another owner of the key. With ``wait_for_slot`` a
+    full limit is a queue, not a refusal: it waits for a free slot (holding no connection)
+    and only then tries the key, so None means that the key really has another owner.
+    """
     engine = sessions.kw["bind"]
     if not isinstance(engine, AsyncEngine):
         raise TypeError("sync ownership requires an engine-bound session factory")
-    if engine.dialect.name == "sqlite":
-        async with _sqlite_ownership(engine, namespace, data_type, wait) as acquired:
-            yield sessions if acquired else None
-        return
-    if engine.dialect.name != "postgresql":
-        raise ValueError("sync ownership requires PostgreSQL or SQLite")
-    arguments = {"namespace": namespace, "key": zlib.crc32(data_type.encode()) - 2**31}
-    isolated = isolated_engine(engine)
-    connection = None
-    owned = False
-    try:
-        connection = await isolated.connect()
-        owned = await _acquire(connection, arguments, wait)
-        if owned:
-            yield OwnedSessions(connection, arguments)
-    finally:
-        await discard_isolated(connection, isolated)
-    if not owned:
-        yield None
-
-
-async def _acquire(connection: AsyncConnection, arguments: dict, wait: bool) -> bool:
-    async with connection.begin():
-        if await connection.scalar(TRY_LOCK, arguments):
-            return True
-    if not wait:
-        return False
-    await _contended()
-    while True:
+    lock = _run_lock(engine, namespace, data_type)
+    quota = _quota(engine, namespace, lock.default_limit)
+    async with _local_gate(lock.name, wait) as (entered, announced):
+        if not entered:
+            yield None
+            return
         try:
-            # Session locks survive the commit; the slice only bounds the snapshot.
-            async with connection.begin():
-                await connection.execute(WAIT_SLICE)
-                await connection.execute(WAIT_LOCK, arguments)
-            return True
-        except DBAPIError as exc:
-            if getattr(exc.orig, "sqlstate", None) != LOCK_NOT_AVAILABLE:
-                raise
+            if await _acquire(quota, lock, wait, announced, wait_for_slot):
+                try:
+                    yield lock.scoped(sessions)
+                finally:
+                    quota.owners.release()
+            else:
+                yield None
+        finally:
+            await lock.release()
 
 
-class _LocalLock:
-    __slots__ = ("lock", "users")
+async def _acquire(
+    quota: _Quota, lock: _RunLock, wait: bool, announced: bool, wait_for_slot: bool = False
+) -> bool:
+    """Take the lock and exactly one owner slot; on False or an error, no slot is kept.
 
-    def __init__(self) -> None:
-        self.lock = asyncio.Lock()
-        self.users = 0  # coroutines holding or waiting for the lock
+    The slot is held only around an attempt and from the grant on, never while queueing, so
+    a type another process owns neither consumes the limit nor delays a free type. Waiting
+    for the lock keeps a connection under ``quota.parked``; past that bound the head of a
+    key retries with backoff instead of queueing behind other keys.
+    """
+    delay = FIRST_BACKOFF
+    while True:
+        if not wait and not wait_for_slot and quota.owners.locked():
+            return False
+        await quota.owners.acquire()
+        try:
+            if await lock.attempt():
+                return True
+        except BaseException:
+            quota.owners.release()
+            raise
+        quota.owners.release()
+        if not wait:
+            return False
+        if not announced:
+            announced = True
+            await _contended()
+        if quota.parked.locked():
+            await lock.release()
+            await asyncio.sleep(delay * random.uniform(0.5, 1.0))
+            delay = min(delay * 2, MAX_BACKOFF)
+            continue
+        async with quota.parked:  # held until the slot: a granted lock keeps its connection
+            await lock.wait()
+            await quota.owners.acquire()  # granted: this run now counts against the limit
+        return True
 
 
 # Entries exist only while held or awaited, so per-notification keys never accumulate.
-_local_locks: dict[tuple[str, int, str], _LocalLock] = {}
+_local_locks: dict[tuple[str, int, str], LocalLock] = {}
 
 
 @asynccontextmanager
-async def _sqlite_ownership(engine: AsyncEngine, namespace: int, key: str, wait: bool):
-    """Serialize in request order in-process; data types also use a flock across processes.
+async def _local_gate(name: tuple[str, int, str], wait: bool):
+    """Queue this process's owners of one key in request order, without a connection.
 
-    SQLite has a single writer, and a notification claim is an atomic status update,
-    so the notification namespace needs no sidecar file per element.
+    Yields (entered, announced): whether this coroutine may go on to the lock itself, and
+    whether it already reported contention (``_contended`` runs once per acquisition).
     """
-    database = engine.url.database or ":memory:"
-    memory = database == ":memory:"
-    name = (f"memory:{id(engine)}" if memory else _resolved(database), namespace, key)
     entry = _local_locks.get(name)
     if entry is None:
-        entry = _local_locks[name] = _LocalLock()
+        entry = _local_locks[name] = LocalLock()
     entry.users += 1
     try:
-        if entry.users > 1:
+        contended = entry.users > 1
+        if contended:
             if not wait:
-                yield False
+                yield False, True
                 return
             await _contended()
         async with entry.lock:
-            if memory or namespace != RUN_NAMESPACE:
-                yield True
-                return
-            async with _sqlite_file_lock(database, key, wait) as acquired:
-                yield acquired
+            yield True, contended
     finally:
         entry.users -= 1
         if entry.users == 0 and _local_locks.get(name) is entry:
             del _local_locks[name]
-
-
-@asynccontextmanager
-async def _sqlite_file_lock(database: str, data_type: str, wait: bool):
-    # A sidecar remains on disk: unlinking it would let a waiter lock an old inode.
-    with _sqlite_file(database, data_type) as handle:
-        delay = 0.05
-        contended = False
-        while True:
-            try:
-                fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                break
-            except BlockingIOError:
-                if not wait:
-                    yield False
-                    return
-                if not contended:
-                    contended = True
-                    await _contended()
-                await asyncio.sleep(delay)
-                delay = min(delay * 2, MAX_BACKOFF)
-        try:
-            yield True
-        finally:
-            fcntl.flock(handle, fcntl.LOCK_UN)
-
-
-def _resolved(database: str) -> str:
-    return str(Path(database).resolve())
-
-
-def _sqlite_file(database: str, data_type: str):
-    path = Path(database).resolve()
-    key = zlib.crc32(data_type.encode())
-    return path.with_name(f"{path.name}.sync-{key:08x}.lock").open("a")

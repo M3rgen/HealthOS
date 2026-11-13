@@ -9,12 +9,26 @@ const minus = (value, days) => { const d = civil(value); d.setUTCDate(d.getUTCDa
 // Small deterministic pseudo-random walk so charts look organic but stable.
 const wave = (i, seed) => (Math.sin(i * 1.7 + seed) + Math.sin(i * 0.63 + seed * 2.1)) / 2;
 
+const normalization = {
+  status: 'unknown', last_attempt_at: null, last_success_at: null,
+  last_error_at: null, last_error_code: null,
+};
+const garminStatus = {
+  enabled: true, key_file_present: false, pull_interval_minutes: 120, lookback_days: 3,
+  last_success_at: null, last_error: null, last_error_at: null, failing_kinds: [],
+  raw_records: 0, responses: 0, normalization,
+  kinds: { steps: { records: 0, newest_key: null, last_success_at: null,
+    last_error: null, last_error_at: null, failing: false, backfill: null } },
+};
 const health = {
   status: 'healthy', database: 'healthy', scheduler: 'running', configuration: 'healthy',
   checked_at: '2026-10-16T14:28:00Z', last_sync_success: '2026-10-16T14:15:00Z',
-  latest_health_write: '2026-10-16T14:15:00Z', last_webhook_received: '2026-10-16T13:58:00Z',
+  latest_health_write: '2026-10-16T14:15:00Z', last_backup_success: '2026-10-16T03:30:00Z', last_webhook_received: '2026-10-16T13:58:00Z',
   data_freshness: { heart_rate: '2026-10-16T14:05:00Z', steps: '2026-10-16T14:10:00Z' },
   pending_notifications: 0, failed_notifications: 0, failed_syncs: 0, stale_streams: [],
+  reasons: [], active_sources: ['google'], service: 'healthos', ui_login_disabled: false,
+  garmin: { last_success_at: null, last_error_at: null, last_error_code: null,
+    lag_seconds: null, stale_after_seconds: 21600, normalization },
 };
 
 // Precedence (maintainer, 7 Nov 2026): Garmin first for sport activities, the Fitbit Air first for
@@ -54,9 +68,9 @@ function dashboard(params) {
   return {
     start_date: minus(end, days - 1), end_date: end, timezone: params.get('timezone') || 'UTC',
     profile: {
-      height: { value: 178, measured_at: '2026-05-29T08:00:00Z' },
-      weight: { value: 74.6, measured_at: '2026-09-30T07:30:00Z' },
-      body_fat: { value: 17.8, measured_at: '2026-09-30T07:30:00Z' },
+      height: { metric: 'height', value: 178, measured_at: '2026-05-29T08:00:00Z', source: 'Manuel' },
+      weight: { metric: 'weight', value: 74.6, measured_at: '2026-09-30T07:30:00Z', source: 'Manuel' },
+      body_fat: { metric: 'body_fat', value: 17.8, measured_at: '2026-09-30T07:30:00Z', source: 'Manuel' },
     },
     days: rows,
     precedence: PRECEDENCE,
@@ -104,7 +118,8 @@ const measurements = [
   ['weight', 76.3, '2026-09-02T07:30:00Z'], ['weight', 76.8, '2026-08-26T07:30:00Z'],
   ['height', 178, '2026-05-29T08:00:00Z'], ['weight', 77.4, '2026-08-19T07:30:00Z'],
   ['weight', 77.9, '2026-08-12T07:30:00Z'], ['body_fat', 19.6, '2026-08-12T07:30:00Z'],
-].map(([metric, value, measured_at], i) => ({ id: `m${i}`, metric, value, measured_at, source: 'Manuel' }));
+// value: the API sends the stored decimal as text (app/services/dashboard_manual.py).
+].map(([metric, value, measured_at], i) => ({ id: `m${i}`, metric, value: value.toFixed(4), measured_at, source: 'Manuel', flags: [] }));
 
 const syncStatus = ['steps', 'heart-rate', 'daily-resting-heart-rate', 'sleep', 'heart-rate-variability',
   'oxygen-saturation', 'exercise', 'weight'].map((data_type, i) => ({
@@ -112,6 +127,7 @@ const syncStatus = ['steps', 'heart-rate', 'daily-resting-heart-rate', 'sleep', 
   last_requested_from: '2026-09-24T00:00:00Z', last_requested_to: NOW,
   last_successful_sync: `2026-10-16T14:${String(15 - i).padStart(2, '0')}:00Z`,
   records_downloaded: [18422, 96211, 214, 189, 2340, 1580, 61, 37][i],
+  last_run: null,
 }));
 
 const sports = ['Yürüyüş', 'Koşu', 'Bisiklet', 'Yüzme', 'Ağırlık antrenmanı', 'Yoga'];
@@ -156,24 +172,35 @@ function coverage(params) {
   const start = new Date(`${params.get('start_date')}T00:00:00Z`), end = new Date(`${params.get('end_date')}T00:00:00Z`);
   const days = [];
   for (let at = start; at <= end; at = new Date(at.getTime() + 86400000))
-    days.push({ date: at.toISOString().slice(0, 10), has_value: true, retrieval: 'completed_with_records', returned_records: 12 + days.length * 3 });
+    days.push({ date: at.toISOString().slice(0, 10), has_value: true, retrieval: 'completed_with_records', returned_records: 12 + days.length * 3, reason: null, closed: at.toISOString().slice(0, 10) < TODAY });
   const type = params.get('data_type') || 'steps';
-  return { supported_data_types: syncStatus.map(row => row.data_type), next_offset: null,
-    summary: { days_without_value: 0, unknown_days: 0, incomplete_days: 0 },
-    types: [{ data_type: type, presence_basis: 'metric_value', source_regimes: [{ source: 'Fitbit', value_days: days.length, record_count: days.reduce((n, d) => n + d.returned_records, 0) }], days }] };
+  return { schema_version: '1', start_date: params.get('start_date'), end_date: params.get('end_date'), timezone: params.get('timezone') || 'UTC',
+    note: 'Sentetik önizleme kapsamı.',
+    supported_data_types: syncStatus.map(row => row.data_type), next_offset: null,
+    summary: { days_without_value: 0, unknown_days: 0, incomplete_days: 0, not_attempted_days: 0, basis: 'type_days_in_page' },
+    types: [{ data_type: type, presence_basis: 'metric_value',
+      exclusions: { quarantined: 0, without_raw_record: 0, source_deleted: 0, superseded: 0, invalid_shape: 0 },
+      source_regimes: [{ source: 'Fitbit', origin: 'google', device: 'Fitbit Air', form_factor: 'WATCH', platform: 'FITBIT', value_days: days.length, record_count: days.reduce((n, d) => n + d.returned_records, 0) }], days }] };
 }
 
 // GET /api/webhooks/status: notifications arriving, no failures.
-const webhookStatus = { last_notification_at: '2026-10-16T13:58:00Z',
+const webhookStatus = { checked_at: '2026-10-16T14:28:00Z', receiver: { configured: true }, last_notification_at: '2026-10-16T13:58:00Z',
   silence: { state: 'receiving', warning: false, never_received: false, since: null, threshold_seconds: 604800 },
-  counters: { since: '2026-09-24T00:00:00Z', valid: 412, invalid: 0, expired: 0, reasons: {} }, last_error: null };
+  counters: { scope: 'persistent_diagnostic_events', since: '2026-09-24T00:00:00Z', valid: 412, invalid: 0, expired: 0, reasons: {}, units: {} },
+  subscription: { status: 'unknown', renewal_status: 'unknown', last_renewed_at: null, basis: 'no_subscription_client_or_evidence' },
+  last_error: null };
 
 // GET /api/devices: the archive's devices (app/services/devices.py). The watch was renamed by
 // Google ("Google Fitbit Air" -> "Fitbit Air"): one row, the old name under previous_names.
+// GitHub-only Apple extension: the System page's Apple Health import panel asks for its status.
+// Receiver off and no import yet, as on an installation that has not used it.
+const appleStatus = { receiver: { enabled: false, token_file_present: false, endpoint_configured: false, path: '/webhooks/apple-health' }, running: null, imports: [], sources: [] };
+
 // Each device carries its provider, source code and precedence (activity / health rank). The Garmin
 // watch is the pull-only second source: `last_seen` is its last successful pull.
 const devices = {
-  checked_at: NOW, thresholds: { connected_hours: 48, delayed_days: 7 }, google: 'ok', garmin: 'ok', google_unmatched: [],
+  checked_at: NOW, thresholds: { connected_hours: 48, delayed_days: 7 }, google: 'ok', garmin: 'ok', apple: 'off', google_unmatched: [],
+  precedence: PRECEDENCE,
   note: 'Son veri, kaynağın arşivdeki en yeni kaydının fiziksel zamanı; eşitleme zamanı değil.',
   devices: [
     { id: '0a1b2c3d4e5f', name: 'Fitbit Air', platform: 'FITBIT', provider: 'GOOGLE', source_code: 'FITBIT', form_factor: 'WATCH', manufacturer: null, application: null,
@@ -216,10 +243,29 @@ function scenario(name) {
       dashboard: blank, measurements: [], syncStatus: [], workouts: () => [],
       coverage: (params) => ({ ...coverage(params), supported_data_types: [], types: [], summary: { days_without_value: 0, unknown_days: 7, incomplete_days: 0 } }),
       devices: { ...devices, google: 'unavailable', devices: [] },
-      webhookStatus: { last_notification_at: null, silence: { state: 'unconfigured', warning: false, never_received: true, since: null, threshold_seconds: 604800 },
-        counters: { since: null, valid: 0, invalid: 0, expired: 0, reasons: {} }, last_error: null },
+      webhookStatus: { ...webhookStatus, receiver: { configured: false }, last_notification_at: null, silence: { state: 'unconfigured', warning: false, never_received: true, since: null, threshold_seconds: 604800 },
+        counters: { ...webhookStatus.counters, since: null, valid: 0 } },
       history: (params) => ({ ...history(params), total_pages: 1, earliest_date: null, days: history(params).days.map((d) => ({ ...d, value: null })) }),
     };
+  }
+  // A fresh install with no source selected (HEALTHOS_SOURCES=none): the sample data is offered.
+  if (name === 'none') {
+    const empty = scenario('empty');
+    return { ...empty, health: { ...empty.health, active_sources: [], configuration: 'healthy' } };
+  }
+  // The same install after `healthos demo`: every value carries the sample's own source code.
+  if (name === 'sample') {
+    const demo = { source: 'DEMO', label: 'Örnek veri', alternatives: [] };
+    const sampled = (params) => {
+      const data = dashboard(params);
+      return { ...data, profile: { weight: { ...data.profile.weight, source: 'Örnek veri' } },
+        days: data.days.map((row) => ({ ...row, sources: Object.fromEntries(METRICS.map((metric) => [metric, row[metric] == null ? sourcesOf(row)[metric] : demo])) })),
+        charts: { ...data.charts, sources: { heart_rate: demo, steps: demo } } };
+    };
+    return { health: { ...health, active_sources: [], last_sync_success: null, latest_health_write: null, data_freshness: {} },
+      dashboard: sampled, syncStatus: [], devices: { ...devices, google: 'unavailable', devices: [] },
+      workouts: (params) => workouts(params).filter((row) => row.source_code !== 'MANUAL')
+        .map((row) => ({ ...row, source: 'Örnek veri', source_code: 'DEMO', provider: 'DEMO', alternatives: [] })) };
   }
   return {};
 }
@@ -259,4 +305,4 @@ const uploadBackgroundPng = () => syntheticPng(640, 400, (u, v) => [Math.round(3
 // Includes a script and an id marker: tests assert neither ever reaches the DOM.
 const uploadLogoSvg = () => Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" id="uploaded-svg-marker"><script>window.uploadedSvgRan=true</script><circle cx="24" cy="24" r="18" fill="none" stroke="#48d88c" stroke-width="5"/><path d="M15 24h18" stroke="#48d88c" stroke-width="5" stroke-linecap="round"/></svg>');
 
-module.exports = { NOW, TODAY, health, dashboard, dashboardWithSources, history, measurements, syncStatus, workouts, coverage, webhookStatus, devices, chatAnswer, scenario, appearanceSettings, syntheticPng, uploadAvatarPng, uploadBackgroundPng, uploadLogoSvg };
+module.exports = { NOW, TODAY, health, garminStatus, dashboard, dashboardWithSources, history, measurements, syncStatus, workouts, coverage, webhookStatus, devices, appleStatus, chatAnswer, scenario, appearanceSettings, syntheticPng, uploadAvatarPng, uploadBackgroundPng, uploadLogoSvg };

@@ -20,7 +20,7 @@ from app.google_health.data_types import REGISTRY
 from app.google_health.pagination import RepeatedPageTokenError
 from app.models.retrieval import RetrievalCheckpoint, RetrievalEvent, RetrievalReceipt
 from app.models.state import BackfillJob, JobStatus, RawHealthData, SyncState
-from app.services.storage import store_records
+from app.services.archive.storage import store_records
 from app.sync.errors import error_summary, is_transient
 
 LANES = ["sync", "backfill"]
@@ -108,22 +108,7 @@ async def rejected_page(
     google = client(handler, sessions, google_api_max_retries=1)
     google.http.follow_redirects = True
     saved = None if first_page else saved_token
-    summary = f"GoogleHealthError (http_{status})"
-    message = f"Google Health API returned HTTP {status}"
-    if status == 200:
-        summary = "InvalidPaginationResponseError (invalid_response)"
-        message = "Google Health response has an invalid pagination token type"
-        if isinstance(token, str):
-            summary = error_summary(UnstorablePaginationResponseError())
-            message = "Google Health response has an unstorable pagination token"
-    if compression:  # Bytes after the deflate stream: deterministic, never retried.
-        summary = "GoogleHealthError (invalid_encoding)"
-        message = "Google Health response has trailing bytes after its encoded content"
-    if rejection is not None and status == 200:
-        summary = error_summary(error_type())
-        message = str(error_type())
-    if repeated:
-        summary, message = error_summary(RepeatedPageTokenError()), str(RepeatedPageTokenError())
+    summary, message = rejection_description(status, token, compression, rejection, repeated)
     try:
         for attempt in range(1, attempts + 1):
             with pytest.raises(RepeatedPageTokenError if repeated else GoogleHealthError) as caught:
@@ -226,3 +211,24 @@ async def client_rejects(kind, raw, error_type, caplog=None):
         assert caught.value.__cause__ is caught.value.__context__ is None
         if caplog is not None:
             assert "private-marker" not in str(caught.value) + caplog.text
+
+
+def rejection_description(status, token, compression, rejection, repeated):
+    summary = f"GoogleHealthError (http_{status})"
+    message = f"Google Health API returned HTTP {status}"
+    if status == 200:
+        summary = "InvalidPaginationResponseError (invalid_response)"
+        message = "Google Health response has an invalid pagination token type"
+        if isinstance(token, str):
+            summary = error_summary(UnstorablePaginationResponseError())
+            message = "Google Health response has an unstorable pagination token"
+    if compression:  # Bytes after the deflate stream: deterministic, never retried.
+        summary = "GoogleHealthError (invalid_encoding)"
+        message = "Google Health response has trailing bytes after its encoded content"
+    if rejection is not None and status == 200:
+        error_type = rejection[2]
+        summary = error_summary(error_type())
+        message = str(error_type())
+    if repeated:
+        summary, message = error_summary(RepeatedPageTokenError()), str(RepeatedPageTokenError())
+    return summary, message

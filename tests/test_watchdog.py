@@ -5,76 +5,43 @@ from unittest.mock import AsyncMock
 
 import pytest
 from reconciliation_records import Client, service
+from support.watchdog import Reconciliation, _snapshot, _watchdog
 
-from app.core.config import Settings
 from app.google_health.client import Page
 from app.google_health.oauth import OAuthError
 from app.models.reconciliation import ReconciliationResult, ReconciliationRun
 from app.models.state import JobStatus, ReliabilityState, SyncState
-from app.services import reconciliation_reports as reports
-from app.services.pipeline_health import PipelineSnapshot, PipelineStatus
-from app.services.watchdog import PipelineWatchdog
+from app.services.synchronization import reconciliation_reports as reports
+from app.services.synchronization.pipeline_health import PipelineSnapshot, PipelineStatus
 
 
-class Health:
-    def __init__(self, snapshot):
-        self.snapshot = snapshot
+@pytest.mark.parametrize("offset,action", [(-1, "not_needed"), (0, "completed"), (1, "completed")])
+async def test_startup_gap_threshold_boundary(sessions, clock, offset, action):
+    watchdog, reconciliation = _watchdog(sessions, clock.now)
+    threshold = timedelta(minutes=watchdog.settings.startup_gap_threshold_minutes)
+    watchdog.health.snapshot = _snapshot(clock.now, age=threshold + timedelta(seconds=offset))
 
-    async def inspect(self, **kwargs):
-        return self.snapshot
+    result = await watchdog.check(trigger="startup", now=clock.now)
 
-
-class Reconciliation:
-    running = False
-
-    def __init__(self, result=None):
-        self.calls = []
-        self.result = result if result is not None else {"steps": object()}
-
-    async def run(self, days, *, run_id):
-        self.calls.append(days)
-        now = datetime.now(UTC)
-        await reports.begin_run(
-            self.sessions, run_id, now - timedelta(days=days), now, now, self.result
-        )
-        for data_type, result in self.result.items():
-            await reports.start_type(self.sessions, run_id, data_type)
-            await reports.finish_type(
-                self.sessions, run_id, data_type, result if isinstance(result, Exception) else None
-            )
-        await reports.finish_run(self.sessions, run_id)
-        return self.result
+    assert result.action == action
+    assert reconciliation.calls == ([1] if action == "completed" else [])
 
 
-def _snapshot(now, status=PipelineStatus.stale, age=timedelta(hours=3)):
-    return PipelineSnapshot(
-        status=status,
-        checked_at=now,
-        last_webhook_received=None,
-        last_webhook_processed=None,
-        last_sync_success=now - age,
-        latest_frequent_sync=now - age,
-        latest_health_write=None,
-        last_reconciliation=None,
-        pending_notifications=0,
-        failed_notifications=0,
-        failed_syncs=0,
-    )
+@pytest.mark.parametrize("offset,action", [(-1, "completed"), (0, "completed"), (1, "cooldown")])
+async def test_recovery_cooldown_threshold_boundary(sessions, clock, offset, action):
+    watchdog, reconciliation = _watchdog(sessions, clock.now)
+    cooldown = timedelta(minutes=watchdog.settings.recovery_cooldown_minutes)
+    async with sessions.begin() as session:
+        state = await session.get(ReliabilityState, 1)
+        if state is None:
+            state = ReliabilityState(id=1)
+            session.add(state)
+        state.last_recovery_attempt_at = clock.now - cooldown + timedelta(seconds=offset)
 
+    result = await watchdog.check(trigger="watchdog", now=clock.now)
 
-def _watchdog(sessions, now, reconciliation=None, **settings):
-    config = Settings(
-        _env_file=None,
-        startup_gap_threshold_minutes=120,
-        recovery_cooldown_minutes=360,
-        **settings,
-    )
-    reconciliation = reconciliation or Reconciliation()
-    reconciliation.sessions = sessions
-    return (
-        PipelineWatchdog(config, sessions, Health(_snapshot(now)), reconciliation),
-        reconciliation,
-    )
+    assert result.action == action
+    assert reconciliation.calls == ([1] if action == "completed" else [])
 
 
 async def test_startup_gap_triggers_minimum_reconciliation(sessions):

@@ -10,10 +10,10 @@ import pytest
 from alembic import command
 from alembic.config import Config
 from sqlalchemy import CheckConstraint, create_engine, text
+from support.sqlite_guards import SQLITE_TRIGGER_SQL
 
 from app.core.config import get_settings
 from app.db.base import Base
-from app.models.raw_versions import SQLITE_TRIGGER_SQL
 
 
 def test_sqlite_migration_keeps_guards_and_refuses_downgrade_over_null_rows(tmp_path, monkeypatch):

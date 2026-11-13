@@ -3,17 +3,19 @@ frontend/node_modules
 app/static
 .uv-cache
 .uv-tool
+.python
 .venv-runtime-test
 dist
 .test-tmp-healthos*
 .test-tmp-codex*
 .env
 .venv
-__pycache__
+**/__pycache__
 .pytest_cache
 backups
 backup-status
 .compose-smoke-backups-*
+secrets
 deploy/cloudflare/credentials
 
 .env*
@@ -35,3 +37,14 @@ docs/design
 deploy/cloudflare/config.yml
 deploy/cloudflare/*.json
 frontend/.test-output
+scripts/github_snapshot*
+scripts/ci_gate.sh
+scripts/release_gate.py
+scripts/check_no_extension.sh
+hooks/
+scripts/hooks/
+scripts/*.ps1
+**/*.ps1
+tests/test_github_publication.py
+tests/test_branch_scripts.py
+tests/test_pre_push_release_tags.py

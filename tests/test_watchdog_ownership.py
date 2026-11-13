@@ -7,8 +7,7 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
-from app.services import watchdog
-from app.sync import ownership
+from app.sync import ownership, watchdog
 
 
 @pytest.fixture
@@ -16,14 +15,14 @@ def protocol(monkeypatch):
     engine = Mock(spec=watchdog.AsyncEngine)
     engine.dialect = SimpleNamespace(name="postgresql")
     connection = AsyncMock(spec=ownership.AsyncConnection)
-    isolated = SimpleNamespace(connect=AsyncMock(return_value=connection), dispose=AsyncMock())
-    monkeypatch.setattr(ownership, "create_async_engine", lambda *args, **kwargs: isolated)
+    engine.connect = AsyncMock(return_value=connection)
+    engine.get_execution_options.return_value = {"ownership_concurrency": 1}
     owner = watchdog.PipelineWatchdog(Mock(), SimpleNamespace(kw={"bind": engine}), Mock(), Mock())
-    return SimpleNamespace(owner=owner, connection=connection, isolated=isolated)
+    return SimpleNamespace(owner=owner, connection=connection, engine=engine)
 
 
 @pytest.mark.parametrize("ending", ["success", "body-error", "busy"])
-async def test_isolated_connection_is_discarded_on_every_exit(protocol, ending):
+async def test_shared_pool_connection_is_discarded_on_every_exit(protocol, ending):
     p = protocol
     p.connection.scalar.return_value = ending != "busy"
 
@@ -36,10 +35,10 @@ async def test_isolated_connection_is_discarded_on_every_exit(protocol, ending):
 
     p.connection.invalidate.assert_awaited_once()
     p.connection.close.assert_awaited_once()
-    p.isolated.dispose.assert_awaited_once()
+    p.engine.dispose.assert_not_called()
 
 
-@pytest.mark.parametrize("phase", ["invalidate", "close", "dispose"])
+@pytest.mark.parametrize("phase", ["invalidate", "close"])
 async def test_repeated_cancellation_waits_for_cleanup(protocol, phase):
     closing, release = asyncio.Event(), asyncio.Event()
 
@@ -47,13 +46,12 @@ async def test_repeated_cancellation_waits_for_cleanup(protocol, phase):
         closing.set()
         await release.wait()
 
-    target = protocol.isolated if phase == "dispose" else protocol.connection
-    getattr(target, phase).side_effect = pause
+    getattr(protocol.connection, phase).side_effect = pause
 
     before = asyncio.all_tasks()
-    task = asyncio.create_task(ownership.discard_isolated(protocol.connection, protocol.isolated))
+    task = asyncio.create_task(ownership.discard_connection(protocol.connection))
     try:
-        await asyncio.wait_for(closing.wait(), 5)
+        await asyncio.wait_for(closing.wait(), 30)
         task.cancel()
         asyncio.get_running_loop().call_soon(task.cancel)
         await asyncio.sleep(0)
@@ -61,6 +59,6 @@ async def test_repeated_cancellation_waits_for_cleanup(protocol, phase):
     finally:
         release.set()
         with pytest.raises(asyncio.CancelledError):
-            await asyncio.wait_for(task, 5)
-    protocol.isolated.dispose.assert_awaited_once()
+            await asyncio.wait_for(task, 30)
+    protocol.engine.dispose.assert_not_called()
     assert asyncio.all_tasks() == before

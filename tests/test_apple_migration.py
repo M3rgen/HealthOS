@@ -14,6 +14,7 @@ from alembic.script import ScriptDirectory
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session
+from support import sqlite_guards
 
 from app.core.config import get_settings
 from app.models import apple
@@ -114,10 +115,10 @@ def test_upgrade_adds_only_new_tables_and_keeps_every_existing_row(database):
         assert connection.execute(text("SELECT * FROM webhook_events")).all() == rows
     assert schema <= after
     added = {name for _, name, _ in after - schema}
-    assert set(apple.SQLITE_TRIGGER_SQL) <= added
+    assert set(sqlite_guards.definitions(apple.GUARDS)) <= added
     assert all("apple_" in name for name in added), added
     triggers = {name for kind, name, _ in after - schema if kind == "trigger"}
-    assert triggers == set(apple.SQLITE_TRIGGER_SQL)
+    assert triggers == set(sqlite_guards.definitions(apple.GUARDS))
     command.upgrade(config, "head")
     command.check(config)
 
@@ -133,7 +134,7 @@ def test_models_and_migration_define_the_same_guards():
     assert module.revision == REVISION and module.down_revision == PREVIOUS
     assert module.GUARDED == apple.TABLES
     assert set(module.POSTGRESQL_DDL) == set(apple.POSTGRESQL_DDL)
-    assert set(module.SQLITE_DDL) == set(apple.SQLITE_DDL)
+    assert set(module.SQLITE_DDL) == set(sqlite_guards.ddl(apple))
     assert "app.models" not in path.read_text() and "app.services" not in path.read_text()
 
 
@@ -156,14 +157,16 @@ def test_rows_refuse_change_and_block_downgrade_until_empty(database, table):
         command.downgrade(config, PREVIOUS)
     with engine.connect() as connection:
         assert connection.scalar(text(f"SELECT count(*) FROM {table}")) == 1
-        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == REVISION
+        # Head merges the main line (20261111_a002); SQLite runs DDL outside the transaction, so
+        # the main line's own steps may already be undone here. The Apple revision never is.
+        versions = connection.execute(text("SELECT version_num FROM alembic_version")).scalars()
+        assert REVISION in set(versions)
 
 
-def test_bookkeeping_rows_may_change_and_empty_archive_downgrades(database):
-    config, engine = database
-    command.upgrade(config, "head")
-    with Session(engine) as session, session.begin():
+def _bookkeeping_row(session, table):
+    if table == apple.IMPORTS:
         session.add(_import())
+    else:
         session.add(
             AppleSource(
                 source_name="Test Watch",
@@ -174,10 +177,36 @@ def test_bookkeeping_rows_may_change_and_empty_archive_downgrades(database):
                 records=0,
             )
         )
+
+
+@pytest.mark.parametrize("table", sorted(BOOKKEEPING))
+def test_bookkeeping_rows_may_change_but_refuse_downgrade(database, table):
+    # The import history and the source summary cannot be rebuilt once dropped: like every
+    # other table with rows, they refuse a downgrade (app/db/downgrade_guard.py). PostgreSQL
+    # rolls the whole downgrade back; SQLite runs DDL outside it, so only the row is checked.
+    config, engine = database
+    command.upgrade(config, "head")
+    with Session(engine) as session, session.begin():
+        _bookkeeping_row(session, table)
     with engine.begin() as connection:
-        connection.execute(text("UPDATE apple_imports SET status = 'done', records_read = 5"))
-        connection.execute(text("UPDATE apple_sources SET records = 5"))
-        connection.execute(text("DELETE FROM apple_sources"))
+        connection.execute(text(f"UPDATE {table} SET {_CHANGE[table]}"))
+    with pytest.raises(RuntimeError, match=f"{table} holds rows; downgrade refused"):
+        command.downgrade(config, PREVIOUS)
+    with engine.connect() as connection:
+        assert connection.scalar(text(f"SELECT count(*) FROM {table}")) == 1
+        versions = connection.execute(text("SELECT version_num FROM alembic_version")).scalars()
+        assert REVISION in set(versions)
+
+
+def test_emptied_bookkeeping_and_archive_downgrade(database):
+    config, engine = database
+    command.upgrade(config, "head")
+    with Session(engine) as session, session.begin():
+        for table in sorted(BOOKKEEPING):
+            _bookkeeping_row(session, table)
+    with engine.begin() as connection:
+        for table in sorted(BOOKKEEPING):
+            connection.execute(text(f"DELETE FROM {table}"))
     command.downgrade(config, PREVIOUS)
     assert not ({*apple.TABLES, *BOOKKEEPING} & set(inspect(engine).get_table_names()))
     with engine.connect() as connection:
@@ -185,6 +214,12 @@ def test_bookkeeping_rows_may_change_and_empty_archive_downgrades(database):
     assert not any("apple_" in name for name in names)
     command.upgrade(config, "head")
     command.check(config)
+
+
+_CHANGE = {
+    apple.IMPORTS: "status = 'done', records_read = 5",
+    apple.SOURCES: "records = 5",
+}
 
 
 def test_postgresql_ddl_touches_only_its_own_tables(monkeypatch, capsys):

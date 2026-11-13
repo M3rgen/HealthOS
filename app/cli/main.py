@@ -1,16 +1,16 @@
-"""Stable health-mirror entry point and compatibility exports for CLI commands."""
+"""Stable ``healthos`` entry point and compatibility exports for CLI commands."""
 
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Coroutine
+from typing import Any
 
 import typer
 
 from app.cli._context import context
-from app.cli.apple_commands import apple_import as apple_import
-from app.cli.apple_commands import apple_normalize as apple_normalize
-from app.cli.apple_commands import apple_status as apple_status
-from app.cli.apple_commands import apple_token as apple_token
+from app.cli._errors import SafeTyperGroup
+from app.cli.apple_commands import apple_import, apple_normalize, apple_status, apple_token
 from app.cli.archive_commands import FETCHED_SINCE_OPTION as FETCHED_SINCE_OPTION
 from app.cli.archive_commands import FROM_DB_OPTION as FROM_DB_OPTION
 from app.cli.archive_commands import OUTPUT_OPTION as OUTPUT_OPTION
@@ -20,17 +20,19 @@ from app.cli.archive_commands import history as history
 from app.cli.archive_commands import import_versions as import_versions
 from app.cli.archive_commands import responses as responses
 from app.cli.archive_commands import verify as verify
+from app.cli.demo_commands import demo
 from app.cli.garmin_commands import KINDS_OPTION as KINDS_OPTION
 from app.cli.garmin_commands import garmin_backfill as garmin_backfill
 from app.cli.garmin_commands import garmin_pull as garmin_pull
 from app.cli.garmin_commands import garmin_status as garmin_status
+from app.cli.google_commands import google_rebind as google_rebind
 from app.cli.identity_commands import AFTER_OPTION as AFTER_OPTION
 from app.cli.identity_commands import DATA_TYPES_OPTION as DATA_TYPES_OPTION
 from app.cli.identity_commands import identity_backfill as identity_backfill
 from app.cli.identity_commands import identity_decide as identity_decide
 from app.cli.identity_commands import identity_sources as identity_sources
+from app.cli.import_commands import import_fit
 from app.cli.rejection_commands import rejections as rejections
-from app.cli.sync_commands import _chains_to_review as _chains_to_review
 from app.cli.sync_commands import backfill as backfill
 from app.cli.sync_commands import probe as probe
 from app.cli.sync_commands import reconcile as reconcile
@@ -41,12 +43,16 @@ from app.cli.webhook_commands import webhook_replay_pending as webhook_replay_pe
 from app.cli.webhook_commands import webhook_status as webhook_status
 from app.core.config import get_settings
 from app.db.session import SessionLocal
-from app.services.runtime import build_runtime
+from app.runtime import build_runtime
 
-app = typer.Typer(help="Operate the Personal Health Data Mirror.", no_args_is_help=True)
+app = typer.Typer(
+    cls=SafeTyperGroup,
+    help="Operate HealthOS: sync, backfill, verify and inspect the archive.",
+    no_args_is_help=True,
+)
 
 
-def run(coroutine):
+def run[T](coroutine: Coroutine[Any, Any, T]) -> T:
     return asyncio.run(coroutine)
 
 
@@ -83,6 +89,9 @@ for _command in (
     apple_import,
     apple_status,
     apple_normalize,
+    google_rebind,
+    demo,
+    import_fit,
 ):
     app.command()(_command)
 

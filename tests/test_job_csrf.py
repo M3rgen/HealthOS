@@ -1,3 +1,4 @@
+import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -6,6 +7,7 @@ import pytest
 
 from app import main
 from app.core.config import Settings
+from app.services.synchronization.sync_jobs import BackfillJobs, SyncJobs
 
 
 @pytest.fixture
@@ -17,16 +19,41 @@ def application(monkeypatch):
     spawned = []
 
     def spawn(coroutine):
-        spawned.append(coroutine)
-        coroutine.close()
+        task = asyncio.create_task(coroutine)
+        spawned.append(task)
+        return task
 
-    runtime = SimpleNamespace(incremental=jobs, backfill=jobs, spawn=spawn, spawned=spawned)
+    runtime = SimpleNamespace(
+        incremental=jobs,
+        backfill=jobs,
+        spawn=spawn,
+        spawned=spawned,
+        sync_jobs=SyncJobs(),
+        backfill_jobs=BackfillJobs(),
+    )
     monkeypatch.setattr(main, "get_settings", lambda: settings)
     monkeypatch.setattr(main, "build_runtime", lambda *_: runtime)
     return main.create_app()
 
 
 MANUAL_ROUTES = ["/api/dashboard/measurements", "/api/dashboard/workouts"]
+
+
+@pytest.mark.parametrize("trusted,status", [(False, 403), (True, 202)])
+async def test_forwarded_https_job_origin_requires_explicit_trust(application, trusted, status):
+    application.state.settings.app_trust_proxy_headers = trusted
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=application), base_url="http://localhost:8000"
+    ) as client:
+        response = await client.post(
+            "/sync/all",
+            headers={
+                "Origin": "https://localhost:8000",
+                "X-Forwarded-Proto": "https",
+                "X-HealthOS-Request": "1",
+            },
+        )
+    assert response.status_code == status
 
 
 def test_interactive_api_docs_expose_job_request_header(application):
@@ -145,4 +172,6 @@ async def test_sync_all_reports_sequence_baseline(application):
     ) as client:
         response = await client.post("/sync/all", headers={"X-HealthOS-Request": "1"})
     assert response.status_code == 202
-    assert response.json() == {"status": "accepted", "data_types": ["steps"], "sequence": 7}
+    body = response.json()
+    assert body.pop("job_id")
+    assert body == {"status": "accepted", "data_types": ["steps"], "sequence": 7}

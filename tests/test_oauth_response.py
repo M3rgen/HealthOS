@@ -66,13 +66,19 @@ async def test_actual_boundaries_precede_json(monkeypatch, grant, size, split, l
         invoke = getattr(OAuthClient(Settings(_env_file=None), http, sleep=sleep), grant)
         if size > LIMIT:
             with pytest.raises(OAuthError) as caught:
-                await invoke("synthetic-private-input")
+                await invoke(
+                    "synthetic-private-input",
+                    **({"code_verifier": "synthetic-verifier"} if grant == "exchange_code" else {}),
+                )
             assert str(caught.value) == "OAuth token response exceeded its byte budget"
             assert not caught.value.transient
             assert caught.value.__cause__ is caught.value.__context__ is None
             parse.assert_not_called()
         else:
-            result = await invoke("synthetic-private-input")
+            result = await invoke(
+                "synthetic-private-input",
+                **({"code_verifier": "synthetic-verifier"} if grant == "exchange_code" else {}),
+            )
             assert (result.value if grant == "refresh" else result["access_token"]) == (
                 "synthetic-private-access"
             )
@@ -146,7 +152,8 @@ async def test_bad_encoding_and_json_have_safe_errors(grant, encoding, damage, c
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
         with pytest.raises(OAuthError) as caught:
             await getattr(OAuthClient(Settings(_env_file=None), http, sleep=sleep), grant)(
-                "synthetic"
+                "synthetic",
+                **({"code_verifier": "synthetic-verifier"} if grant == "exchange_code" else {}),
             )
     expected = "invalid JSON" if damage == "json" else "content decoding failed"
     assert (
@@ -168,8 +175,6 @@ async def test_bad_encoding_and_json_have_safe_errors(grant, encoding, damage, c
 async def test_waiting_and_failing_streams_settle_and_release_lock(
     monkeypatch, phase, stop, grant, caplog
 ):
-    monkeypatch.setattr(response_close, "RESPONSE_CLOSE_SECONDS", 0.02)
-    monkeypatch.setattr(oauth, "TOKEN_REQUEST_TIMEOUT_SECONDS", 0.05)
     fails = stop in {"error", "unexpected"}
     error_type = RuntimeError if stop == "unexpected" else httpx.ReadError
     stream = TokenStream(
@@ -178,6 +183,10 @@ async def test_waiting_and_failing_streams_settle_and_release_lock(
         wait_close=phase != "read" and not fails,
         read_error=error_type("synthetic-private-read") if phase == "read" and fails else None,
         close_error=error_type("synthetic-private-close") if phase != "read" and fails else None,
+        # With the production budgets a stalled read runs the token deadline out and a stalled
+        # close only the close budget, in that order of length.
+        stall_read_seconds=oauth.TOKEN_REQUEST_TIMEOUT_SECONDS + 1 if stop == "timeout" else 0,
+        stall_close_seconds=response_close.RESPONSE_CLOSE_SECONDS + 1 if stop == "timeout" else 0,
     )
     recovered = TokenStream([PAYLOAD])
     handler = AsyncMock(
@@ -204,30 +213,32 @@ async def test_waiting_and_failing_streams_settle_and_release_lock(
         async def invoke():
             if grant == "refresh":
                 return await provider.get()
-            return (await provider.oauth.exchange_code("synthetic"))["access_token"]
+            return (
+                await provider.oauth.exchange_code("synthetic", code_verifier="synthetic-verifier")
+            )["access_token"]
 
         task = asyncio.create_task(invoke())
         if stop in {"cancel", "twice"}:
             await asyncio.wait_for(
-                (stream.reading if phase == "read" else stream.closing).wait(), 1
+                (stream.reading if phase == "read" else stream.closing).wait(), 30
             )
             task.cancel()
             if stop == "twice":
                 await asyncio.sleep(0)
                 task.cancel()
             with pytest.raises(asyncio.CancelledError):
-                await asyncio.wait_for(task, 1)
+                await asyncio.wait_for(task, 30)
         elif (
             phase in {"status", "partial", "oversize"}
             or (phase == "read" and stop == "timeout")
             or grant == "exchange_code"  # A single-use code is never retried.
         ):
             with pytest.raises(OAuthError) as caught:
-                await asyncio.wait_for(task, 1)
+                await task  # a stall jumps the clock past any guard timer here
             assert caught.value.transient == (phase in {"read", "close"})
             assert "synthetic-private" not in "".join(traceback.format_exception(caught.value))
         else:
-            assert await asyncio.wait_for(task, 1) == "synthetic-private-access"
+            assert await task == "synthetic-private-access"
         assert stream.close_calls == 1 and stream.closed.is_set()
         assert not (asyncio.all_tasks() - baseline)
         if task.cancelled() or task.exception() is not None:
@@ -235,7 +246,7 @@ async def test_waiting_and_failing_streams_settle_and_release_lock(
             provider.refresh_token_saver.assert_not_awaited()
             sleep.assert_not_awaited()
         if handler.await_count == 1 or grant == "refresh":
-            assert await asyncio.wait_for(invoke(), 1) == "synthetic-private-access"
+            assert await asyncio.wait_for(invoke(), 30) == "synthetic-private-access"
         assert handler.await_count == 2
     assert "synthetic-private" not in caplog.text
 
@@ -251,7 +262,8 @@ async def test_partial_credentials_rejected_before_read_or_parse(monkeypatch, gr
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
         with pytest.raises(OAuthError) as caught:
             await getattr(OAuthClient(Settings(_env_file=None), http, sleep=sleep), grant)(
-                "synthetic"
+                "synthetic",
+                **({"code_verifier": "synthetic-verifier"} if grant == "exchange_code" else {}),
             )
     assert str(caught.value) == "OAuth token endpoint returned HTTP 206"
     assert not caught.value.transient and handler.await_count == 1
@@ -274,7 +286,8 @@ async def test_continuously_ready_stream_cannot_starve_deadline_or_size_limit(
         with pytest.raises(OAuthError) as caught:
             await asyncio.wait_for(
                 getattr(OAuthClient(Settings(_env_file=None), http, sleep=sleep), grant)(
-                    "synthetic"
+                    "synthetic",
+                    **({"code_verifier": "synthetic-verifier"} if grant == "exchange_code" else {}),
                 ),
                 1,
             )
@@ -305,7 +318,10 @@ async def test_exhausted_stream_errors_do_not_expose_credentials(grant, phase, e
     async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as http:
         settings = Settings(_env_file=None, google_client_secret="synthetic-private-client")
         with pytest.raises(OAuthError) as caught:
-            await getattr(OAuthClient(settings, http, sleep=sleep), grant)(credential)
+            await getattr(OAuthClient(settings, http, sleep=sleep), grant)(
+                credential,
+                **({"code_verifier": "synthetic-verifier"} if grant == "exchange_code" else {}),
+            )
     assert str(caught.value) == "OAuth token endpoint connection failed" and caught.value.transient
     assert caught.value.__cause__ is caught.value.__context__ is None
     assert (

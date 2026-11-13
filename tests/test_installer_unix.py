@@ -65,9 +65,11 @@ exit 0
 LINUX_UNAME = '#!/bin/sh\ncase "$1" in -m) echo x86_64 ;; *) echo Linux ;; esac\n'
 MANAGED = {
     "POSTGRES_PASSWORD",
+    "POSTGRES_APP_PASSWORD",
     "APP_UI_TOKEN",
     "COMPOSE_FILE",
     "COMPOSE_PATH_SEPARATOR",
+    "HEALTHOS_SOURCES",
     "GOOGLE_TOKEN_ENCRYPTION_KEY",
     "GOOGLE_CLIENT_ID",
     "GOOGLE_CLIENT_SECRET",
@@ -166,7 +168,8 @@ class Sandbox:
         return self.log.read_text(encoding="utf-8").splitlines()
 
     def backups(self) -> list[Path]:
-        return sorted(self.repo.glob(".env.bak-*"))
+        """.env copies made by the installer: outside the checkout since IP-8/5."""
+        return sorted((self.home / ".local/state/healthos/env-backups").glob("*.env.bak-*"))
 
 
 @pytest.fixture
@@ -176,6 +179,9 @@ def box(tmp_path: Path) -> Sandbox:
 
 def assert_secrets(values: dict[str, str]) -> None:
     assert re.fullmatch(r"[0-9a-f]{64}", values["POSTGRES_PASSWORD"])
+    # The app role's password: without it provision-app-role stops and the app never starts.
+    assert re.fullmatch(r"[0-9a-f]{64}", values["POSTGRES_APP_PASSWORD"])
+    assert values["POSTGRES_APP_PASSWORD"] != values["POSTGRES_PASSWORD"]
     assert re.fullmatch(r"[A-Za-z0-9_-]{43,}", values["APP_UI_TOKEN"])
 
 
@@ -249,12 +255,18 @@ def test_dry_run_writes_only_the_preview(box, platform, mode, sources, extra, co
     if "--google-client-id" in extra:
         assert values["GOOGLE_CLIENT_ID"] == "synthetic-id.apps.example"
         assert values["GOOGLE_CLIENT_SECRET"] == "s3cr"
+    # The app reads HEALTHOS_SOURCES (full mode has always run Google).
+    expected = [
+        name
+        for name in ("google", "garmin", "apple")
+        if name in sources or (name == "google" and mode == "full")
+    ]
+    assert values["HEALTHOS_SOURCES"] == (",".join(expected) or "none")
+    # BEL-12: the source runs through HEALTHOS_SOURCES alone; the older flag is never written.
+    assert "GARMIN_ENABLED" not in values
     if "garmin" in sources:
-        assert values["GARMIN_ENABLED"] == "true"
         assert values["GARMIN_API_KEY_HOST_FILE"] == str(key.resolve())
         assert values["GARMIN_API_KEY_HOST_GID"].isdigit()
-    else:
-        assert values["GARMIN_ENABLED"] == "false"
     if "--apple-receiver" in extra:
         assert values["APPLE_RECEIVER_ENABLED"] == "true"
         assert values["APPLE_RECEIVER_TOKEN_HOST_FILE"].startswith(str(box.home))
@@ -323,7 +335,7 @@ def test_existing_secrets_are_kept_and_selections_follow_the_choices(box):
     assert env.read_text() == original and not box.backups()
     preview = (box.repo / ".env.dry-run").read_text()
     values = parse_env(box.repo / ".env.dry-run")
-    followed = ("APP_UI_TOKEN=", "COMPOSE_FILE=", "GARMIN_ENABLED=")
+    followed = ("APP_UI_TOKEN=", "COMPOSE_FILE=", "HEALTHOS_SOURCES=")
     for line in original.splitlines():
         if not line.startswith(followed):
             assert line in preview.splitlines(), line
@@ -341,7 +353,10 @@ def test_existing_secrets_are_kept_and_selections_follow_the_choices(box):
     expected = "docker-compose.yml:docker-compose.garmin.yml:my-override.yml"
     assert values["COMPOSE_FILE"] == expected
     assert "COMPOSE_FILE changed from 'docker-compose.yml:my-override.yml'" in result.stdout
-    assert values["GARMIN_ENABLED"] == "true"
+    # Garmin is chosen through HEALTHOS_SOURCES; the older GARMIN_ENABLED=false stays as it was
+    # (with HEALTHOS_SOURCES present the app ignores it).
+    assert values["HEALTHOS_SOURCES"] == "google,garmin"
+    assert values["GARMIN_ENABLED"] == "false"
     assert values["GARMIN_API_KEY_HOST_FILE"] == str(key.resolve())
     # Left on without a token path: kept on, reported, nothing to mount.
     assert values["APPLE_RECEIVER_ENABLED"] == "true"
@@ -358,7 +373,7 @@ def test_real_run_backs_up_then_fills_only_empty_keys_and_is_idempotent(box):
     original = "POSTGRES_PASSWORD=existing-secret\nAPP_UI_TOKEN=\nLOG_LEVEL=WARNING\n"
     env.write_text(original)
     env.chmod(0o600)
-    first = box.run(*REAL, "--platform", HOST_PLATFORM)
+    first = box.run(*REAL, "--platform", HOST_PLATFORM, "--mode", "trial")
     assert first.returncode == 0, first.stdout + first.stderr
     backups = box.backups()
     assert len(backups) == 1 and backups[0].read_text() == original
@@ -371,7 +386,9 @@ def test_real_run_backs_up_then_fills_only_empty_keys_and_is_idempotent(box):
     assert re.fullmatch(r"[A-Za-z0-9_-]{43,}", values["APP_UI_TOKEN"])
     assert values["COMPOSE_FILE"] == "docker-compose.yml:docker-compose.dev.yml"
     assert env.stat().st_mode & 0o777 == 0o600
-    assert values["APP_UI_TOKEN"] in first.stdout  # printed once in the summary
+    # No terminal (a pipe, a log): the token is not printed, only where to read it (IP-11/4).
+    assert values["APP_UI_TOKEN"] not in first.stdout
+    assert f"grep APP_UI_TOKEN {env}" in first.stdout
     # Second run: nothing missing, nothing written, no new backup.
     second = box.run(*REAL, "--platform", HOST_PLATFORM)
     assert second.returncode == 0, second.stderr
@@ -477,14 +494,17 @@ def test_a_source_left_on_keeps_its_mount_and_key_paths_change_only_when_asked(b
     second_key.write_text("b\n")
     garmin = ("--sources", "garmin,apple", "--apple-receiver", "yes")
     result = box.run(
-        *REAL, "--platform", HOST_PLATFORM, *garmin, "--garmin-key-file", str(first_key)
-    )
+        *REAL, "--platform", HOST_PLATFORM, "--mode", "trial", *garmin,
+        "--garmin-key-file", str(first_key),
+    )  # fmt: skip
     assert result.returncode == 0, result.stdout + result.stderr
     env = box.repo / ".env"
     values = parse_env(env)
     token = Path(values["APPLE_RECEIVER_TOKEN_HOST_FILE"])
     assert token.is_file() and re.fullmatch(r"[A-Za-z0-9_-]{43}", token.read_text().strip())
-    assert "Authorization: Bearer " + token.read_text().strip() in result.stdout  # shown once
+    # Shown once on a terminal only (test_installer_token_output); never into a pipe or log.
+    assert token.read_text().strip() not in result.stdout
+    assert "Bearer <content of APPLE_RECEIVER_TOKEN_HOST_FILE>" in result.stdout
     full = ":".join(f"docker-compose{part}.yml" for part in ("", ".dev", ".garmin", ".apple"))
     assert values["COMPOSE_FILE"] == full
     # Re-run without choosing them: both stay on, so both mounts stay; nothing is turned off.
@@ -492,8 +512,9 @@ def test_a_source_left_on_keeps_its_mount_and_key_paths_change_only_when_asked(b
     assert second.returncode == 0, second.stderr
     kept = parse_env(env)
     assert kept["COMPOSE_FILE"] == full
-    assert kept["GARMIN_ENABLED"] == kept["APPLE_RECEIVER_ENABLED"] == "true"
-    assert "Garmin was not selected but GARMIN_ENABLED is on" in second.stdout
+    assert kept["HEALTHOS_SOURCES"] == "garmin,apple"
+    assert "GARMIN_ENABLED" not in kept and kept["APPLE_RECEIVER_ENABLED"] == "true"
+    assert "garmin was not selected but stays in HEALTHOS_SOURCES" in second.stdout
     assert token.read_text() == Path(values["APPLE_RECEIVER_TOKEN_HOST_FILE"]).read_text()
     # Garmin again without the flag: the stored key path is used, not a default.
     third = box.run(*REAL, "--platform", HOST_PLATFORM, *garmin)
@@ -513,10 +534,13 @@ def test_a_source_left_on_keeps_its_mount_and_key_paths_change_only_when_asked(b
 
 
 def test_missing_garmin_key_continues_with_garmin_off(box):
-    result = box.run(*REAL, "--platform", HOST_PLATFORM, "--sources", "google,garmin")
+    result = box.run(
+        *REAL, "--platform", HOST_PLATFORM, "--mode", "trial", "--sources", "google,garmin"
+    )
     assert result.returncode == 0, result.stdout + result.stderr
     values = parse_env(box.repo / ".env")
-    assert values["GARMIN_ENABLED"] == "false"
+    assert values.get("GARMIN_ENABLED", "false") == "false"
+    assert values["HEALTHOS_SOURCES"] == "google"
     assert values["COMPOSE_FILE"] == "docker-compose.yml:docker-compose.dev.yml"
     assert "GARMIN_API_KEY_HOST_FILE" not in values
     assert_fernet(values["GOOGLE_TOKEN_ENCRYPTION_KEY"])  # the other sources still apply
@@ -582,8 +606,11 @@ def test_compose_overrides_mount_secrets_read_only():
         ("docker-compose.garmin.yml", "/run/secrets/garmin-personal-api-key", "GARMIN_API_KEY"),
         ("docker-compose.apple.yml", "/run/secrets/apple-receiver-token", "APPLE_RECEIVER_TOKEN"),
     ):
-        app = yaml.safe_load((ROOT / name).read_text())["services"]["app"]
-        assert list(yaml.safe_load((ROOT / name).read_text())["services"]) == ["app"]
+        services = yaml.safe_load((ROOT / name).read_text())["services"]
+        app = services["app"]
+        # The Garmin key also reaches the migrate service (the same YAML anchor).
+        assert list(services) == (["app", "migrate"] if "garmin" in name else ["app"])
+        assert all(service == app for service in services.values())
         (mount,) = app["volumes"]
         assert mount["type"] == "bind" and mount["read_only"] is True
         assert mount["target"] == target and f"{variable}_HOST_FILE:?" in mount["source"]
@@ -759,7 +786,7 @@ def test_env_out_replaces_only_an_earlier_preview(box, tmp_path):
 def test_compose_file_keeps_the_users_files_in_order(box, mode, expected):
     (box.repo / ".env").write_text(
         "COMPOSE_FILE=docker-compose.yml:first.yml:./docker-compose.dev.yml:second.yml"
-        ":docker-compose.windows.yml:first.yml\n"
+        ":docker-compose.windows.yml:first.yml:./docker-compose.linux.example.yml\n"
     )
     result = box.run(*DRY, "--platform", HOST_PLATFORM, "--mode", mode)
     assert result.returncode == 0, result.stdout + result.stderr
@@ -768,12 +795,12 @@ def test_compose_file_keeps_the_users_files_in_order(box, mode, expected):
 
 def test_compose_file_names_the_implicit_override(box):
     (box.repo / "docker-compose.override.yml").write_text("services: {}\n")
-    fresh = box.run(*DRY, "--platform", HOST_PLATFORM)
+    fresh = box.run(*DRY, "--platform", HOST_PLATFORM, "--mode", "trial")
     assert fresh.returncode == 0, fresh.stderr
     expected = "docker-compose.yml:docker-compose.dev.yml:docker-compose.override.yml"
     assert parse_env(box.repo / ".env.dry-run")["COMPOSE_FILE"] == expected
     (box.repo / ".env").write_text("POSTGRES_PASSWORD=keep\nCOMPOSE_FILE=\n")
-    unset = box.run(*DRY, "--platform", HOST_PLATFORM)
+    unset = box.run(*DRY, "--platform", HOST_PLATFORM, "--mode", "trial")
     assert unset.returncode == 0, unset.stderr
     assert parse_env(box.repo / ".env.dry-run")["COMPOSE_FILE"] == expected
     # A Windows-style separator is read; the Unix installer writes ':'.
@@ -843,12 +870,14 @@ def test_env_readers_accept_export_lines(box):
     reader = subprocess.run(
         [
             BASH, "-c",
-            f'eval "$(sed -n "/^env_file_value()/,/^}}/p" "{ROOT}/scripts/backup.sh")"; '
+            "project_env=.env; "
+            f'. "{ROOT}/scripts/backup_env.sh"; '
+            f'eval "$(grep "^env_file_value()" "{ROOT}/scripts/backup.sh")"; '
             "env_file_value BACKUP_HOST_DIR; env_file_value KEY",
         ],
         cwd=box.repo, capture_output=True, text=True, timeout=30,
     )  # fmt: skip
-    assert reader.stdout == "/srv/backups\n", reader.stderr
+    assert reader.stdout == "/srv/backups", reader.stderr  # file_value prints no newline
 
 
 @pytest.mark.parametrize(
@@ -870,12 +899,18 @@ def test_env_readers_accept_export_lines(box):
 def test_enable_flags_flip_only_from_off_values(box, current, expected):
     key = box.home / "garmin.key"
     key.write_text("synthetic\n")
-    (box.repo / ".env").write_text(f"GARMIN_ENABLED={current}\n")
+    (box.repo / ".env").write_text(f"GARMIN_ENABLED={current}\nAPPLE_RECEIVER_ENABLED={current}\n")
     result = box.run(
-        *DRY, "--platform", HOST_PLATFORM, "--sources", "garmin", "--garmin-key-file", str(key)
-    )
+        *DRY, "--platform", HOST_PLATFORM, "--sources", "garmin,apple",
+        "--garmin-key-file", str(key), "--apple-receiver", "yes",
+    )  # fmt: skip
     assert result.returncode == 0, result.stdout + result.stderr
-    assert parse_env(box.repo / ".env.dry-run")["GARMIN_ENABLED"] == expected
+    values = parse_env(box.repo / ".env.dry-run")
+    assert values["APPLE_RECEIVER_ENABLED"] == expected
+    # BEL-12: the older Garmin flag is never written; HEALTHOS_SOURCES selects Garmin.
+    assert values["GARMIN_ENABLED"] == current
+    # Full mode (no COMPOSE_FILE yet) and an .env older than HEALTHOS_SOURCES: Google stays on.
+    assert values["HEALTHOS_SOURCES"] == "google,garmin,apple"
 
 
 # ---- review fixes: explicit Garmin key file (D13) ------------------------------------------
@@ -907,7 +942,8 @@ def test_linux_root_gives_secret_files_to_the_app_group(box):
     )  # fmt: skip
     assert result.returncode == 0, result.stdout + result.stderr
     values = parse_env(box.repo / ".env")
-    assert values["GARMIN_ENABLED"] == values["APPLE_RECEIVER_ENABLED"] == "true"
+    assert "GARMIN_ENABLED" not in values and values["APPLE_RECEIVER_ENABLED"] == "true"
+    assert values["HEALTHOS_SOURCES"] == "garmin,apple"
     assert values["GARMIN_API_KEY_HOST_GID"] == values["APPLE_RECEIVER_TOKEN_HOST_GID"] == "10001"
     token = Path(values["APPLE_RECEIVER_TOKEN_HOST_FILE"])
     for path in (key.resolve(), token):
@@ -917,14 +953,18 @@ def test_linux_root_gives_secret_files_to_the_app_group(box):
 
 def test_linux_shared_primary_group_leaves_the_source_off(box):
     box.stub("uname", LINUX_UNAME)
-    box.env.update(FAKE_GID="100", GETENT_GROUP="users:x:100:someone-else")
+    # A non-root account whose primary group is shared; pinned, so a root CI container (act)
+    # takes the same path as a hosted runner.
+    box.env.update(
+        FAKE_UID="1000", FAKE_USER="me", FAKE_GID="100", GETENT_GROUP="users:x:100:someone-else"
+    )
     key = box.home / "garmin.key"
     key.write_text("synthetic\n")
     key.chmod(0o600)
     (box.repo / ".env").write_text("GARMIN_ENABLED=false\n")
     result = box.run(
-        *REAL, "--platform", "linux", "--sources", "garmin", "--garmin-key-file", str(key),
-        "--apple-receiver", "yes",
+        *REAL, "--platform", "linux", "--mode", "trial", "--sources", "garmin",
+        "--garmin-key-file", str(key), "--apple-receiver", "yes",
     )  # fmt: skip
     assert result.returncode == 0, result.stdout + result.stderr
     values = parse_env(box.repo / ".env")
@@ -937,6 +977,18 @@ def test_linux_shared_primary_group_leaves_the_source_off(box):
         assert stat.S_IMODE(path.stat().st_mode) == 0o600  # never widened
         assert f"sudo chgrp 10001 {path} && sudo chmod 640 {path}" in out
     assert "chmod g+r" not in result.stdout and "Authorization: Bearer" not in result.stdout
+
+
+@pytest.mark.parametrize("lang, note", [("en", "sent to OpenAI"), ("tr", "OpenAI'a gönderilir")])
+def test_umay_without_systemd_states_what_goes_to_openai(box, lang, note):
+    # The no-systemd branch (containers, WSL, OpenRC) prints the same privacy note as the others.
+    result = box.source(
+        f"LANG_SEL={lang}; DIR=/opt/healthos; IS_ROOT=0; BACKUPS=no; AUTOSTART=no; UMAY=yes; "
+        "linux_no_systemd"
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert note in result.stdout
+    assert "start_codex_bridge.py" in result.stdout
 
 
 def test_gid_is_shared(box):
@@ -993,31 +1045,62 @@ def test_a_source_counts_as_on_unless_its_flag_is_off(box, flag, mounted):
     values = parse_env(box.repo / ".env.dry-run")
     assert ("docker-compose.garmin.yml" in values["COMPOSE_FILE"]) is mounted
     assert values["GARMIN_ENABLED"] == flag  # never switched off or rewritten
-    assert ("GARMIN_ENABLED is on" in result.stdout) is mounted
+    # An .env older than HEALTHOS_SOURCES: the flag that is on moves into HEALTHOS_SOURCES.
+    assert ("garmin" in values["HEALTHOS_SOURCES"].split(",")) is mounted
+    assert ("garmin was not selected but stays in HEALTHOS_SOURCES" in result.stdout) is mounted
+
+
+@pytest.mark.parametrize(
+    ("env_text", "message"),
+    [
+        ("HEALTHOS_SOURCES=garmin\n", "garmin stays in HEALTHOS_SOURCES but"),
+        ("GARMIN_ENABLED=true\n", "The older GARMIN_ENABLED is on in .env but"),
+        ("GARMIN_ENABLED=false\n", None),
+    ],
+)
+def test_garmin_without_a_key_path_is_reported_not_switched(box, env_text, message):
+    # BEL-12: Garmin is never switched by the installer when it is not chosen; a Garmin left on
+    # without a key path (in HEALTHOS_SOURCES, or the older flag) is said, and nothing is mounted.
+    (box.repo / ".env").write_text(
+        env_text + "COMPOSE_FILE=docker-compose.yml:docker-compose.dev.yml\n"
+    )
+    result = box.run(*DRY, "--platform", HOST_PLATFORM, "--sources", "none")
+    assert result.returncode == 0, result.stdout + result.stderr
+    values = parse_env(box.repo / ".env.dry-run")
+    assert "docker-compose.garmin.yml" not in values["COMPOSE_FILE"]
+    assert values.get("GARMIN_ENABLED") == parse_env(box.repo / ".env").get("GARMIN_ENABLED")
+    if message:
+        assert message in " ".join(result.stdout.split())
+    else:
+        assert "GARMIN_API_KEY_HOST_FILE is empty" not in result.stdout
 
 
 def test_a_replaced_export_line_keeps_its_prefix(box):
     env = box.repo / ".env"
     env.write_text(
         "export POSTGRES_PASSWORD=keep\nexport COMPOSE_FILE=docker-compose.yml:mine.yml\n"
-        "  export   GARMIN_ENABLED=false\n"
+        "  export   APPLE_RECEIVER_ENABLED=false\n  export   GARMIN_ENABLED=false\n"
     )
     env.chmod(0o600)
     key = box.home / "garmin.key"
     key.write_text("synthetic\n")
     result = box.run(
-        *REAL, "--platform", HOST_PLATFORM, "--mode", "trial", "--sources", "garmin",
-        "--garmin-key-file", str(key),
+        *REAL, "--platform", HOST_PLATFORM, "--mode", "trial", "--sources", "garmin,apple",
+        "--garmin-key-file", str(key), "--apple-receiver", "yes",
     )  # fmt: skip
     assert result.returncode == 0, result.stdout + result.stderr
     lines = env.read_text().splitlines()
-    files = "docker-compose.yml:docker-compose.dev.yml:docker-compose.garmin.yml:mine.yml"
-    assert lines[:3] == [
+    files = (
+        "docker-compose.yml:docker-compose.dev.yml:docker-compose.garmin.yml"
+        ":docker-compose.apple.yml:mine.yml"
+    )
+    assert lines[:4] == [
         "export POSTGRES_PASSWORD=keep",
         f"export COMPOSE_FILE={files}",
-        "export GARMIN_ENABLED=true",
+        "export APPLE_RECEIVER_ENABLED=true",
+        "  export   GARMIN_ENABLED=false",  # never written (BEL-12): left byte for byte
     ]
-    for name in ("COMPOSE_FILE", "GARMIN_ENABLED"):
+    for name in ("COMPOSE_FILE", "APPLE_RECEIVER_ENABLED", "GARMIN_ENABLED"):
         assert len([line for line in lines if f"{name}=" in line]) == 1, name
 
 
@@ -1251,3 +1334,14 @@ def test_backup_script_falls_back_to_the_old_key_path(tmp_path):
         timeout=60,
     )
     assert missing.returncode == 1 and "healthos/backup.key" in missing.stderr
+
+
+def test_an_older_env_without_the_app_role_gets_no_app_password(box):
+    # Such an install keeps connecting as the owner; a password for a role it does not use
+    # would only make DATABASE_URL wrong.
+    (box.repo / ".env").write_text("POSTGRES_PASSWORD=" + "a" * 64 + "\n")
+    result = box.run(*DRY, "--platform", HOST_PLATFORM, "--sources", "none")
+    assert result.returncode == 0, result.stdout + result.stderr
+    values = parse_env(box.repo / ".env.dry-run")
+    assert "POSTGRES_APP_PASSWORD" not in values
+    assert values["POSTGRES_PASSWORD"] == "a" * 64

@@ -16,20 +16,20 @@ changing a record's identity (``id``, ``data_type``, ``google_data_point_id``,
 ``first_seen_at``, ``created_at``). The same guards cover the verbatim responses, the
 source-deletion events, the webhook tables (whose received payload is frozen) and the
 manual measurements and workouts (append-only). History rows are append-only; the one
-permitted change is renumbering ``version`` while ``health-mirror import-versions`` slots
+permitted change is renumbering ``version`` while ``healthos import-versions`` slots
 an older version recovered from an archive dump in front of later ones, and on PostgreSQL
 only inside a transaction that set ``healthos.renumber = '1'`` (which only that command
 does). A record with no history rows is version 1, so existing archives need no copy: the
 current row of a record with ``n`` history rows is version ``n + 1``.
 
 On PostgreSQL every protective trigger is ``ENABLE ALWAYS``, so it also fires under
-``session_replication_role = replica``; ``health-mirror verify`` fails when one is
-missing, disabled, defined differently from :data:`PG_TRIGGER_SQL` (events, timing,
+``session_replication_role = replica``; ``healthos verify`` fails when one is
+missing, disabled, defined differently from the guard registry (events, timing,
 level, ``WHEN``, columns, function) or its function body differs from
 :data:`FUNCTION_BODIES`, and when any other trigger sits on a guarded table.
 
 The trigger and view SQL is duplicated, frozen, in migration ``20261020_0011``; the copies
-below build the same objects for ``Base.metadata.create_all`` (SQLite tests).
+below build the same objects for ``Base.metadata.create_all``.
 tests/test_raw_versions.py compares the two.
 """
 
@@ -57,10 +57,11 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
+from app.db.guards import GuardSet
 from app.models.state import RawJSON
 
 HISTORY_VIEW = "raw_health_data_history"
-# Set (transaction-local) by health-mirror import-versions; see the module docstring.
+# Set (transaction-local) by healthos import-versions; see the module docstring.
 RENUMBER_SETTING = "healthos.renumber"
 
 # How a version reached the archive. Rows stored before migration 0011 have no recorded
@@ -84,9 +85,7 @@ class RawHealthDataVersion(Base):
         Index("ix_raw_health_data_versions_superseded_at", "superseded_at"),
     )
 
-    id: Mapped[int] = mapped_column(
-        BigInteger().with_variant(Integer(), "sqlite"), primary_key=True, autoincrement=True
-    )
+    id: Mapped[int] = mapped_column(BigInteger(), primary_key=True, autoincrement=True)
     # The record's current row in raw_health_data (never deleted; triggers forbid it).
     raw_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("raw_health_data.id"), nullable=False)
     data_type: Mapped[str] = mapped_column(String(128), nullable=False)
@@ -111,7 +110,7 @@ class RawHealthDataVersion(Base):
     )
     # The Google response this payload was first read from (NULL: before 0011, imports).
     response_id: Mapped[int | None] = mapped_column(
-        BigInteger().with_variant(Integer(), "sqlite"), ForeignKey("raw_api_responses.id")
+        BigInteger(), ForeignKey("raw_api_responses.id")
     )
 
 
@@ -124,9 +123,7 @@ class RawApiResponse(Base):
         Index("ix_raw_api_responses_context_id", "context_id"),
     )
 
-    id: Mapped[int] = mapped_column(
-        BigInteger().with_variant(Integer(), "sqlite"), primary_key=True, autoincrement=True
-    )
+    id: Mapped[int] = mapped_column(BigInteger(), primary_key=True, autoincrement=True)
     fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     # Write path and run (app.core.provenance): sync, webhook, backfill, probe, ...
     source: Mapped[str] = mapped_column(String(32), nullable=False)
@@ -143,7 +140,7 @@ class RawApiResponse(Base):
     status_code: Mapped[int] = mapped_column(Integer, nullable=False)
     headers: Mapped[dict] = mapped_column(JSON, nullable=False)
     body: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
-    # SHA-256 (hex) and length of `body`; health-mirror verify recomputes both.
+    # SHA-256 (hex) and length of `body`; healthos verify recomputes both.
     body_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
     body_size: Mapped[int] = mapped_column(BigInteger, nullable=False)
     # False when the connection failed before the body ended; `error` names the failure.
@@ -160,9 +157,7 @@ class RawHealthDataEvent(Base):
     __tablename__ = "raw_health_data_events"
     __table_args__ = (Index("ix_raw_health_data_events_raw_id", "raw_id"),)
 
-    id: Mapped[int] = mapped_column(
-        BigInteger().with_variant(Integer(), "sqlite"), primary_key=True, autoincrement=True
-    )
+    id: Mapped[int] = mapped_column(BigInteger(), primary_key=True, autoincrement=True)
     raw_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("raw_health_data.id"), nullable=False)
     data_type: Mapped[str] = mapped_column(String(128), nullable=False)
     google_data_point_id: Mapped[str] = mapped_column(String(512), nullable=False)
@@ -232,24 +227,19 @@ APPEND_ONLY_TABLES = (
 )
 # Tables whose rows are never deleted and whose received payload never changes, while
 # processing state (status, counters, errors, processed_at) is updated in place:
-# table -> (frozen columns, extra PostgreSQL / SQLite condition for a refused UPDATE).
+# table -> (frozen columns, extra condition for a refused UPDATE).
 PAYLOAD_TABLES = {
     "webhook_events": (
         ("payload_hash", "raw_json::text", "created_at"),
         # The signed body may be filled in once (legacy batches), never replaced.
         "OLD.raw_body IS NOT NULL AND OLD.raw_body IS DISTINCT FROM NEW.raw_body",
-        "OLD.raw_body IS NOT NULL AND OLD.raw_body IS NOT NEW.raw_body",
     ),
-    "webhook_notifications": (("element_hash", "raw_json::text", "created_at"), None, None),
+    "webhook_notifications": (("element_hash", "raw_json::text", "created_at"), None),
 }
 
 
 def _row(prefix: str, columns) -> str:
     return ", ".join(f"{prefix}.{column}" for column in columns)
-
-
-def _sqlite_changed(columns) -> str:
-    return " OR ".join(f"NEW.{c} IS NOT OLD.{c}" for c in (c.split("::")[0] for c in columns))
 
 
 FUNCTION_BODIES = {
@@ -286,7 +276,7 @@ END
 }
 
 # trigger -> (table, timing/events/level/WHEN, function) for every protective PostgreSQL
-# trigger; health-mirror verify checks each one.
+# trigger; healthos verify checks each one.
 _PG_TRIGGERS = {
     "raw_health_data_keep_version": (
         "raw_health_data",
@@ -334,48 +324,34 @@ WHEN (NEW.source_deleted_at IS NOT NULL)""",
         "healthos_refuse_change",
     ),
 }
+GUARDS = GuardSet(functions=FUNCTION_BODIES)
+for _name, (_table, _definition, _function) in _PG_TRIGGERS.items():
+    GUARDS.postgresql(_name, _table, _definition, _function)
 for _table in APPEND_ONLY_TABLES:
-    _PG_TRIGGERS[f"{_table}_append_only"] = (
-        _table,
-        f"BEFORE UPDATE OR DELETE ON {_table} FOR EACH ROW",
-        "healthos_refuse_change",
-    )
-    _PG_TRIGGERS[f"{_table}_no_truncate"] = (
-        _table,
-        f"BEFORE TRUNCATE ON {_table} FOR EACH STATEMENT",
-        "healthos_refuse_change",
-    )
+    GUARDS.append_only(_table)
 
-for _table, (_columns, _pg_extra, _) in PAYLOAD_TABLES.items():
+for _table, (_columns, _pg_extra) in PAYLOAD_TABLES.items():
     _when = f"({_row('OLD', _columns)}) IS DISTINCT FROM ({_row('NEW', _columns)})"
     if _pg_extra:
         _when = f"{_when}\n      OR ({_pg_extra})"
-    _PG_TRIGGERS[f"{_table}_frozen_payload"] = (
+    GUARDS.postgresql(
+        f"{_table}_frozen_payload",
         _table,
         f"BEFORE UPDATE ON {_table} FOR EACH ROW\nWHEN ({_when})",
         "healthos_refuse_change",
     )
-    _PG_TRIGGERS[f"{_table}_no_delete"] = (
+    GUARDS.postgresql(
+        f"{_table}_no_delete",
         _table,
         f"BEFORE DELETE ON {_table} FOR EACH ROW",
         "healthos_refuse_change",
     )
-    _PG_TRIGGERS[f"{_table}_no_truncate"] = (
+    GUARDS.postgresql(
+        f"{_table}_no_truncate",
         _table,
         f"BEFORE TRUNCATE ON {_table} FOR EACH STATEMENT",
         "healthos_refuse_change",
     )
-
-# (table, trigger, function) of every protective PostgreSQL trigger.
-PROTECTIVE_TRIGGERS = tuple(
-    (table, trigger, function) for trigger, (table, _, function) in _PG_TRIGGERS.items()
-)
-# trigger -> (table, CREATE TRIGGER statement): health-mirror verify compares what the
-# server reports for each trigger with what it makes of exactly this statement.
-PG_TRIGGER_SQL = {
-    trigger: (table, f"CREATE TRIGGER {trigger}\n{definition}\nEXECUTE FUNCTION {function}()")
-    for trigger, (table, definition, function) in _PG_TRIGGERS.items()
-}
 
 VIEW_SQL = f"""CREATE VIEW {HISTORY_VIEW} AS
 SELECT v.data_type, v.google_data_point_id, v.raw_id, v.version, (1 = 0) AS is_current,
@@ -399,133 +375,8 @@ SELECT r.data_type, r.google_data_point_id, r.id,
        r.response_id
 FROM raw_health_data r"""
 
-POSTGRESQL_DDL = (
-    *(
-        f"CREATE FUNCTION {name}() RETURNS trigger\nLANGUAGE plpgsql AS $${body}$$"
-        for name, body in FUNCTION_BODIES.items()
-    ),
-    *(sql for _, sql in PG_TRIGGER_SQL.values()),
-    *(
-        f"ALTER TABLE {table} ENABLE ALWAYS TRIGGER {trigger}"
-        for table, trigger, _ in PROTECTIVE_TRIGGERS
-    ),
-    VIEW_SQL,
-)
 
+GUARDS.extra = (VIEW_SQL,)
+POSTGRESQL_DDL = GUARDS.postgresql_ddl
 
-def _sqlite_refuse(table: str, operation: str) -> str:
-    return f"SELECT RAISE(ABORT, '{table} keeps every record: {operation} refused');"
-
-
-# trigger -> (table, full SQL) of every protective SQLite trigger (SQLite cannot disable
-# triggers, so verify only checks that they exist).
-_SQLITE_TRIGGERS = {
-    "raw_health_data_keep_version": (
-        "raw_health_data",
-        f"""CREATE TRIGGER raw_health_data_keep_version
-BEFORE UPDATE ON raw_health_data FOR EACH ROW
-WHEN OLD.payload_hash IS NOT NEW.payload_hash OR OLD.raw_json IS NOT NEW.raw_json
-BEGIN
-    INSERT INTO raw_health_data_versions ({_COPY})
-    VALUES ({_OLD});
-END""",
-    ),
-    "raw_health_data_frozen_identity": (
-        "raw_health_data",
-        f"""CREATE TRIGGER raw_health_data_frozen_identity
-BEFORE UPDATE ON raw_health_data FOR EACH ROW
-WHEN {_sqlite_changed(_IDENTITY)}
-BEGIN
-    {_sqlite_refuse("raw_health_data", "UPDATE")}
-END""",
-    ),
-    "raw_health_data_no_delete": (
-        "raw_health_data",
-        f"""CREATE TRIGGER raw_health_data_no_delete
-BEFORE DELETE ON raw_health_data
-BEGIN
-    {_sqlite_refuse("raw_health_data", "DELETE")}
-END""",
-    ),
-    "raw_health_data_deletion_event": (
-        "raw_health_data",
-        f"""CREATE TRIGGER raw_health_data_deletion_event
-AFTER UPDATE ON raw_health_data FOR EACH ROW
-WHEN OLD.source_deleted_at IS NOT NEW.source_deleted_at
-BEGIN
-    {_EVENT.format(previous="OLD.source_deleted_at")};
-END""",
-    ),
-    "raw_health_data_restored_event": (
-        "raw_health_data",
-        f"""CREATE TRIGGER raw_health_data_restored_event
-AFTER INSERT ON raw_health_data FOR EACH ROW
-WHEN NEW.source_deleted_at IS NOT NULL
-BEGIN
-    {_EVENT.format(previous="NULL")};
-END""",
-    ),
-    "raw_health_data_versions_no_delete": (
-        "raw_health_data_versions",
-        """CREATE TRIGGER raw_health_data_versions_no_delete
-BEFORE DELETE ON raw_health_data_versions
-BEGIN
-    SELECT RAISE(ABORT, 'raw_health_data_versions is append-only: DELETE refused');
-END""",
-    ),
-    # SQLite (tests only) has no session settings: renumbering is not gated there.
-    "raw_health_data_versions_no_update": (
-        "raw_health_data_versions",
-        f"""CREATE TRIGGER raw_health_data_versions_no_update
-BEFORE UPDATE ON raw_health_data_versions FOR EACH ROW
-WHEN {_sqlite_changed(_FROZEN)}
-BEGIN
-    SELECT RAISE(ABORT, 'raw_health_data_versions is append-only: UPDATE refused');
-END""",
-    ),
-}
-for _table in APPEND_ONLY_TABLES:
-    for _operation in ("UPDATE", "DELETE"):
-        _name = f"{_table}_no_{_operation.lower()}"
-        _SQLITE_TRIGGERS[_name] = (
-            _table,
-            f"""CREATE TRIGGER {_name}
-BEFORE {_operation} ON {_table}
-BEGIN
-    {_sqlite_refuse(_table, _operation)}
-END""",
-        )
-
-for _table, (_columns, _, _sqlite_extra) in PAYLOAD_TABLES.items():
-    _when = _sqlite_changed(_columns)
-    if _sqlite_extra:
-        _when = f"{_when} OR ({_sqlite_extra})"
-    _SQLITE_TRIGGERS[f"{_table}_frozen_payload"] = (
-        _table,
-        f"""CREATE TRIGGER {_table}_frozen_payload
-BEFORE UPDATE ON {_table} FOR EACH ROW
-WHEN {_when}
-BEGIN
-    {_sqlite_refuse(_table, "UPDATE")}
-END""",
-    )
-    _SQLITE_TRIGGERS[f"{_table}_no_delete"] = (
-        _table,
-        f"""CREATE TRIGGER {_table}_no_delete
-BEFORE DELETE ON {_table}
-BEGIN
-    {_sqlite_refuse(_table, "DELETE")}
-END""",
-    )
-
-SQLITE_TRIGGERS = tuple((table, trigger) for trigger, (table, _) in _SQLITE_TRIGGERS.items())
-# trigger -> (table, full SQL); verify compares the stored SQL with it.
-SQLITE_TRIGGER_SQL = dict(_SQLITE_TRIGGERS)
-SQLITE_DDL = (*(sql for _, sql in _SQLITE_TRIGGERS.values()), VIEW_SQL)
-
-# Built once every table exists (the functions and views span several tables).
-for _statement in POSTGRESQL_DDL:
-    event.listen(Base.metadata, "after_create", DDL(_statement).execute_if(dialect="postgresql"))
-for _statement in SQLITE_DDL:
-    event.listen(Base.metadata, "after_create", DDL(_statement).execute_if(dialect="sqlite"))
 event.listen(Base.metadata, "before_drop", DDL(f"DROP VIEW IF EXISTS {HISTORY_VIEW}"))

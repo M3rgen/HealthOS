@@ -12,7 +12,10 @@ The main file is the first entry whose name ends in ``.xml``, is not ``export_cd
 ``<!DOCTYPE HealthData``: its name is localized in some languages, so it is recognised by
 content (``apple_health_export/export.xml`` in English). Every other entry (workout route
 GPX files, electrocardiogram CSVs, ...) is read past and discarded. Decompressed output is
-limited (``max_output``, 64 GiB by default) against zip bombs.
+limited against zip bombs (``ExportTooLarge``): in total (``max_output``, 16 GiB by default,
+``APPLE_IMPORT_MAX_UNCOMPRESSED``) and in its ratio to the zip bytes read so far
+(``max_ratio``, 100:1, checked once the output passes ``RATIO_GRACE``). Real exports compress
+about 10-20:1; a deflate bomb reaches about 1000:1 and is refused within its first 64 MiB.
 
 ``open_export_path`` is the CLI's way in: a zip on disk (seekable, read with ``zipfile``,
 the same member choice) or a bare ``export.xml``, yielded in chunks.
@@ -33,13 +36,61 @@ CENTRAL_HEADER = b"PK\x01\x02"
 END_RECORDS = (b"PK\x05\x06", b"PK\x06\x06", b"PK\x06\x07", b"PK\x06\x08")
 DATA_DESCRIPTOR = b"PK\x07\x08"
 PROBE_BYTES = 64 * 1024
-DEFAULT_MAX_OUTPUT = 64 * 1024**3
+DEFAULT_MAX_OUTPUT = 16 * 1024**3
+# Most decompressed bytes per zip byte read; real exports are about 10-20:1, deflate ~1000:1.
+MAX_RATIO = 100
+# Output below this is never refused for its ratio (a small, very regular head is fine).
+RATIO_GRACE = 64 * 1024**2
 # Decompressed output is produced in pieces of at most this size.
 PIECE = 256 * 1024
 _HEADER = struct.Struct("<4sHHHHHIIIHH")
 _ZIP64_EXTRA = 0x0001
 _MARKERS = (b"<HealthData", b"<!DOCTYPE HealthData")
 _CDA = "export_cda.xml"
+
+
+class ExportTooLarge(ExportFormatError):
+    """The zip decompresses to more than allowed (``reason``: ``"output"`` past
+    ``max_output`` bytes, ``"ratio"`` past ``max_ratio`` output bytes per zip byte)."""
+
+    def __init__(self, message: str, *, reason: str, limit: int) -> None:
+        super().__init__(message)
+        self.reason = reason
+        self.limit = limit
+
+
+class OutputGuard:
+    """Counts decompressed bytes against the total and ratio limits."""
+
+    __slots__ = ("max_output", "max_ratio", "grace", "output")
+
+    def __init__(
+        self,
+        max_output: int = DEFAULT_MAX_OUTPUT,
+        max_ratio: int = MAX_RATIO,
+        grace: int = RATIO_GRACE,
+    ) -> None:
+        self.max_output = max_output
+        self.max_ratio = max_ratio
+        self.grace = grace
+        self.output = 0
+
+    def add(self, produced: int, compressed: int) -> None:
+        """Count ``produced`` more output bytes, ``compressed`` zip bytes read so far."""
+        self.output += produced
+        if self.output > self.max_output:
+            raise ExportTooLarge(
+                f"the zip decompresses to more than {self.max_output} bytes; refused",
+                reason="output",
+                limit=self.max_output,
+            )
+        if self.output > self.grace and self.output > self.max_ratio * max(compressed, 1):
+            raise ExportTooLarge(
+                f"the zip decompresses more than {self.max_ratio} times its size "
+                "(a zip bomb?); refused",
+                reason="ratio",
+                limit=self.max_ratio,
+            )
 
 
 def is_candidate_name(name: str) -> bool:
@@ -94,10 +145,16 @@ class ZipExportReader:
     member decompressed so far, ``close()`` the rest and checks the member was complete.
     ``member_name`` names the chosen member once it is known."""
 
-    def __init__(self, max_output: int = DEFAULT_MAX_OUTPUT) -> None:
+    def __init__(
+        self,
+        max_output: int = DEFAULT_MAX_OUTPUT,
+        max_ratio: int = MAX_RATIO,
+        ratio_grace: int = RATIO_GRACE,
+    ) -> None:
         self.max_output = max_output
         self.member_name: str | None = None
-        self.output_bytes = 0
+        self.input_bytes = 0
+        self._guard = OutputGuard(max_output, max_ratio, ratio_grace)
         self._buffer = bytearray()
         self._entry: _Entry | None = None
         # header | data | descriptor | done (the member is complete; the rest is ignored)
@@ -118,6 +175,7 @@ class ZipExportReader:
         however well the chunk compresses)."""
         if self._closed:
             raise ExportFormatError("zip reader is already closed")
+        self.input_bytes += len(data)
         if self._state == "done":
             return
         self._buffer += data
@@ -196,6 +254,19 @@ class ZipExportReader:
             entry.zip64 = True
         elif _has_zip64(extra):
             entry.zip64 = True
+        self._check_method(entry, name, method)
+        if not entry.candidate and not entry.descriptor:
+            # An entry that cannot be the export, its size known: skip it by size, unread.
+            entry.skip = True
+            entry.inflater = None
+        entry.remaining = csize
+        self._entry = entry
+        self._state = "data"
+        return True
+
+    @staticmethod
+    def _check_method(entry: _Entry, name: str, method: int) -> None:
+        """Refuse an entry that cannot be streamed; mark one that cannot be read to be skipped."""
         if method == 0:
             if entry.descriptor:
                 raise ExportFormatError(
@@ -211,14 +282,6 @@ class ZipExportReader:
                     "only deflate and stored are supported"
                 )
             entry.skip = True
-        if not entry.candidate and not entry.descriptor:
-            # An entry that cannot be the export, its size known: skip it by size, unread.
-            entry.skip = True
-            entry.inflater = None
-        entry.remaining = csize
-        self._entry = entry
-        self._state = "data"
-        return True
 
     @staticmethod
     def _zip64_sizes(extra: bytes, usize: int, csize: int) -> tuple[int, int]:
@@ -239,7 +302,8 @@ class ZipExportReader:
 
     def _data(self) -> Iterator[bytes]:
         entry = self._entry
-        assert entry is not None
+        if entry is None:
+            raise RuntimeError("zip reader state: no current entry")
         if entry.inflater is None or entry.skip:
             yield from self._stored(entry)
         else:
@@ -266,7 +330,8 @@ class ZipExportReader:
 
     def _deflated(self, entry: _Entry) -> Iterator[bytes]:
         inflater = entry.inflater
-        assert inflater is not None
+        if inflater is None:
+            raise RuntimeError("zip reader state: a deflated entry without its inflater")
         if not self._buffer and not inflater.unconsumed_tail:
             return
         data = bytes(self._buffer)
@@ -292,12 +357,12 @@ class ZipExportReader:
             self._buffer = bytearray(unused) + self._buffer
             yield from self._finish(entry)
 
+    @property
+    def output_bytes(self) -> int:
+        return self._guard.output
+
     def _output(self, entry: _Entry, piece: bytes) -> bytes:
-        self.output_bytes += len(piece)
-        if self.output_bytes > self.max_output:
-            raise ExportFormatError(
-                f"the zip decompresses to more than {self.max_output} bytes; refused"
-            )
+        self._guard.add(len(piece), self.input_bytes)
         if entry.selected:
             entry.crc = zlib.crc32(piece, entry.crc)
             return piece
@@ -344,7 +409,8 @@ class ZipExportReader:
 
     def _descriptor(self, final: bool) -> bool:
         entry = self._entry
-        assert entry is not None
+        if entry is None:
+            raise RuntimeError("zip reader state: no current entry")
         buffer = self._buffer
         # The longest descriptor (24 bytes) and the next signature's first two bytes.
         if len(buffer) < 26 and not final:
@@ -389,9 +455,12 @@ def _select_member(archive: zipfile.ZipFile) -> zipfile.ZipInfo:
     raise ExportFormatError("no Apple Health export.xml in the zip")
 
 
-def open_export_path(path: Path, chunk_size: int = 1 << 20) -> Iterator[bytes]:
+def open_export_path(
+    path: Path, chunk_size: int = 1 << 20, *, max_output: int = DEFAULT_MAX_OUTPUT
+) -> Iterator[bytes]:
     """The bytes of the export's ``export.xml`` from a zip or a bare ``.xml`` on disk, in
-    chunks of at most ``chunk_size`` bytes (decompressed)."""
+    chunks of at most ``chunk_size`` bytes (decompressed). A zip member is held to the same
+    limits as an upload (``ExportTooLarge``), its ratio taken against its compressed size."""
     with open(path, "rb") as handle:
         is_zip = handle.read(4) == LOCAL_HEADER
     if not is_zip:
@@ -402,8 +471,10 @@ def open_export_path(path: Path, chunk_size: int = 1 << 20) -> Iterator[bytes]:
     try:
         with zipfile.ZipFile(path) as archive:
             info = _select_member(archive)
+            guard = OutputGuard(max_output)
             with archive.open(info) as member:
                 while chunk := member.read(chunk_size):
+                    guard.add(len(chunk), info.compress_size)
                     yield chunk
     except (zipfile.BadZipFile, zlib.error, NotImplementedError, RuntimeError) as error:
         raise ExportFormatError(f"the zip cannot be read: {error}") from None

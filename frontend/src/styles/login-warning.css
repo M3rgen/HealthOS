@@ -1,0 +1,23 @@
+#login-disabled-warning,
+.sample-banner {
+  flex-shrink: 0;
+  padding: 5px 10px;
+  border: 1px solid var(--amber);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--amber);
+  font-size: 0.75rem;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+/* Sample data on screen (sample-data.js): said on every page, removable in one click. */
+#sample-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 12px;
+}
+.sample-banner .text-link,
+.source-guide .text-link {
+  margin: 0;
+}

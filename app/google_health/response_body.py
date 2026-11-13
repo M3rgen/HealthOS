@@ -55,7 +55,8 @@ async def read_wire(response: httpx.Response, body: bytearray) -> None:
     try:
         async with budget:
             # aiter_raw() closes at EOF, conflating read and close cancellation.
-            assert isinstance(response.stream, httpx.AsyncByteStream)
+            if not isinstance(response.stream, httpx.AsyncByteStream):
+                raise RuntimeError("Expected an asynchronous response stream")
             async for chunk in response.stream:
                 if chunk:
                     # Preserve the whole delivered chunk, even when it crosses

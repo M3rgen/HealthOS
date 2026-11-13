@@ -15,7 +15,7 @@ from app import main
 from app.core.apple_paths import APPLE_IMPORT_PATH
 from app.core.config import Settings
 from app.models.apple import AppleImport, AppleRawRecord
-from app.services import apple_import
+from app.services.providers import apple_import
 
 JOB = {"X-HealthOS-Request": "1"}
 ZIP = {**JOB, "Content-Type": "application/zip"}

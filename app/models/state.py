@@ -22,12 +22,15 @@ from sqlalchemy import (
     text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import Mapped, mapped_column, validates
 
+from app.core.webhook_types import NotificationStatus
 from app.db.base import Base, TimestampMixin
+from app.db.dialect import dialect_insert
 
 # Raw payloads as kept from Google: jsonb on PostgreSQL (migration 20261020_0010), plain
-# JSON text elsewhere (SQLite tests). The app reads values, never the stored text.
+# JSON text in tests. The app reads values, never the stored text.
 RawJSON = JSON().with_variant(JSONB(), "postgresql")
 
 
@@ -58,7 +61,6 @@ class RawHealthData(TimestampMixin, Base):
             "data_type",
             "google_data_point_id",
             postgresql_where=text("source_deleted_at IS NOT NULL"),
-            sqlite_where=text("source_deleted_at IS NOT NULL"),
         ),
     )
 
@@ -85,7 +87,7 @@ class RawHealthData(TimestampMixin, Base):
     # The Google response (raw_api_responses) the current payload was first read from;
     # NULL for payloads stored before it was recorded, and for archive imports.
     response_id: Mapped[int | None] = mapped_column(
-        BigInteger().with_variant(Integer(), "sqlite"), ForeignKey("raw_api_responses.id")
+        BigInteger(), ForeignKey("raw_api_responses.id")
     )
 
 
@@ -138,13 +140,13 @@ class FetchRound(Base):
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
-async def fetch_round_start(session, kind: str, key: str, *, fresh: bool, now: datetime):
+async def fetch_round_start(
+    session: AsyncSession, kind: str, key: str, *, fresh: bool, now: datetime
+):
     """The start of the fetch ``kind``/``key``: ``now`` when it begins at its first page
     (``fresh``, including an invalid-token restart), else the stored start it resumes.
     A restart caller must commit this with its cleared token and new retrieval receipt.
     """
-    from app.services.storage import dialect_insert
-
     row = await session.get(FetchRound, (kind, key))
     if row is None:
         # Two workers may begin the same fetch while it has no row yet: the later insert
@@ -155,6 +157,8 @@ async def fetch_round_start(session, kind: str, key: str, *, fresh: bool, now: d
             .on_conflict_do_nothing(index_elements=["kind", "key"])
         )
         row = await session.get(FetchRound, (kind, key))
+    if row is None:
+        raise RuntimeError("Fetch round is missing")
     if fresh:
         row.started_at = now
     return row.started_at
@@ -207,13 +211,23 @@ class WebhookNotification(TimestampMixin, Base):
     operation: Mapped[str | None] = mapped_column(String(32))
     intervals: Mapped[list | None] = mapped_column(JSON)
     is_valid: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-    status: Mapped[str] = mapped_column(String(32), default="pending", nullable=False, index=True)
+    # Still VARCHAR(32), with no database enum or CHECK: existing schemas need no migration.
+    status: Mapped[NotificationStatus] = mapped_column(
+        Enum(NotificationStatus, native_enum=False, length=32, validate_strings=True),
+        default=NotificationStatus.pending,
+        nullable=False,
+        index=True,
+    )
     attempt_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     sync_attempt_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     sync_success_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     validation_error: Mapped[str | None] = mapped_column(Text)
     last_error: Mapped[str | None] = mapped_column(Text)
     processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    @validates("status")
+    def validate_status(self, _key: str, value: NotificationStatus | str) -> NotificationStatus:
+        return NotificationStatus(value)
 
 
 class WebhookBatchItem(TimestampMixin, Base):

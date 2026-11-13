@@ -27,9 +27,10 @@ from app.models.raw_rejections import RawHealthDataRejection as Rejection
 from app.models.raw_rejections import RetrievalEventRejection
 from app.models.retrieval import RetrievalEvent
 from app.models.state import BackfillJob, JobStatus, RawHealthData, SyncState
-from app.services import raw_rejections, storage
-from app.services.raw_history import verify_guards
-from app.services.storage import store_records
+from app.services.archive import raw_rejections, storage
+from app.services.archive.raw_history_verification import verify_guards
+from app.services.archive.storage import store_records
+from app.services.providers.ingestion import GoogleSource
 from app.sync.incremental import IncrementalSync
 
 
@@ -46,7 +47,7 @@ def two_pages(first: bytes, calls: list, last: bytes | None = None):
 
 def sync(sessions, google):
     settings = Settings(_env_file=None, app_env="test")
-    return IncrementalSync(settings, sessions, google, {"steps": SPEC})
+    return IncrementalSync(settings, sessions, GoogleSource(google), {"steps": SPEC})
 
 
 async def count(sessions, model) -> int:

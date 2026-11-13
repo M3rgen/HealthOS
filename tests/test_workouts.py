@@ -9,7 +9,7 @@ from app.google_health.data_types import REGISTRY
 from app.main import create_app
 from app.models.manual import ManualWorkout
 from app.models.state import RawHealthData
-from app.services.storage import store_records
+from app.services.archive.storage import store_records
 
 
 async def test_workouts_sources_month_timezone_and_validation(sessions):

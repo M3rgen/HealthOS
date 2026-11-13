@@ -7,11 +7,13 @@ from datetime import UTC, datetime, timedelta, timezone
 
 import pytest
 from sqlalchemy import select
+from support.waits import blocked_on_a_lock
 
 from app.core.config import Settings
 from app.google_health.client import Page
 from app.google_health.data_types import REGISTRY
 from app.models.state import FetchRound, JobStatus, RawHealthData, SyncState, fetch_round_start
+from app.services.providers.ingestion import GoogleSource
 from app.sync.incremental import INTERRUPTED_ERROR, STALE_RUNNING_AFTER, IncrementalSync
 
 pytestmark = pytest.mark.integration
@@ -67,7 +69,9 @@ async def deleted(sessions, data_type: str) -> tuple[int, dict[str, datetime]]:
 async def test_refetch_marks_missing_records_by_timestamptz_scope(pg_sessions) -> None:
     client = QueueClient()
     specs = {"steps": REGISTRY["steps"], "sleep": REGISTRY["sleep"]}
-    service = IncrementalSync(Settings(_env_file=None, app_env="test"), pg_sessions, client, specs)
+    service = IncrementalSync(
+        Settings(_env_file=None, app_env="test"), pg_sessions, GoogleSource(client), specs
+    )
     at_start = steps("at-start", "2026-08-01T00:00:00Z")
     middle = steps("middle", "2026-08-01T12:00:00Z")
     last_minute = steps("last-minute", "2026-08-01T23:59:00Z")
@@ -128,7 +132,7 @@ async def test_startup_recovery_fails_running_sync_states(pg_sessions) -> None:
             ]
         )
     service = IncrementalSync(
-        Settings(_env_file=None, app_env="test"), pg_sessions, None, dict(REGISTRY)
+        Settings(_env_file=None, app_env="test"), pg_sessions, GoogleSource(None), dict(REGISTRY)
     )
 
     assert await service.recover_interrupted() == 1
@@ -162,7 +166,7 @@ async def test_two_workers_starting_the_same_fetch_both_get_its_round(pg_session
         first = await fetch_round_start(session, "sync", "steps", fresh=True, now=first_now)
         # The other worker starts while this transaction is still open.
         other = asyncio.create_task(second())
-        await asyncio.sleep(0.5)
+        await blocked_on_a_lock(pg_sessions, other)  # its insert waits for this one's row
     assert first == first_now
     assert await other == (second_now if fresh else first_now)
 

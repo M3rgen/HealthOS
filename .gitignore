@@ -1,53 +1,8 @@
-.env
-frontend/node_modules
-app/static/
-.test-tmp-healthos*
-.test-tmp-codex*
-.venv/
-.uv-tool/
-.uv-cache/
-.venv-runtime-test/
-__pycache__/
-*.py[cod]
-.pytest_cache/
-.ruff_cache/
-dist/
-*.egg-info/
-*.db
-backups/*.dump*
-oauth-token*
-.docker-public/
-deploy/cloudflare/config.yml
-deploy/cloudflare/*.json
-deploy/cloudflare/*.pem
-deploy/cloudflare/*.token
-deploy/cloudflare/credentials/
-*.secrets.env
-
-# Private deployment state, health exports, and local verification outputs
+# Environment and secrets
 .env*
 !.env.example
 *.secrets.env
-.test-tmp*
-.compose-smoke-*
-reports/
-sast/
-docs/design/
-VERIFICATION.md
-MIGRATION_READINESS_REPORT.md
-TECH_STACK_REPORT.md
-TODO.md
-IYILESTIRME-PLANI-*.md
-*.log
-*.jsonl
-*.sqlite
-*.sqlite3
-*.db-*
-*.dump*
-*.sql.gz
-*.sql.zip
-backups/
-backup-status/
+secrets/
 oauth-token*
 *.pem
 *.key
@@ -56,8 +11,57 @@ oauth-token*
 *.token
 *.credentials.json
 
+# Deployment state
+backups/
+backup-status/
+deploy/cloudflare/config.yml
+deploy/cloudflare/*.json
+deploy/cloudflare/*.pem
+deploy/cloudflare/*.token
+deploy/cloudflare/credentials/
+.docker-public/
+
+# Databases, dumps and logs
+*.db
+*.db-*
+*.sqlite
+*.sqlite3
+*.dump*
+*.sql.gz
+*.sql.zip
+*.log
+*.jsonl
+
+# Local verification output
+reports/
+sast/
+docs/design/
+.test-tmp*
+.compose-smoke-*
+
+# Python
+.venv/
+.uv-tool/
+.python/
+.uv-cache/
+.venv-runtime-test/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+dist/
+*.egg-info/
+
+# Frontend build output and browser checks
+frontend/node_modules
+# Includes preview:shoot screenshots (default: .test-output/shoot).
+frontend/.test-output/
+app/static/
+
+# Coverage data (make coverage)
+.coverage
+.coverage.*
+htmlcov/
+
 # macOS
 .DS_Store
-
-# Browser check screenshots (tests/browser, npm run test:browser)
-frontend/.test-output/

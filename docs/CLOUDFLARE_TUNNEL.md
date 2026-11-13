@@ -2,7 +2,7 @@
 
 Detailed reference for step 7 of [DEPLOYMENT.md](DEPLOYMENT.md). The tunnel exists only so Google
 can deliver `POST /webhooks/google-health`. `cloudflared` opens outbound connections to Cloudflare,
-so the VM needs no inbound port. The dashboard and every other API route stay private.
+so the server needs no inbound port. The dashboard and every other API route stay private.
 
 Three layers keep it that way:
 
@@ -18,14 +18,14 @@ Three layers keep it that way:
 
 ## Install cloudflared
 
-Download the `cloudflared-linux-<arch>` binary for the VM's architecture (`uname -m`) from the
+Download the `cloudflared-linux-<arch>` binary for the server's architecture (`uname -m`) from the
 official [Cloudflare releases](https://github.com/cloudflare/cloudflared/releases), verify the
 published checksum, and install it as `/usr/local/bin/cloudflared`. Record the version. The systemd
 unit runs it with `--no-autoupdate`, so updates are deliberate (see the [runbook](RUNBOOK.md#update-images-and-cloudflared)).
 
 ## Create the tunnel
 
-Create a locally managed tunnel on an admin machine, not the VM, so the account-wide `cert.pem`
+Create a locally managed tunnel on an admin machine, not the server, so the account-wide `cert.pem`
 never lands on the server:
 
 ```sh
@@ -34,7 +34,7 @@ cloudflared tunnel create healthos-webhook          # writes <tunnel-id>.json
 cloudflared tunnel route dns healthos-webhook webhook.example.com
 ```
 
-Copy only `<tunnel-id>.json` to the VM, for example as `/etc/cloudflared/<tunnel-id>.json`, owned by
+Copy only `<tunnel-id>.json` to the server, for example as `/etc/cloudflared/<tunnel-id>.json`, owned by
 root with mode 0600. Never commit it; `.gitignore` already excludes `deploy/cloudflare/*.json`.
 
 ## Configure the service
@@ -69,7 +69,7 @@ independent of application rebuilds, and keeps tunnel credentials out of the Com
 
 ## Verify the public surface
 
-From any machine outside the VM:
+From any machine outside the server:
 
 ```sh
 curl -s -o /dev/null -w '%{http_code}\n' https://webhook.example.com/              # 404
@@ -85,12 +85,12 @@ Do not send a test request with the real authorization header from a shell; it w
 shell history. Google's subscriber handshake (an authenticated verification body that must succeed
 and an unauthenticated one that must fail) is the end-to-end test.
 
-On the VM, confirm the private side:
+On the server, confirm the private side:
 
 ```sh
 ss -ltn | grep -E ':8000|:5432'          # only 127.0.0.1:8000, no 5432
-docker compose exec -T app health-mirror webhook-readiness
-docker compose exec -T app health-mirror webhook-status
+docker compose exec -T app healthos webhook-readiness
+docker compose exec -T app healthos webhook-status
 ```
 
 Never paste `cloudflared` logs, the rendered config or the credentials file into an issue: they

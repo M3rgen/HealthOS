@@ -1,0 +1,26 @@
+"""Shared release-tag format contract for preflight and the publication hook."""
+
+RELEASE_TAGS = [
+    ("v0.2.3", True),
+    ("v1.2.3", True),
+    ("v10.0.0", True),
+    ("v0.2.2.1", True),
+    ("v0.2.2.12", True),
+    ("v1.2.3.4", True),
+    ("v0.2.2.", False),
+    ("v0.2.2.1.1", False),
+    ("v0.2.2.0", False),
+    ("v0.2.2.01", False),
+    ("v01.2.3", False),
+    ("v0.02.2.1", False),
+    ("v1.2", False),
+    ("v1", False),
+    ("v1.2.3-rc1", False),
+    ("v1.2.3+5", False),
+    ("v1.2.3.post1", False),
+    ("1.2.3", False),
+    ("release", False),
+    ("v1.2.3\n", False),
+    ("v1.2.3 ", False),
+    ("v1.2.3\tx", False),
+]

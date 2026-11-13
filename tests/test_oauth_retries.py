@@ -12,6 +12,7 @@ from app.google_health import oauth
 from app.google_health.client import GoogleHealthClient
 from app.google_health.data_types import REGISTRY
 from app.google_health.oauth import OAuthClient, OAuthError, TokenProvider
+from app.services.providers.ingestion import GoogleSource
 from app.sync.incremental import IncrementalSync
 from app.sync.reconciliation import ReconciliationService
 
@@ -44,7 +45,7 @@ async def test_transport_retry_refreshes_once_without_failing_sync(sessions, cap
         sync = IncrementalSync(
             settings,
             sessions,
-            GoogleHealthClient(settings, tokens, http),
+            GoogleSource(GoogleHealthClient(settings, tokens, http)),
             {"heart-rate": REGISTRY["heart-rate"]},
         )
         with caplog.at_level(logging.INFO):
@@ -99,8 +100,12 @@ async def test_permanent_oauth_error_does_not_retry(status, grant, location, cap
         client = OAuthClient(settings, http, sleep=sleep)
         http.event_hooks["response"] = [AsyncMock(side_effect=lambda r: r.raise_for_status())]
         with caplog.at_level(logging.INFO), pytest.raises(OAuthError) as failure:
-            await getattr(client, grant)("synthetic")
+            await getattr(client, grant)(
+                "synthetic",
+                **({"code_verifier": "synthetic-verifier"} if grant == "exchange_code" else {}),
+            )
     assert str(failure.value) == f"OAuth token endpoint returned HTTP {status}"
+    assert failure.value.http_status == status
     assert failure.value.transient is False and failure.value.__cause__ is None
     assert respond.await_count == 1
     assert stream.pulled == 0 and stream.closed.is_set() and stream.close_calls == 1
@@ -121,7 +126,10 @@ async def test_retry_exhaustion_is_bounded_and_transient(status, grant, caplog):
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
         with caplog.at_level(logging.INFO), pytest.raises(OAuthError) as failure:
             client = OAuthClient(Settings(_env_file=None), http, sleep=sleep)
-            await getattr(client, grant)("synthetic")
+            await getattr(client, grant)(
+                "synthetic",
+                **({"code_verifier": "synthetic-verifier"} if grant == "exchange_code" else {}),
+            )
     # A single-use authorization code is never resent: the cause stays a network error.
     retried = grant == "refresh"
     assert failure.value.transient is True and handler.await_count == (4 if retried else 1)
@@ -174,8 +182,8 @@ async def test_cancellation_during_backoff_propagates_and_releases_provider_lock
             AsyncMock(return_value="synthetic"),
         )
         task = asyncio.create_task(provider.get())
-        await asyncio.wait_for(entered.wait(), 2)
+        await asyncio.wait_for(entered.wait(), 30)
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
             await task
-        assert await asyncio.wait_for(provider.get(), 2) == "synthetic"
+        assert await asyncio.wait_for(provider.get(), 30) == "synthetic"

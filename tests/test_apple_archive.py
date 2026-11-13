@@ -15,8 +15,8 @@ from app.apple.hae import parse_hae
 from app.apple.records import EXPORT, HAE, QUANTITY, AppleRecord
 from app.core.timeutil import as_utc
 from app.models.apple import AppleImport, ApplePayload, AppleRawRecord, AppleSource
-from app.services import apple_archive
-from app.services.apple_archive import (
+from app.services.providers import apple_archive
+from app.services.providers.apple_archive import (
     import_as_dict,
     kept_headers,
     record_from_row,

@@ -28,14 +28,15 @@ memory; no chat storage or database archive is added. Failed bridge sends do not
 counts; completion, cancellation, failure, timeout and disconnect finalize the receipt.
 
 
-Sürüm 2 yorum eylemleri de aynı fişten geçer. Gönderilen her yorum özeti ve öneri adayı
-`türetilmiş özet`, her açık kanıt satırı veya takvim çifti `türetilmiş gözlem` sayılır.
-`absent` yer tutucusu üstveridir; değer veya sağlık hesabı taşıyan özet üstveri sayılmaz.
-Tarih aralığı, gerçekten gönderilen geçmiş taban kanıtını ve adayın tarih başvurularını
-kapsar. Sayfa tekrarları tekrar sayılır; alan adları dışında yöntem, kaynak, imleç veya
-ölçüm değerleri loglanmaz. Bu sağlık verileri mevcut köprü üzerinden OpenAI'ye gönderilir.
+Version 2 interpretation actions go through the same receipt. Every interpretation summary and
+suggestion candidate sent counts as `türetilmiş özet`, every open evidence row or calendar pair as
+`türetilmiş gözlem`. The `absent` placeholder is metadata; a summary carrying a value or a health
+computation is not metadata. The date range covers the historical baseline evidence actually sent
+and the candidate's date references. Page repeats count again; beyond field names, no method,
+source, cursor or measurement value is logged. This health data goes to OpenAI over the existing
+bridge.
 
-Her turda kullanıcının mesajına ek bir bağlam bloğu da OpenAI'ye gider: en fazla 8 KiB,
-yalnız kullanıcının bu bağlantıda yazdığı sözlerden alıntılar (konu, açık sunum tercihi,
-son istekler ve yanıtlanmamış istekler; Umay'ın yanıtı veya araç verisi girmez). Blok
-yalnız sohbet bağlantısının belleğinde tutulur ve bağlantı kapanınca silinir.
+On every turn an additional context block also goes to OpenAI: at most 8 KiB, only quotations of
+what the user wrote on this connection (topic, explicit presentation preference, recent requests
+and unanswered requests; Umay's replies and tool data are not included). The block lives only in
+the chat connection's memory and is dropped when the connection closes.

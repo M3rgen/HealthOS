@@ -9,14 +9,14 @@ from reconciliation_records import END, START, Client, Frozen, execute, point
 from retrieval_records import Runner
 from sqlalchemy import create_engine, func, select, text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
-from test_pg_migrations import HEAD
+from support.migration_chain import HEAD
 
 from app.core.timeutil import as_utc
 from app.google_health.client import Page
 from app.models.raw_versions import RawHealthDataVersion
 from app.models.retrieval import RetrievalCheckpoint, RetrievalReceipt
 from app.models.state import RawHealthData
-from app.services.reconciliation_reports import recovery_errors
+from app.services.synchronization.reconciliation_reports import recovery_errors
 from app.sync import incremental, reconciliation
 
 pytestmark = pytest.mark.integration

@@ -3,6 +3,7 @@ from unittest.mock import AsyncMock
 
 import httpx
 import pytest
+from support.fixture_keys import SYNTHETIC_FERNET_KEY
 
 from app import main
 from app.core.config import Settings
@@ -24,7 +25,7 @@ def application(monkeypatch):
         _env_file=None,
         app_env="test",
         google_health_webhook_endpoint_uri="https://hooks.example/webhooks/google-health",
-        google_health_webhook_authorization="Bearer webhook-secret",
+        google_health_webhook_authorization="Bearer webhook-secret-0123456789",
     )
     monkeypatch.setattr(main, "get_settings", lambda: settings)
     monkeypatch.setattr(
@@ -96,7 +97,7 @@ async def test_headers_on_errors_and_auth_responses(application, monkeypatch):
     assert_hardened(missing)
     assert_hardened(bad_host)
     secured = build_with_token(monkeypatch)
-    async with client(secured) as http:
+    async with client(secured, "http://healthos.localhost:8000") as http:
         denied = await http.get("/api/dashboard")
         redirect = await http.get("/", headers={"Accept": "text/html"})
     assert denied.status_code == 401 and redirect.status_code == 303
@@ -125,7 +126,7 @@ async def test_webhook_receiver_gets_headers_too(application):
         response = await http.post(
             "/webhooks/google-health",
             json={"type": "verification"},
-            headers={"Authorization": "Bearer webhook-secret"},
+            headers={"Authorization": "Bearer webhook-secret-0123456789"},
         )
     assert response.status_code == 201
     assert assert_hardened(response)["connect-src"] == ["'self'", "blob:"]
@@ -136,7 +137,7 @@ async def test_interactive_docs_get_their_cdn_exception_only(application):
         docs = await http.get("/docs")
         dashboard_csp = (await http.get("/health/live")).headers["content-security-policy"]
     csp = assert_hardened(docs)
-    assert "https://cdn.jsdelivr.net" in csp["script-src"]
+    assert csp["script-src"].count("https://cdn.jsdelivr.net") == 1
     assert "cdn.jsdelivr.net" not in dashboard_csp
 
 
@@ -172,16 +173,16 @@ async def test_models_are_immutable_only_with_a_content_hash(tmp_path, name, cac
 
 async def test_production_serves_no_interactive_docs(monkeypatch):
     """The docs' inline-script/CDN CSP exception must not exist on the production origin."""
-    token = "p" * 40
+    token = "synthetic-ui-token-0123456789abcdef"
     settings = Settings(
         _env_file=None,
         app_env="production",
-        database_url="postgresql+asyncpg://mirror:synthetic@postgres:5432/mirror",
+        database_url="postgresql+asyncpg://mirror:synthetic-db-Q3v8Lr2Xk9Tw5Zp7Nm4Hc6Jd@postgres:5432/mirror",
         google_client_id="synthetic-client",
         google_client_secret="synthetic-secret",
-        google_token_encryption_key="synthetic-encryption-key",
+        google_token_encryption_key=SYNTHETIC_FERNET_KEY,
         google_health_webhook_endpoint_uri="https://hooks.example/webhooks/google-health",
-        google_health_webhook_authorization="Bearer webhook-secret",
+        google_health_webhook_authorization="Bearer webhook-secret-0123456789-abcdefgh",
         app_ui_token=token,
     )
     monkeypatch.setattr(main, "get_settings", lambda: settings)

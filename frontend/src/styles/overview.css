@@ -1,0 +1,272 @@
+/* Overview page: the card grid and the history row. The page never scrolls; which arrangement
+   applies depends on the viewport:
+   - wider than 900 px and taller than 480 px: every card, side by side;
+   - narrower than 901 px: one card at a time behind tabs, history below;
+   - at most 480 px tall and at least 568 px wide: tabs beside the history;
+   - at most 480 px tall and narrower than 568 px: tabs, history collapsed to a bar.
+   overview-tabs.js switches the tab bar on with the same media query as the blocks below.
+   Breakpoints are in em (the pixel figures above are at the default 16 px font), so a larger
+   browser font moves the page to the arrangement that fits it. */
+.overview-grid {
+  display: grid;
+  grid-template-columns: 1fr 1.06fr;
+  gap: 18px;
+}
+.right-column {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+body:has(#overview:not([hidden])) main {
+  height: auto;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+#overview {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) minmax(120px, min(34dvh, 320px));
+  gap: 12px;
+}
+.panel-tabs {
+  display: none;
+}
+[data-tabbed] > .panel-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--edge);
+  border-radius: 12px;
+  background: var(--page);
+}
+.panel-tab {
+  flex: 1 1 auto;
+  min-height: 44px;
+  padding: 5px 4px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 0.8125rem;
+  font-weight: 550;
+  white-space: nowrap;
+}
+.panel-tab:hover {
+  color: var(--text);
+}
+.panel-tab[aria-selected="true"] {
+  background: var(--surface-2);
+  color: var(--text);
+  box-shadow:
+    inset 0 0 0 1px var(--amber-line),
+    0 1px 3px rgb(0 0 0 / 0.4);
+}
+@media (max-width: bp(w1150)) {
+  .overview-grid {
+    grid-template-columns: 0.9fr 1.1fr;
+  }
+}
+/* Narrow or very short: one card at a time behind a tab bar (overview-tabs.js). The cards stay in
+   the DOM; a card taller than its slot scrolls inside itself. */
+@media (max-width: bp(w900)), (max-height: 30em) {
+  .overview-grid {
+    grid-template-columns: 1fr;
+  }
+  #overview {
+    grid-template-rows:
+      minmax(0, 1fr)
+      minmax(120px, calc(min(30dvh, 320px) + var(--launcher-share, var(--launcher-strip, 0px))));
+  }
+  #overview .overview-grid[data-tabbed] {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+    grid-auto-rows: auto;
+    gap: 10px;
+    min-height: 0;
+    overflow: visible;
+  }
+  .overview-grid[data-tabbed] .right-column {
+    display: contents;
+  }
+  .overview-grid[data-tabbed] > :is(.profile-panel, .right-column) {
+    min-height: 0;
+  }
+  .overview-grid[data-tabbed] :is(.profile-panel, .connection, .metric-card) {
+    grid-row: 2;
+    grid-column: 1;
+    min-height: 0;
+    overflow: auto;
+    overscroll-behavior: contain;
+    scrollbar-width: thin;
+  }
+}
+/* Short screens: the gaps between a notice, a state line and the cards give way first. */
+@media (max-height: 35em) {
+  body:has(#overview:not([hidden])) main {
+    gap: 4px;
+  }
+  main:has(#overview:not([hidden])) > .notice {
+    margin-bottom: 0;
+  }
+}
+/* Physically very short: the tabs stay one row and scroll sideways inside themselves. */
+@media (max-height: 30em) {
+  [data-tabbed] > .panel-tabs {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .panel-tab {
+    flex: 1 0 auto;
+  }
+}
+@media (max-width: bp(w540)) {
+  /* At least two whole days under the heading, also on 360×640 and 320×568 phones; the card
+     above scrolls inside itself. */
+  #overview {
+    grid-template-rows:
+      minmax(0, 1fr)
+      minmax(
+        120px,
+        calc(max(min(25dvh, 240px), 12.75rem) + var(--launcher-share, var(--launcher-strip, 0px)))
+      );
+  }
+}
+@media (max-width: bp(w540)) and (min-height: 41.6875em) {
+  /* A tall phone has height to spare: the history shows several days without opening it. */
+  #overview {
+    grid-template-rows:
+      minmax(0, 1fr)
+      minmax(120px, calc(min(29dvh, 260px) + var(--launcher-share, var(--launcher-strip, 0px))));
+  }
+}
+@media (max-width: bp(w360)) {
+  .panel-tab {
+    padding: 5px 1px;
+    font-size: 0.75rem;
+  }
+}
+@media (min-width: bp(w901)) and (min-height: 30.0625em) {
+  main:has(#overview:not([hidden])) {
+    height: calc(100dvh - 64px);
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  main:has(#overview:not([hidden])) > .notice {
+    flex-shrink: 0;
+    margin: 0;
+    padding: 8px 12px;
+  }
+  .overview-grid {
+    min-height: 0;
+    gap: 12px;
+    grid-template-columns: 1fr 1.12fr;
+  }
+  .right-column {
+    min-height: 0;
+    gap: 10px;
+    display: grid;
+    /* The connection panel takes what it needs; the cards keep a floor and the rest. With a
+       large browser font the panels scroll inside themselves instead of overlapping. */
+    grid-template-rows: minmax(0, auto) minmax(8.5rem, 1fr);
+  }
+  /* A visible notice takes its height from the history first. The top row may go below its
+    content: the panels in it scroll inside themselves, the page does not. */
+  main:has(> #notice:not([hidden])) #overview {
+    grid-template-rows: minmax(0, 1fr) minmax(min(120px, 100%), min(26dvh, 320px));
+  }
+}
+
+/* Laptops with browser chrome, 481-649 px tall: every card stays on screen. The history row and
+   the connection panel give way first; the three metric cards keep a working height. */
+@media (min-width: bp(w901)) and (min-height: 30.0625em) and (max-height: 40.5625em) {
+  main:has(#overview:not([hidden])) {
+    padding: 8px;
+    gap: 6px;
+  }
+  #overview {
+    /* Meets min(34dvh, 320px) of the taller tier at 650 px, so nothing jumps there. */
+    grid-template-rows: minmax(0, 1fr) clamp(6.5rem, calc(100dvh - 430px), 13.75rem);
+    gap: 8px;
+  }
+
+  .overview-grid {
+    gap: 8px;
+  }
+  .right-column {
+    gap: 8px;
+  }
+}
+/* Very short and wide enough: the history sits beside the tabbed card. */
+@media (max-height: 30em) and (min-width: bp(w568)) {
+  #overview {
+    grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
+    gap: 8px;
+  }
+  /* Keep two whole days above the launcher strip without shrinking the handle's hit area.
+     The heading and caption each keep one line; the table takes the remaining column height. */
+  #overview .history .history-heading {
+    flex-wrap: nowrap;
+  }
+  #overview .history .history-heading h2 {
+    font-size: 1rem;
+    line-height: 1.25;
+  }
+  #overview .history .history-heading p {
+    font-size: 0.75rem;
+    margin-top: 2px;
+  }
+  #overview .history th,
+  #overview .history td {
+    padding-block: 4px;
+  }
+}
+/* Very short and narrow: the history collapses to a bar under the tabbed card. */
+@media (height < 18.75em) and (max-width: bp(w567)),
+  (max-height: 30em) and (max-height: 420px) and (max-width: bp(w567)) {
+  #overview {
+    grid-template-rows: minmax(0, 1fr) auto;
+    gap: 6px;
+  }
+  #overview .overview-grid[data-tabbed] {
+    gap: 6px;
+  }
+}
+/* A large browser font also enters the short tier on physically tall screens. Keep the
+   stacked table there: the card scrolls inside its flexible share, the table in the remainder.
+   The em floor follows text size; the existing physical short tier keeps its bar. */
+@media (max-height: 30em) and (min-height: 18.75em) and (height > 420px) and (max-width: bp(w567)) {
+  #overview {
+    grid-template-rows: minmax(0, 1fr) minmax(0, min(48dvh, calc(64px + 7rem)));
+    gap: 8px;
+  }
+  #overview .history:not(.expanded) .history-heading {
+    flex-wrap: nowrap;
+  }
+  #overview .history:not(.expanded) .history-heading h2 {
+    font-size: 1rem;
+    line-height: 1.25;
+  }
+  #overview .history:not(.expanded) .history-heading p {
+    font-size: 0.75rem;
+    line-height: 1.25;
+    margin-top: 2px;
+  }
+  #overview .history:not(.expanded) .table-scroll {
+    margin-bottom: 44px;
+  }
+  #overview .history:not(.expanded) th,
+  #overview .history:not(.expanded) td {
+    padding-block: 4px;
+  }
+}

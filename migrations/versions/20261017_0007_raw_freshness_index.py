@@ -5,7 +5,7 @@ coalesce(source_end_time, source_start_time). With this index each probe is a si
 backward index scan (ORDER BY ... DESC LIMIT 1) instead of a full-table GROUP BY.
 
 On PostgreSQL the index is built CONCURRENTLY so webhook ingestion is not blocked; it
-also drops the ad-hoc CASE-expression index created by hand on 2026-10-17 (VM 130).
+also drops the ad-hoc CASE-expression index created by hand on 2026-10-17 (the maintainer's server).
 """
 
 import sqlalchemy as sa

@@ -1,5 +1,6 @@
 """Failure diagnostics name exception classes and SQLSTATE codes, never values."""
 
+import pytest
 from sqlalchemy.exc import IntegrityError
 
 from app.core.logging import MAX_CHAIN, error_diagnostics
@@ -23,8 +24,11 @@ def wrapped(sqlstate):
         return IntegrityError("INSERT ... VALUES (:raw)", {"raw": MARKER}, driver)
 
 
-def test_database_error_keeps_class_chain_and_sqlstate_only():
+@pytest.mark.parametrize("attribute", ["sqlstate", "pgcode"])
+def test_database_error_keeps_class_chain_and_sqlstate_only(attribute):
     error = wrapped("23505")
+    del error.orig.sqlstate
+    setattr(error.orig, attribute, "23505")
     error.__cause__ = error.orig
     assert error_diagnostics(error) == {
         "error_chain": "IntegrityError < DriverError < KeyError",

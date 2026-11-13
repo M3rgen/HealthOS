@@ -5,9 +5,9 @@ from datetime import timedelta
 import pytest
 from retrieval_records import END, START, Client, point
 from sqlalchemy import select
+from support.ownership import horizon as horizon
+from support.ownership import runner
 from sync_ownership_records import service
-from test_backfill_ownership import horizon as horizon
-from test_backfill_ownership import runner
 
 from app.core.timeutil import as_utc
 from app.google_health import pagination

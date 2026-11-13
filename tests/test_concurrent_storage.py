@@ -7,7 +7,7 @@ from app.db.base import Base
 from app.google_health.data_types import REGISTRY
 from app.models.health import HeartRate
 from app.models.state import RawHealthData
-from app.services.storage import store_records
+from app.services.archive.storage import store_records
 
 
 def _record(bpm):

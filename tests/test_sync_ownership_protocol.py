@@ -26,20 +26,17 @@ def protocol(monkeypatch):
     connection.closed = connection.invalidated = False
     connection.begin = transaction
     connection.scalar.return_value = True
-    isolated = SimpleNamespace(connect=AsyncMock(return_value=connection), dispose=AsyncMock())
-    create = Mock(return_value=isolated)
-    monkeypatch.setattr(ownership, "create_async_engine", create)
+    engine.connect = AsyncMock(return_value=connection)
+    engine.get_execution_options.return_value = {"ownership_concurrency": 2}
     return SimpleNamespace(
         sessions=SimpleNamespace(kw={"bind": engine}),
         engine=engine,
         connection=connection,
-        isolated=isolated,
-        create=create,
     )
 
 
 @pytest.mark.parametrize("ending", ["success", "body-error", "acquire-error", "cancel", "busy"])
-async def test_lock_connection_is_isolated_and_discarded_on_every_exit(protocol, ending):
+async def test_shared_pool_connection_is_discarded_on_every_exit(protocol, ending):
     connection = protocol.connection
     if ending in {"acquire-error", "cancel"}:
         connection.scalar.side_effect = (
@@ -65,23 +62,27 @@ async def test_lock_connection_is_isolated_and_discarded_on_every_exit(protocol,
             await run()
     else:
         await run()
-    protocol.engine.connect.assert_not_called()
+    protocol.engine.connect.assert_awaited_once()
+    protocol.engine.pool.recreate.assert_not_called()
     assert connection.scalar.call_args.args[1] == {"namespace": 0x48455331, "key": -2018325127}
     connection.invalidate.assert_awaited_once()
     connection.close.assert_awaited_once()
-    assert protocol.isolated.dispose.await_count >= 1
+    protocol.engine.dispose.assert_not_called()
 
 
-def timed_out():
-    return DBAPIError("SELECT", {}, SimpleNamespace(sqlstate=ownership.LOCK_NOT_AVAILABLE))
+def timed_out(attribute):
+    return DBAPIError("SELECT", {}, SimpleNamespace(**{attribute: ownership.LOCK_NOT_AVAILABLE}))
 
 
 @pytest.mark.parametrize("ending", ["acquired", "error", "cancel"])
-async def test_waiter_queues_on_its_one_connection_until_acquired(protocol, monkeypatch, ending):
+@pytest.mark.parametrize("attribute", ["sqlstate", "pgcode"])
+async def test_waiter_queues_on_its_one_connection_until_acquired(
+    protocol, monkeypatch, ending, attribute
+):
     connection = protocol.connection
     connection.scalar.return_value = False
     contended, blocked = asyncio.Event(), asyncio.Event()
-    outcomes = [timed_out(), timed_out()]
+    outcomes = [timed_out(attribute), timed_out(attribute)]
     if ending == "error":
         outcomes.append(DBAPIError("SELECT", {}, SimpleNamespace(sqlstate="57P01")))
 
@@ -106,14 +107,14 @@ async def test_waiter_queues_on_its_one_connection_until_acquired(protocol, monk
 
     task = asyncio.create_task(run())
     if ending == "cancel":
-        await asyncio.wait_for(blocked.wait(), 5)
+        await asyncio.wait_for(blocked.wait(), 30)
         task.cancel()
     expected = {"error": DBAPIError, "cancel": asyncio.CancelledError}.get(ending)
     with pytest.raises(expected) if expected else nullcontext():
-        await asyncio.wait_for(task, 5)
+        await asyncio.wait_for(task, 30)
     assert contended.is_set()
     # Every timed-out slice requeues on the same backend; no reconnect per retry.
-    protocol.isolated.connect.assert_awaited_once()
+    protocol.engine.connect.assert_awaited_once()
     waits = [c.args[0] for c in connection.execute.await_args_list]
     assert waits == [ownership.WAIT_SLICE, ownership.WAIT_LOCK] * 3
     connection.invalidate.assert_awaited_once()
@@ -165,7 +166,7 @@ async def test_repeated_cancellation_cannot_interrupt_lock_release(protocol):
             pass
 
     task = asyncio.create_task(run())
-    await asyncio.wait_for(started.wait(), 5)
+    await asyncio.wait_for(started.wait(), 30)
     task.cancel()
     asyncio.get_running_loop().call_soon(task.cancel)
     release.set()

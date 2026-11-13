@@ -17,6 +17,7 @@ from raw_response_records import (
     SPEC,
     PausedBody,
     Tokens,
+    WatchedArchive,
     body,
     client,
     no_secret,
@@ -26,6 +27,7 @@ from raw_response_records import (
 from sqlalchemy import func, select, text
 from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from support.loop_clock import advance_loop_clock
 from typer.testing import CliRunner
 
 from app.cli import main as cli
@@ -36,10 +38,11 @@ from app.google_health.client import GoogleHealthClient, GoogleHealthError
 from app.google_health.data_types import REGISTRY
 from app.models.raw_versions import RawApiResponse, RawHealthDataEvent, RawHealthDataVersion
 from app.models.state import RawHealthData
-from app.services.raw_history import record_history
-from app.services.responses import DatabaseResponseArchive, verify_responses
-from app.services.storage import store_page
-from app.sync.deletions import mark_source_deletions
+from app.services.archive.raw_history import record_history
+from app.services.archive.responses import DatabaseResponseArchive, verify_responses
+from app.services.archive.source_deletions import mark_source_deletions
+from app.services.archive.storage import store_page
+from app.services.providers.ingestion import GoogleSource
 from app.sync.incremental import IncrementalSync
 
 
@@ -139,35 +142,6 @@ async def test_records_and_their_page_commit_together(sessions) -> None:
     async with sessions() as session:
         assert await session.scalar(select(func.count()).select_from(RawApiResponse)) == 0
         assert await session.scalar(select(func.count()).select_from(RawHealthData)) == 0
-
-
-async def test_sync_tags_responses_and_keeps_them_when_storing_fails(sessions, monkeypatch) -> None:
-    pages = [body(steps(1)), body(steps(2))]
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, content=pages.pop(0))
-
-    google = client(handler, sessions)
-    incremental = IncrementalSync(
-        Settings(_env_file=None, app_env="test"), sessions, google, {"steps": SPEC}
-    )
-    await incremental.run("steps")
-    (first,) = await stored(sessions)
-    assert first.source == "sync" and first.context_id.startswith("sync:")
-
-    import app.services.storage as storage
-
-    async def broken(*args, **kwargs):
-        raise RuntimeError("normalizer bug")
-
-    monkeypatch.setattr(storage, "_upsert_normalized_many", broken)
-    with pytest.raises(RuntimeError, match="normalizer bug"):
-        await incremental.run("steps")
-    rows = await stored(sessions)
-    assert len(rows) == 2 and rows[1].body == body(steps(2))  # kept although records rolled back
-    async with sessions() as session:
-        raw = await session.scalar(select(RawHealthData))
-    assert raw is not None and raw.raw_json == steps(1) and raw.response_id == first.id
 
 
 async def test_versions_link_to_the_page_they_came_from(sessions) -> None:
@@ -284,7 +258,7 @@ def test_cli_exports_bytes_and_verify_catches_tampering(tmp_path, monkeypatch) -
 
 
 async def test_verify_reports_a_redefined_sqlite_guard(sessions) -> None:
-    from app.services.raw_history import verify_guards
+    from app.services.archive.raw_history_verification import verify_guards
 
     async with sessions() as session:
         assert await verify_guards(session) == []
@@ -354,7 +328,7 @@ async def test_invalid_compression_is_archived_and_retried(
 
 
 async def _cancel_when(task: asyncio.Task, started: asyncio.Event) -> None:
-    await asyncio.wait_for(started.wait(), 5)
+    await asyncio.wait_for(started.wait(), 30)
     task.cancel()
     with pytest.raises(asyncio.CancelledError):  # the cancellation is never swallowed
         await task
@@ -394,24 +368,30 @@ async def test_cancellation_keeps_wire_bytes_and_closes_the_response(
         return httpx.Response(200, headers=headers, stream=stream)
 
     google = client(handler, sessions)
-    monkeypatch.setattr(module, "KEEP_ON_CANCEL_SECONDS", 0.1)
+    archive = WatchedArchive(sessions, 1 + retry)
+    google.archive = archive
+    monkeypatch.setattr(module, "KEEP_ON_CANCEL_SECONDS", 30)
     start = datetime(2026, 8, 17, tzinfo=UTC)
     with provenance(source="backfill", context_id="backfill:synthetic"):
         task = asyncio.create_task(google.list_data_points(SPEC, start, start + timedelta(hours=1)))
     try:
         await asyncio.wait_for(
-            (stream.closing if phase in {"close", "read-error"} else stream.reading).wait(), 5
+            (stream.closing if phase in {"close", "read-error"} else stream.reading).wait(), 30
         )
         task.cancel("secret-access-token")
-        await asyncio.wait_for(stream.closing.wait(), 5)
+        await asyncio.wait_for(stream.closing.wait(), 30)
         if cleanup == "cancel-again":
             task.cancel("secret-access-token")
             await asyncio.sleep(0)
-        if cleanup != "timeout":
+        if cleanup == "timeout":
+            # The close never returns: it runs the budget out once the archive write is done.
+            await asyncio.wait_for(archive.done.wait(), 30)
+            advance_loop_clock()
+        else:
             stream.release.set()
         with pytest.raises(asyncio.CancelledError):
-            await asyncio.wait_for(task, 1)
-        await asyncio.wait_for(stream.closed.wait(), 1)
+            await asyncio.wait_for(task, 30)
+        await asyncio.wait_for(stream.closed.wait(), 30)
         rows = await stored(sessions)
         assert len(calls) == 1 + retry and len(rows) == 1 + retry
         if retry:
@@ -450,7 +430,7 @@ async def test_a_page_received_before_a_cancellation_is_kept(sessions, monkeypat
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, content=body(steps(1)))
 
-    import app.services.storage as storage
+    import app.services.archive.storage as storage
 
     started = asyncio.Event()
 
@@ -462,7 +442,7 @@ async def test_a_page_received_before_a_cancellation_is_kept(sessions, monkeypat
     incremental = IncrementalSync(
         Settings(_env_file=None, app_env="test"),
         sessions,
-        client(handler, sessions),
+        GoogleSource(client(handler, sessions)),
         {"steps": SPEC},
     )
     await _cancel_when(asyncio.create_task(incremental.run("steps")), started)
@@ -517,7 +497,7 @@ async def test_a_store_interrupted_by_cancellation_still_finishes(
             if stalled:
                 await release.wait()
             else:
-                await asyncio.sleep(0.05)
+                await asyncio.sleep(0.05)  # slow but well within KEEP_ON_CANCEL_SECONDS
             await super().keep(responses)
             finished.set()
 
@@ -529,11 +509,13 @@ async def test_a_store_interrupted_by_cancellation_still_finishes(
     if stalled:
         monkeypatch.setattr("app.google_health.client.KEEP_ON_CANCEL_SECONDS", 0.05)
     try:
-        await asyncio.wait_for(_cancel_when(asyncio.create_task(google.get_identity()), started), 1)
+        await asyncio.wait_for(
+            _cancel_when(asyncio.create_task(google.get_identity()), started), 30
+        )
         assert finished.is_set() != stalled
     finally:
         release.set()
-        await asyncio.wait_for(finished.wait(), 1)
+        await asyncio.wait_for(finished.wait(), 30)
         await google.http.aclose()
     (row,) = await stored(sessions)
     assert row.source == "identity" and row.body == b'{"healthUserId": "synthetic"}'
@@ -542,7 +524,7 @@ async def test_a_store_interrupted_by_cancellation_still_finishes(
 async def test_a_backfill_page_received_before_a_cancellation_is_kept(
     sessions, monkeypatch
 ) -> None:
-    import app.services.storage as storage
+    import app.services.archive.storage as storage
     from app.google_health.pagination import PageBudget
     from app.models.state import BackfillJob, JobStatus
     from app.sync.backfill import BackfillService
@@ -569,7 +551,7 @@ async def test_a_backfill_page_received_before_a_cancellation_is_kept(
     backfill = BackfillService(
         Settings(_env_file=None, app_env="test"),
         sessions,
-        client(handler, sessions),
+        GoogleSource(client(handler, sessions)),
         {"steps": SPEC},
     )
     window = backfill._run_next_window("steps", PageBudget())
@@ -579,7 +561,7 @@ async def test_a_backfill_page_received_before_a_cancellation_is_kept(
 
 
 async def test_gap_repair_keeps_a_page_whose_records_fail_to_store(sessions, monkeypatch) -> None:
-    import app.services.storage as storage
+    import app.services.archive.storage as storage
     from scripts.audit_date_gaps import repair_window
 
     def handler(request: httpx.Request) -> httpx.Response:

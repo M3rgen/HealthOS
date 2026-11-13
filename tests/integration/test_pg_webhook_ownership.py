@@ -8,7 +8,7 @@ from contextlib import AsyncExitStack
 import pytest
 from sqlalchemy import event, text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
-from test_pg_sync_ownership import receive
+from support.ownership import receive
 from webhook_ownership_records import age, ingest, processor, snapshot
 
 from app.google_health.client import Page
@@ -20,7 +20,7 @@ pytestmark = pytest.mark.integration
 
 def worker(url, pipe, batch, phase):
     async def run():
-        engine = create_async_engine(url, pool_size=1, max_overflow=0, pool_timeout=1)
+        engine = create_async_engine(url, pool_size=5, max_overflow=0, pool_timeout=30)
         sessions = async_sessionmaker(engine, expire_on_commit=False)
 
         class Client:
@@ -111,8 +111,9 @@ async def test_notification_process_ownership(pg_sessions, phase, ending):
             locks = (
                 await session.execute(
                     text(
-                        "SELECT l.pid, l.classid, a.xact_start FROM pg_locks l "
+                        "SELECT l.pid, l.classid, a.state FROM pg_locks l "
                         "JOIN pg_stat_activity a ON a.pid = l.pid "
+                        "AND a.datname = current_database() "
                         "WHERE l.locktype = 'advisory' AND l.objsubid = 2 AND l.granted "
                         "AND ((l.classid = :notification AND l.objid = :element) "
                         "OR (l.classid = :run AND l.objid = :kind))"
@@ -126,7 +127,8 @@ async def test_notification_process_ownership(pg_sessions, phase, ending):
                 )
             ).all()
         assert len(locks) == (1 if phase == "gap" else 2)
-        assert all(lock.xact_start is None for lock in locks)
+        # No lock held across the fetch: state, not xact_start (test_pg_backfill_ownership).
+        assert all(lock.state == "idle" for lock in locks)
         if ending == "completed":
             await blocker.aclose()
             owner.send({"google": "done", "type": "retry", "gap": "resume"}[phase])
@@ -179,14 +181,7 @@ async def test_notification_process_ownership(pg_sessions, phase, ending):
         for table in final.keys() - {"webhook_events"}:
             assert redelivered[table] == final[table]
     finally:
-        for process, pipe in children:
-            if process.is_alive():
-                process.terminate()
-            await asyncio.to_thread(process.join, 10)
-            if process.is_alive():
-                process.kill()
-                await asyncio.to_thread(process.join, 10)
-            pipe.close()
+        await stop_children(children)
         await blocker.aclose()
 
 
@@ -209,12 +204,12 @@ async def test_batch_summary_reads_outcomes_after_obtaining_its_write_lock(pg_se
             await blocker.get(WebhookEvent, batch, with_for_update=True)
             event.listen(engine, "before_cursor_execute", pending)
             task = asyncio.create_task(runner._finalize_batch(batch))
-            await asyncio.wait_for(blocked.wait(), 5)
+            await asyncio.wait_for(blocked.wait(), 30)
             # A newer attempt commits while the older finalizer is queued.
             async with pg_sessions.begin() as session:
                 row = await session.get(WebhookNotification, digest)
                 row.status, row.last_error = "completed", None
-        await asyncio.wait_for(task, 10)
+        await asyncio.wait_for(task, 30)
         async with pg_sessions() as session:
             result = await session.get(WebhookEvent, batch)
             assert result.failure_count == 0 and result.last_error is None
@@ -224,3 +219,14 @@ async def test_batch_summary_reads_outcomes_after_obtaining_its_write_lock(pg_se
         if task is not None:
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
+
+
+async def stop_children(children):
+    for process, pipe in children:
+        if process.is_alive():
+            process.terminate()
+        await asyncio.to_thread(process.join, 10)
+        if process.is_alive():
+            process.kill()
+            await asyncio.to_thread(process.join, 10)
+        pipe.close()

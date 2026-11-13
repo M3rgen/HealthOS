@@ -1,21 +1,39 @@
-# Optional Garmin Connect Personal API key mount (off by default). Add this file to
-# COMPOSE_FILE in .env (install.sh does it when you pick Garmin), for example
+# Garmin Connect Personal API: read-only key mount for the optional Garmin source.
+#
+# Use it without editing any tracked file, by adding to .env (Compose reads COMPOSE_FILE from it):
 #   COMPOSE_FILE=docker-compose.yml:docker-compose.garmin.yml
-# and set in .env:
-#   GARMIN_ENABLED=true
-#   GARMIN_API_KEY_HOST_FILE=/absolute/path/to/connect-personal-api-key
-#   GARMIN_API_KEY_HOST_GID=<group id of that file>
-# The key stays in its own file, read-only in the container, never in .env. The app runs as
-# uid 10001, so on Linux Docker Engine the host file must be readable by its group (mode 640)
-# and that group is added to the container below. install.sh sets both.
+#   HEALTHOS_SOURCES=google,garmin   # or garmin
+#   GARMIN_API_KEY_HOST_FILE=/opt/healthos/secrets/garmin-personal-api-key
+#
+# The container runs as UID 10001 and must be able to read the file. Install the key so that
+# UID alone can (host commands, run once, and after every key rotation):
+#   sudo install -d -m 700 -o 10001 -g 10001 /opt/healthos/secrets
+#   sudo install -m 400 -o 10001 -g 10001 <downloaded-key-file> \
+#     /opt/healthos/secrets/garmin-personal-api-key
+# HealthOS checks only that the file is readable, not its owner or mode, so this tight mode is
+# yours to keep (mode 444 would also run). Check with setpriv (util-linux, installed on Debian;
+# no host user account needed):
+#   sudo setpriv --reuid=10001 --regid=10001 --clear-groups test -r /opt/healthos/secrets/garmin-personal-api-key && echo ok
+# Or, with this Compose overlay configured:
+#   docker compose run --rm app healthos garmin-status
+# Check for "key_file_present": true in the output (no Garmin request).
+#
+# The guided installers (install.sh, install.ps1) leave the key with its owner, mode 640, and set
+# GARMIN_API_KEY_HOST_GID to the file's group, which group_add below gives the container; the
+# default 10001 changes nothing for the setup above.
 services:
-  app:
+  app: &garmin-key
     environment:
       GARMIN_API_KEY_FILE: /run/secrets/garmin-personal-api-key
     group_add:
       - "${GARMIN_API_KEY_HOST_GID:-10001}"
     volumes:
       - type: bind
-        source: ${GARMIN_API_KEY_HOST_FILE:?Set GARMIN_API_KEY_HOST_FILE to the Garmin key file}
+        source: ${GARMIN_API_KEY_HOST_FILE:?Set GARMIN_API_KEY_HOST_FILE to the host path of the Garmin key file}
         target: /run/secrets/garmin-personal-api-key
         read_only: true
+        # A mistyped path must stop `up` and name that path, not make Docker create it as a
+        # root-owned directory. (`docker compose up` errors out with "bind source path does not exist".)
+        bind:
+          create_host_path: false
+  migrate: *garmin-key

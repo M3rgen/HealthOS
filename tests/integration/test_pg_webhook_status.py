@@ -11,9 +11,10 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.orm import Session
 
 from app.db.base import Base
+from app.db.guards import definitions
 from app.models.state import WebhookEvent
-from app.models.webhook_status import PG_TRIGGER_SQL, TABLE, WebhookStatusEvent
-from app.services.raw_history import verify_guards
+from app.models.webhook_status import GUARDS, TABLE, WebhookStatusEvent
+from app.services.archive.raw_history_verification import verify_guards
 
 pytestmark = pytest.mark.integration
 NOW = datetime(2026, 10, 1, tzinfo=UTC)
@@ -79,7 +80,7 @@ async def test_verify_reports_missing_redefined_or_non_always_guards(
         if tampering in ("missing", "redefined"):
             await session.execute(text(f"DROP TRIGGER {trigger} ON {TABLE}"))
             if tampering == "redefined":
-                sql = PG_TRIGGER_SQL[trigger][1]
+                sql = definitions(GUARDS)[0][trigger][1]
                 sql = (
                     sql.replace("FOR EACH ROW\n", "FOR EACH ROW WHEN (false)\n")
                     if suffix == "append_only"
@@ -149,7 +150,7 @@ def test_guard_migration_preserves_rows_other_guards_and_shared_function(
         command.upgrade(alembic_config, "20261025_0019")
         after, guards, new_function = snapshot()
         assert after == before and new_function == function
-        assert set(guards) - set(old_guards) == set(PG_TRIGGER_SQL)
+        assert set(guards) - set(old_guards) == set(definitions(GUARDS)[0])
         assert all(guards[name] == sql for name, sql in old_guards.items())
         command.upgrade(alembic_config, "head")
         command.check(alembic_config)

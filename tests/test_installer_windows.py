@@ -133,15 +133,15 @@ def test_scripts_avoid_powershell7_only_syntax(path: Path):
 
 def test_marker_line_and_version():
     source = text(INSTALLER)
-    assert re.search(rf'^\${MARKER} = "(\d+\.\d+\.\d+)"$', source, re.MULTILINE)
+    # X.Y.Z or an interim X.Y.Z.N (docs/DEVELOPMENT.md, version policy), the same as pyproject.toml.
+    assert re.search(rf'^\${MARKER} = "(\d+\.\d+\.\d+(?:\.\d+)?)"$', source, re.MULTILINE)
     version = re.search(rf'^\${MARKER} = "([^"]+)"$', source, re.MULTILINE).group(1)
     project = re.search(r'^version = "([^"]+)"', text(ROOT / "pyproject.toml"), re.MULTILINE)
     assert project and version == project.group(1)
     for path in PS_FILES:
         if path != INSTALLER:
             assert MARKER not in text(path), path.name
-    for name in ("docker-compose.windows.yml", ".env.example"):
-        assert MARKER not in text(ROOT / name)
+    assert MARKER not in text(ROOT / ".env.example")
 
 
 def test_parameters_match_the_shared_contract():
@@ -202,14 +202,14 @@ def test_nothing_is_deleted_or_wiped():
 
 def test_installer_env_rules():
     source = text(INSTALLER)
-    # .env is copied byte for byte to a new .env.bak-<stamp> (never over an existing file,
-    # readable only by you), then replaced atomically.
+    # .env is copied byte for byte to a new <slug>.env.bak-<stamp> in the per-user backup
+    # directory (never over an existing file, readable only by you), then replaced atomically.
     assert (
         "Write-PrivateBytes -Path $backup -Bytes ([System.IO.File]::ReadAllBytes($envFile))"
         in source
     )
     assert "$mode = [System.IO.FileMode]::CreateNew" in source
-    assert ".bak-$stamp" in source
+    assert "((Get-EnvBackupPrefix) + $stamp)" in source
     # Secrets are generated with .NET, only when missing or empty.
     assert "RandomNumberGenerator" in source
     for secret in ("POSTGRES_PASSWORD", "APP_UI_TOKEN", "GOOGLE_TOKEN_ENCRYPTION_KEY"):
@@ -254,9 +254,12 @@ def test_scheduled_tasks_and_autostart():
     assert "-DryRun" in autostart or "[switch]$DryRun" in autostart
 
 
-def test_windows_compose_override_is_inert():
-    document = yaml.safe_load(text(ROOT / "docker-compose.windows.yml"))
-    assert document == {"services": {}}
+@pytest.mark.parametrize("name", ["docker-compose.windows.yml", "docker-compose.linux.example.yml"])
+def test_removed_compose_overrides_stay_managed(name):
+    # The empty compatibility files are gone from the repository; an older COMPOSE_FILE that still
+    # names one must lose the entry instead of keeping it as one of the user's files.
+    assert not (ROOT / name).exists()
+    assert f"'{name}'" in text(INSTALLER)
 
 
 # ---------------------------------------------------------------------------------------------
@@ -290,7 +293,13 @@ def home(tmp_path: Path) -> dict[str, str]:
         APPDATA=str(base / "Roaming"),
         LOCALAPPDATA=str(base / "Local"),
     )
-    for name in ("COMPOSE_FILE", "COMPOSE_PATH_SEPARATOR", "BACKUP_RETENTION_DAYS"):
+    # GITHUB_ACTIONS too: the installers mask secrets under CI, so a test that wants that sets it.
+    for name in (
+        "COMPOSE_FILE",
+        "COMPOSE_PATH_SEPARATOR",
+        "BACKUP_RETENTION_DAYS",
+        "GITHUB_ACTIONS",
+    ):
         env.pop(name, None)
     return env
 
@@ -482,7 +491,8 @@ def test_full_dry_run_with_every_source(checkout: Path, home: dict[str, str], tm
     assert len(fernet) == 44 and len(base64.urlsafe_b64decode(fernet)) == 32
     assert re.fullmatch(r"Bearer [A-Za-z0-9_-]{43}", values["GOOGLE_HEALTH_WEBHOOK_AUTHORIZATION"])
     assert values["GOOGLE_CLIENT_ID"] == "synthetic.apps.example"
-    assert values["GARMIN_ENABLED"] == "true"
+    assert "GARMIN_ENABLED" not in values  # BEL-12: HEALTHOS_SOURCES alone selects Garmin
+    assert values["HEALTHOS_SOURCES"] == "google,garmin,apple"
     assert Path(values["GARMIN_API_KEY_HOST_FILE"]) == key.resolve()
     assert values["APPLE_RECEIVER_ENABLED"] == "true"
     assert values["APPLE_RECEIVER_TOKEN_HOST_FILE"].endswith("apple-receiver-token")
@@ -529,7 +539,8 @@ def test_missing_default_garmin_key_continues_with_garmin_off(checkout: Path, ho
     result, out = dry_run(checkout, home, "-Sources", "garmin", "-Backups", "no")
     assert result.returncode == 0, result.stdout + result.stderr
     values = env_values(out)
-    assert values["GARMIN_ENABLED"] == "false"
+    assert values.get("GARMIN_ENABLED", "false") == "false"
+    assert values["HEALTHOS_SOURCES"] == "none"
     assert "garmin" not in values["COMPOSE_FILE"]
     assert "Garmin is off" in result.stdout and "-Sources garmin" in result.stdout
     assert "connect-personal-api-key" in result.stdout
@@ -640,12 +651,17 @@ def test_bridge_task_never_rewrites_env_statically():
     launcher = text(ROOT / "scripts" / "start_codex_bridge.py")
     assert "def update_env(token):" in launcher
     writes = [m.start() for m in re.finditer(r"(?<!def )write_private\(\s*path\b", launcher)]
-    update_env = launcher.index("def update_env(token):")
-    assert writes and all(update_env < at < launcher.index("def supervise(") for at in writes)
+    owners = {re.findall(r"^def (\w+)\(", launcher[:at], re.M)[-1] for at in writes}
+    assert "update_env" in owners
+    # Any other writer of a variable named path writes a file of the bridge home, never .env.
+    for name in owners - {"update_env"}:
+        body = launcher[launcher.index(f"def {name}(") :]
+        body = body[: body.index("\ndef ")]
+        assert 'ROOT / ".env"' not in body and "bridge_home /" in body, name
     # install.ps1 writes the token and URL once, only when missing or empty.
     source = text(INSTALLER)
     assert "Set-EnvSecret 'CODEX_BRIDGE_TOKEN' (New-UrlSafeSecret)" in source
-    assert "Set-EnvSecret 'CODEX_BRIDGE_URL' 'ws://host.docker.internal:8766'" in source
+    assert "Set-EnvSecret 'CODEX_BRIDGE_URL' 'wss://host.docker.internal:8766'" in source
 
 
 def test_bridge_dependencies_match_install_sh():
@@ -672,7 +688,7 @@ def test_bridge_python_range_is_shared_and_matches_the_lock():
     bridge_task = text(WINDOWS_DIR / "start-umay-bridge.ps1")
     assert "'--no-dev', '--python', (Get-HealthOSBridgePython)," in bridge_task
     ci = yaml.safe_load(text(ROOT / ".github" / "workflows" / "ci.yml"))
-    steps = ci["jobs"]["installer"]["steps"]
+    steps = ci["jobs"]["installer_hosts"]["steps"]
     assert any(f"--python '{spec}'" in step.get("run", "") for step in steps)
     # Every minor the range allows must have a psycopg-binary wheel in uv.lock.
     low, high = re.fullmatch(r">=3\.(\d+),<3\.(\d+)", spec).groups()
@@ -792,7 +808,7 @@ def test_bridge_task_passes_the_env_token_and_never_rewrites_env(
     assert result.returncode == 0, result.stdout + result.stderr + bridge_task_log(home)
     assert text(root / ".env") == env_text
     # On Windows the fake uv is a .cmd shim: the quoted range must survive cmd.exe.
-    assert "run --frozen --no-dev --python >=3.12,<3.15 --project" in text(tmp_path / "uv.log")
+    assert "run --frozen --no-dev --python >=3.12,<3.14 --project" in text(tmp_path / "uv.log")
     log = next(Path(home["HOME"]).rglob("umay-bridge.log"))
     assert "bridge token=token-from-dotenv" in text(log)
     # No token in .env: the task stops before starting anything.
@@ -812,8 +828,10 @@ def test_umay_dry_run_fills_bridge_values_once(checkout: Path, home: dict[str, s
     assert result.returncode == 0, result.stdout + result.stderr
     values = env_values(out)
     assert re.fullmatch(r"[A-Za-z0-9_-]{43}", values["CODEX_BRIDGE_TOKEN"])
-    assert values["CODEX_BRIDGE_URL"] == "ws://host.docker.internal:8766"
+    # .env.example already carries the default wss:// address; it is kept, not rewritten.
+    assert values["CODEX_BRIDGE_URL"] == "wss://host.docker.internal:8766"
     assert "[dry-run] uv sync --frozen --no-dev" in result.stdout
+    assert "records Umay requests are sent to OpenAI" in result.stdout  # privacy note
     (checkout / ".env").write_text(
         "CODEX_BRIDGE_TOKEN=existing\nCODEX_BRIDGE_URL=ws://custom:1\n", encoding="utf-8"
     )
@@ -824,7 +842,7 @@ def test_umay_dry_run_fills_bridge_values_once(checkout: Path, home: dict[str, s
     assert values["CODEX_BRIDGE_URL"] == "ws://custom:1"
 
 
-def run_installer_functions(tmp_path: Path, body: str):
+def run_installer_functions(tmp_path: Path, body: str, env: dict[str, str] | None = None):
     """Runs `body` with every function of install.ps1 (and common.ps1) loaded, main not run."""
     script = tmp_path / "unit.ps1"
     script.write_text(
@@ -840,7 +858,7 @@ def run_installer_functions(tmp_path: Path, body: str):
         "$script:Notes = New-Object System.Collections.Generic.List[string]\n" + body,
         encoding="utf-8",
     )
-    return pwsh("-File", str(script))
+    return pwsh("-File", str(script), env=env)
 
 
 def output_values(stdout: str) -> dict[str, str]:
@@ -870,11 +888,12 @@ def compose_case(tmp_path: Path, env_text: str | None, mode: str, override: bool
 @pytest.mark.parametrize(
     "env_text, mode, override, expected",
     [
-        # D3: unknown entries keep their order; managed ones (also ./-prefixed and the inert
-        # windows file) are chosen by the installer.
+        # D3: unknown entries keep their order; managed ones (also ./-prefixed and the two removed
+        # compatibility files) are chosen by the installer.
         (
             "COMPOSE_PATH_SEPARATOR=;\nCOMPOSE_FILE=mine-a.yml;./docker-compose.yml;"
             "docker-compose.dev.yml;mine-b.yml;docker-compose.windows.yml;"
+            ".\\docker-compose.linux.example.yml;"
             "docker-compose.garmin.yml;sub/mine-c.yml\nGARMIN_ENABLED=false\n",
             "full",
             False,
@@ -900,9 +919,9 @@ def test_compose_file_keeps_user_entries(tmp_path, env_text, mode, override, exp
 @pytest.mark.parametrize(
     "env_text, expected",
     [
-        (None, "trial"),
-        ("POSTGRES_PASSWORD=x\n", "trial"),
-        ("COMPOSE_FILE=\n", "trial"),
+        (None, "full"),
+        ("POSTGRES_PASSWORD=x\n", "full"),
+        ("COMPOSE_FILE=\n", "full"),
         ("COMPOSE_FILE=docker-compose.yml;docker-compose.dev.yml\n", "trial"),
         ("COMPOSE_FILE=docker-compose.yml;./docker-compose.dev.yml\n", "trial"),
         ("COMPOSE_PATH_SEPARATOR=:\nCOMPOSE_FILE=docker-compose.yml:docker-compose.dev.yml\n", "trial"),
@@ -946,7 +965,7 @@ def test_rerun_keeps_full_mode_unless_mode_is_given(checkout: Path, home: dict[s
 @needs_pwsh
 def test_fresh_install_keeps_an_implicit_override(checkout: Path, home: dict[str, str]):
     (checkout / "docker-compose.override.yml").write_text("services: {}\n", encoding="utf-8")
-    result, out = dry_run(checkout, home, "-Sources", "none", "-Backups", "no")
+    result, out = dry_run(checkout, home, "-Mode", "trial", "-Sources", "none", "-Backups", "no")
     assert result.returncode == 0, result.stdout + result.stderr
     assert env_values(out)["COMPOSE_FILE"] == (
         "docker-compose.yml;docker-compose.dev.yml;docker-compose.override.yml"
@@ -1070,23 +1089,55 @@ def test_protect_file_result_passes_the_key_check(tmp_path: Path):
 )
 def test_enable_flags_follow_one_rule(tmp_path: Path, current: str, expected: str):
     # D11: flipped to true only when empty or false/0/no/off (any case); other values stay and
-    # count as on (the Garmin mount is kept).
+    # count as on (the Apple receiver mount is kept). Garmin has no flag the installer writes.
     repo = tmp_path / "repo"
     repo.mkdir()
     (repo / ".env").write_text(
-        f"GARMIN_ENABLED={current}\nGARMIN_API_KEY_HOST_FILE=/keys/garmin.key\n", encoding="utf-8"
+        f"APPLE_RECEIVER_ENABLED={current}\nAPPLE_RECEIVER_TOKEN_HOST_FILE=/keys/apple.token\n",
+        encoding="utf-8",
     )
     result = run_installer_functions(
         tmp_path,
         f"$script:RepoDir = '{repo}'\nRead-EnvLines\n$script:InstallMode = 'full'\n"
-        "Set-EnvEnable 'GARMIN_ENABLED'\n"
-        "Write-Output ('VALUE=' + (Get-EnvValue 'GARMIN_ENABLED'))\n"
+        "Set-EnvEnable 'APPLE_RECEIVER_ENABLED'\n"
+        "Write-Output ('VALUE=' + (Get-EnvValue 'APPLE_RECEIVER_ENABLED'))\n"
         "Write-Output ('FILES=' + (Get-ComposeFiles))\n",
     )
     assert result.returncode == 0, result.stdout + result.stderr
     found = output_values(result.stdout)
     assert found["VALUE"] == expected
-    assert "docker-compose.garmin.yml" in found["FILES"]
+    assert "docker-compose.apple.yml" in found["FILES"]
+
+
+@needs_pwsh
+@pytest.mark.parametrize(
+    "sources, flag, mounted",
+    [
+        ("garmin", "", True),
+        ("google,garmin", "false", True),
+        ("google", "true", False),
+        ("none", "true", False),
+    ],
+)
+def test_the_garmin_mount_follows_healthos_sources(
+    tmp_path: Path, sources: str, flag: str, mounted: bool
+):
+    # BEL-12: the Garmin mount follows the HEALTHOS_SOURCES being written; the older
+    # GARMIN_ENABLED does not decide it (an .env older than HEALTHOS_SOURCES has its flag carried
+    # into the list by Get-ExistingSourceList first).
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / ".env").write_text(
+        f"GARMIN_ENABLED={flag}\nGARMIN_API_KEY_HOST_FILE=/keys/garmin.key\n", encoding="utf-8"
+    )
+    result = run_installer_functions(
+        tmp_path,
+        f"$script:RepoDir = '{repo}'\nRead-EnvLines\n$script:InstallMode = 'full'\n"
+        f"$script:SourcesSetting = '{sources}'\n"
+        "Write-Output ('FILES=' + (Get-ComposeFiles))\n",
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert ("docker-compose.garmin.yml" in output_values(result.stdout)["FILES"]) is mounted
 
 
 @needs_pwsh
@@ -1095,7 +1146,8 @@ def test_off_flags_keep_the_mount_out(tmp_path: Path, current: str):
     repo = tmp_path / "repo"
     repo.mkdir()
     (repo / ".env").write_text(
-        f"GARMIN_ENABLED={current}\nGARMIN_API_KEY_HOST_FILE=/keys/garmin.key\n", encoding="utf-8"
+        f"APPLE_RECEIVER_ENABLED={current}\nAPPLE_RECEIVER_TOKEN_HOST_FILE=/keys/apple.token\n",
+        encoding="utf-8",
     )
     result = run_installer_functions(
         tmp_path,
@@ -1137,9 +1189,10 @@ def test_dry_run_preview_is_private(checkout: Path, home: dict[str, str], tmp_pa
 
 @needs_pwsh
 @pytest.mark.skipif(IS_WINDOWS, reason="POSIX mode bits stand in for the Windows ACL here")
-def test_env_backup_and_env_are_private(tmp_path: Path):
-    # D6 for the real write path (Write-EnvFile without -DryRun): .env.bak-* is a byte-exact
-    # private copy, .env stays private after the replace, older copies are narrowed.
+def test_env_backup_and_env_are_private(tmp_path: Path, home: dict[str, str]):
+    # D6 for the real write path (Write-EnvFile without -DryRun): the backup is a byte-exact
+    # private copy in the per-user directory, .env stays private after the replace, older
+    # copies next to .env are narrowed (and kept).
     repo = tmp_path / "repo"
     repo.mkdir()
     original = b"POSTGRES_PASSWORD=kept\r\nAPP_UI_TOKEN=\n"
@@ -1153,10 +1206,12 @@ def test_env_backup_and_env_are_private(tmp_path: Path):
         f"$script:RepoDir = '{repo}'\nRead-EnvLines\n"
         "Set-EnvSecret 'APP_UI_TOKEN' 'new-token'\nWrite-EnvFile\n"
         "Write-Output ('BACKUP=' + $script:EnvBackup)\n",
+        env=home,
     )
     assert result.returncode == 0, result.stdout + result.stderr
     backup = Path(output_values(result.stdout)["BACKUP"])
-    assert backup.name.startswith(".env.bak-") and backup != older
+    assert backup.parent == Path(home["HOME"]) / ".local" / "state" / "healthos" / "env-backups"
+    assert ".env.bak-" in backup.name and backup != older
     assert backup.read_bytes() == original and mode_of(backup) == 0o600
     assert mode_of(repo / ".env") == 0o600
     assert "APP_UI_TOKEN=new-token" in text(repo / ".env")
@@ -1292,7 +1347,7 @@ def test_backup_streams_bytes_exactly_and_restore_round_trips(sandbox):
         "last_attempt": {"result": "success", "timestamp": status["timestamp"]},
         "last_success_at": status["timestamp"],
     }
-    from app.services.backup_status import read_backup_status
+    from app.services.operations.backup_status import read_backup_status
 
     assert (
         read_backup_status(Path(sandbox["BACKUP_STATUS_HOST_DIR"]) / "status.json")["status"]

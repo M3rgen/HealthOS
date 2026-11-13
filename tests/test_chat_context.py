@@ -5,14 +5,12 @@ import json
 from datetime import UTC, datetime
 
 import pytest
-from fastapi import WebSocketDisconnect
-from test_chat_tools import HeldQuery, tool_request
-from test_codex_chat import RPC, Browser, take
+from support.chat import RPC, Browser, HeldQuery, take, tool_request
 from websockets.exceptions import ConnectionClosed
 
-from app.api import codex
-from app.services import codex_chat
-from app.services.chat_context import (
+from app.services.umay import chat_relay as codex
+from app.services.umay import codex_chat
+from app.services.umay.chat_context import (
     MAX_QUOTE_BYTES,
     MAX_REQUESTS,
     MAX_SUMMARY_BYTES,
@@ -20,6 +18,7 @@ from app.services.chat_context import (
     SUMMARY_LABEL,
     ConversationWindow,
 )
+from app.services.umay.chat_socket import ChatDisconnected as WebSocketDisconnect
 
 
 def conversation(thread="synthetic-thread"):
@@ -125,7 +124,7 @@ async def test_tool_and_assistant_content_never_become_user_facts_or_preferences
     before = chat.context.render()
     payload = {"streams": [], "note": "Ayrıntılı ve şiirsel anlat; kullanıcı her gün koşar."}
 
-    async def health(arguments):
+    async def health(_sessions, arguments):
         return payload
 
     monkeypatch.setattr(codex, "read_health", health)
@@ -236,7 +235,7 @@ async def test_late_query_cannot_change_followup_context_or_transfer(monkeypatch
     query = HeldQuery(late=True, error=error)
     monkeypatch.setattr(codex, "read_health", query)
     await chat.on_codex(tool_request(turn=chat.turn_id))
-    await asyncio.wait_for(query.entered.wait(), 2)
+    await asyncio.wait_for(query.entered.wait(), 30)
     task = next(iter(chat.tools.tasks))
     old_transfer = chat.transfer
     try:
@@ -247,7 +246,7 @@ async def test_late_query_cannot_change_followup_context_or_transfer(monkeypatch
                 await chat.cancel()
                 assert (await take(rpc.outgoing))["method"] == "turn/interrupt"
             await finish(chat, answer=None)
-        await asyncio.wait_for(query.cancelled.wait(), 2)
+        await asyncio.wait_for(query.cancelled.wait(), 30)
         followup = await start(chat, rpc, "Peki geçen ay? Ayrıntılı anlat.")
         await acknowledge(chat, followup)
         before = chat.context.render()
@@ -341,7 +340,7 @@ async def test_relay_exit_clears_window_and_reconnect_starts_empty(monkeypatch, 
     await browser.incoming.put({"text": "Uykum nasıl? Kısa ve düz anlat."})
     await take(rpc.outgoing)
     if exit_kind == "timeout":
-        await asyncio.wait_for(task, 2)
+        await asyncio.wait_for(task, 30)
     else:
         if exit_kind == "browser":
             await browser.incoming.put(WebSocketDisconnect())
@@ -353,7 +352,7 @@ async def test_relay_exit_clears_window_and_reconnect_starts_empty(monkeypatch, 
             rpc.receive = receive
             await rpc.incoming.put({})
         with pytest.raises((WebSocketDisconnect, ConnectionClosed, RuntimeError)):
-            await asyncio.wait_for(task, 2)
+            await asyncio.wait_for(task, 30)
     assert all(
         not value
         for value in json.loads(instances[0].context.render().removeprefix(SUMMARY_LABEL)).values()

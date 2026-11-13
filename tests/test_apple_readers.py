@@ -15,8 +15,8 @@ from apple_norm_records import PHONE, PLUS_ONE, WATCH, hae_metric, quantity, sle
 from apple_norm_records import hae_workout as hae_workout_record
 
 from app.models.apple import AppleSource
-from app.services import apple_readers
-from app.services.apple_normalize import normalize_records
+from app.services.providers import apple_readers
+from app.services.providers.apple_normalize import normalize_records
 
 DAY = date(2026, 11, 6)
 ZONE = ZoneInfo("Europe/Brussels")

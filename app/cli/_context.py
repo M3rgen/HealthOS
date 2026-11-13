@@ -12,11 +12,12 @@ from collections.abc import Callable, Coroutine
 from dataclasses import dataclass
 from typing import Any
 
+import typer
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.core.config import Settings, get_settings
-from app.db.session import SessionLocal
-from app.services.runtime import Runtime, build_runtime
+from app.db.session import SessionLocal, initialize_sessions
+from app.runtime import Runtime, build_runtime
 
 
 @dataclass
@@ -28,10 +29,16 @@ class CommandContext:
 
     @property
     def sessions(self) -> async_sessionmaker:
-        return self.session_factory()
+        sessions = self.session_factory()
+        initialize_sessions(self.settings(), sessions)
+        return sessions
 
-    def runtime(self) -> Runtime:
-        return self.runtime_factory(self.settings(), self.sessions)
+    def runtime(self, *, require_google: bool = False) -> Runtime:
+        settings = self.settings()
+        if require_google and not settings.google_enabled:
+            typer.echo("Bu kurulumda Google kaynağı kapalı.", err=True)
+            raise typer.Exit(1)
+        return self.runtime_factory(settings, self.sessions)
 
 
 context = CommandContext()

@@ -8,15 +8,17 @@ from unittest.mock import AsyncMock
 import pytest
 from cli_records import cli_database as cli_database
 from sqlalchemy import select
-from test_identity_backfill import archive_with_duplicates
+from support.identity import archive_with_duplicates
 from typer.testing import CliRunner
 
 from app.cli import main as cli
 from app.db.base import Base
-from app.services import identity_backfill, identity_decisions
-from app.services.identity_backfill import BackfillStats, LockUnavailable
-from app.services.identity_decisions import DecisionRefused, Outcome
-from app.services.source_chains import BackfillRunning
+from app.services.identities import identity_backfill, identity_decisions
+from app.services.identities.identity_backfill import LockUnavailable
+from app.services.identities.identity_backfill_stats import BackfillStats
+from app.services.identities.identity_decisions import DecisionRefused, Outcome
+from app.services.identities.identity_options import SourceDecision
+from app.services.identities.source_chain_locks import BackfillRunning
 
 RUNNER = CliRunner()
 
@@ -70,8 +72,8 @@ def test_identity_backfill_keeps_report_before_per_type_errors(cli_database, mon
         assert sessions is cli_database
         assert kwargs["after"] == datetime(2026, 1, 1, tzinfo=UTC)
         assert kwargs["data_types"] == ["steps", "sleep"]
-        kwargs["notice"]("synthetic notice")
-        kwargs["progress"]("steps", report["steps"], datetime(2026, 1, 2, tzinfo=UTC))
+        kwargs["options"].notice("synthetic notice")
+        kwargs["options"].progress("steps", report["steps"], datetime(2026, 1, 2, tzinfo=UTC))
         return report
 
     monkeypatch.setattr(identity_backfill, "identity_backfill", backfill)
@@ -102,12 +104,12 @@ def test_identity_decide_forwards_options_and_reports_progress(cli_database, mon
 
     async def decide(sessions, *args, **kwargs):
         assert sessions is cli_database
-        assert args == ("steps", "link", "abcdef", "123456")
-        assert kwargs["dry_run"] is dry_run
-        assert kwargs["note"] == "synthetic note"
-        assert kwargs["batch_size"] == 100
-        kwargs["notice"]("synthetic notice")
-        kwargs["progress"]("steps", BackfillStats(rows=2), datetime(2026, 1, 2, tzinfo=UTC))
+        assert args == ("steps",)
+        assert kwargs["request"] == SourceDecision("link", "abcdef", "123456", "synthetic note")
+        assert kwargs["options"].dry_run is dry_run
+        assert kwargs["options"].batch_size == 100
+        kwargs["options"].notice("synthetic notice")
+        kwargs["options"].progress("steps", BackfillStats(rows=2), datetime(2026, 1, 2, tzinfo=UTC))
         return outcome
 
     monkeypatch.setattr(identity_decisions, "decide_sources", decide)
@@ -163,10 +165,11 @@ def test_identity_sources_retains_json_and_service_failures(cli_database, monkey
     result = RUNNER.invoke(cli.app, ["identity-sources", "--data-type", "steps"])
     read.assert_awaited_once_with(cli_database, "steps")
     assert result.exit_code == int(failure)
-    assert result.stderr == ""
     if failure:
-        assert result.stdout == "" and result.exception is error
+        assert result.stdout == ""
+        assert result.stderr == "Komut tamamlanamadı. Hata türü: DecisionRefused\n"
     else:
+        assert result.stderr == ""
         assert result.stdout == json.dumps(report, indent=2, default=str) + "\n"
 
 

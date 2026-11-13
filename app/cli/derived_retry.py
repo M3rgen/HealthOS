@@ -4,7 +4,7 @@ import argparse
 import asyncio
 from datetime import date
 
-from app.services.derived import RetryReport, check_retry_range, retry_failed_range
+from app.services.interpretation.derived import RetryReport, check_retry_range, retry_failed_range
 
 
 def _date(value: str) -> date:
@@ -15,20 +15,25 @@ def _date(value: str) -> date:
 
 
 async def _run(first: date, last: date, timezone: str, dry_run: bool) -> RetryReport:
-    from app.db.session import SessionLocal, engine
+    from sqlalchemy.ext.asyncio import async_sessionmaker
 
-    try:
-        return await retry_failed_range(SessionLocal, first, last, timezone, dry_run=dry_run)
-    finally:
-        await engine.dispose()
+    from app.core.config import get_settings
+    from app.db.session import database_lifespan
+
+    async with database_lifespan(
+        get_settings(), async_sessionmaker(expire_on_commit=False)
+    ) as sessions:
+        return await retry_failed_range(sessions, first, last, timezone, dry_run=dry_run)
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Başarısız türetilmiş günleri yeniden dene.")
-    parser.add_argument("first", type=_date, help="Başlangıç tarihi (dahil, YYYY-MM-DD)")
-    parser.add_argument("last", type=_date, help="Bitiş tarihi (dahil, en çok 366 gün)")
-    parser.add_argument("timezone", help="IANA saat dilimi")
-    parser.add_argument("--dry-run", action="store_true", help="Yalnız adayları say; yazma.")
+    parser = argparse.ArgumentParser(description="Retry failed derived days.")
+    parser.add_argument("first", type=_date, help="First day (inclusive, YYYY-MM-DD).")
+    parser.add_argument("last", type=_date, help="Last day (inclusive, at most 366 days).")
+    parser.add_argument("timezone", help="IANA time zone.")
+    parser.add_argument(
+        "--dry-run", action="store_true", help="Count candidates only; write nothing."
+    )
     args = parser.parse_args(argv)
     try:
         check_retry_range(args.first, args.last, args.timezone)

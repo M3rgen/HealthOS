@@ -15,6 +15,7 @@ from pythonjsonlogger.json import JsonFormatter
 from raw_response_records import client as archive_client
 from rejected_page_records import UNSTORABLE_TOKENS, client_rejects
 from sqlalchemy.exc import OperationalError
+from support.google_client import Tokens
 
 from app.core.config import Settings
 from app.google_health.client import GoogleHealthClient, GoogleHealthError, InvalidPageTokenError
@@ -22,14 +23,6 @@ from app.google_health.data_types import REGISTRY
 from app.google_health.oauth import AccessToken, TokenProvider
 from app.google_health.response_page import UnstorablePaginationResponseError
 from app.sync.errors import error_summary, is_transient
-
-
-class Tokens:
-    async def get(self):
-        return "access"
-
-    def invalidate(self):
-        pass
 
 
 async def _record(target, value):
@@ -148,7 +141,7 @@ async def test_collection_field_presence_and_expected_list_type(kind, value, exp
 )
 async def test_google_api_retries_rate_limit(monkeypatch, clock, status, header, expected):
     import app.google_health.client as module
-    from app.services import storage
+    from app.services.archive import storage
 
     clock.now = datetime(2026, 10, 28, 12, tzinfo=UTC)
     monkeypatch.setattr(module, "datetime", storage.datetime)
@@ -182,6 +175,8 @@ def test_retry_after_date_failures_use_backoff(monkeypatch, phase, error):
     import app.google_health.client as module
 
     class BadDate:
+        tzinfo = UTC
+
         def __sub__(self, other):
             raise error("private-header")
 
@@ -192,8 +187,9 @@ def test_retry_after_date_failures_use_backoff(monkeypatch, phase, error):
 
     monkeypatch.setattr(module, "parsedate_to_datetime", parse)
     monkeypatch.setattr(module.random, "random", lambda: 0.25)
-    response = httpx.Response(503, headers={"Retry-After": "private-header"})
-    assert [module._retry_delay(response, n) for n in (0, 2, 6)] == [1.25, 4.25, 60]
+    assert module._retry_after("private-header") is None
+    assert module.http_retry.retry_after("private-header", parse_date=parse, strict=False) is None
+    assert [module._backoff(n) for n in (0, 2, 6)] == [1.25, 4.25, 60]
 
 
 async def test_google_api_retries_transport_failure():
@@ -481,11 +477,11 @@ async def test_unstorable_continuation_is_rejected_at_response_boundary(kind, to
 
 
 @pytest.mark.parametrize("end", [" ", "\t", "\x0b", "\x0c"])
-async def test_header_rejected_by_h11_is_not_retried_or_quoted(end, caplog):
+async def test_header_rejected_by_h11_is_not_retried_or_quoted(end, caplog, local_unix_sockets):
     """MockTransport skips header validation: send through a real h11 stack.
 
     A Unix socket keeps the real HTTP/1.1 path without TCP, so the test also runs in
-    sandboxes that forbid binding 127.0.0.1 (the Codex runner allows sockets in TMPDIR).
+    sandboxes that forbid binding 127.0.0.1 but allow Unix sockets in TMPDIR.
     A plain listening socket is drained after the request instead of an asyncio server,
     so the count is deterministic and no accepted socket outlives the test.
     """
@@ -577,7 +573,7 @@ async def test_archive_failure_is_private_and_preserves_outcome(
         lambda _: httpx.Response(status, json={"healthUserId": marker}), sessions
     )
     google.sleep = AsyncMock(side_effect=asyncio.CancelledError)
-    monkeypatch.setattr("app.services.responses.insert_responses", fail_insert)
+    monkeypatch.setattr("app.services.archive.responses.insert_responses", fail_insert)
     async with google.http:
         if status == 200:
             assert await google.get_identity() == {"healthUserId": marker}

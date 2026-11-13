@@ -8,7 +8,7 @@ import pytest
 from sqlalchemy import event, text
 
 from app.core.config import Settings
-from app.services.pipeline_health import PipelineHealthService
+from app.services.synchronization.pipeline_health import PipelineHealthService
 
 pytestmark = pytest.mark.integration
 

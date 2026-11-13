@@ -22,7 +22,7 @@ The v2 key hashes only what identifies the record physically:
 different fingerprints are either the same record seen before and after a change of its
 source, or two sources that really are distinct (two devices recording at the same instant).
 That is decided per source, never per record, and never by the write path: only the
-reconciler (``health-mirror identity-backfill``, app/services/source_chains.py) links two
+reconciler (``healthos identity-backfill``, app/services/source_chains.py) links two
 fingerprints into one device's chain, from their whole sighting history.
 
 ``device.formFactor`` and ``device.manufacturer`` are *optional device fields*: Google may add one
@@ -50,10 +50,10 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any
+from typing import Any, cast
 
+from app.core.records import RecordType
 from app.core.timeutil import as_utc
-from app.google_health.data_types import DataTypeSpec
 from app.parsers.common import google_name, payload_for, payload_hash, temporal
 
 # Intervals that Google returns while they are still in progress: the start is fixed, the
@@ -218,7 +218,7 @@ class RecordIdentity:
         return self.source, self.shape
 
 
-def record_identity(spec: DataTypeSpec, record: object) -> RecordIdentity | None:
+def record_identity(spec: RecordType, record: object) -> RecordIdentity | None:
     """The v2 identity of a record without a Google id; ``None`` when it has one (or no time).
 
     A record without any parsable time cannot be identified physically; it keeps its v1 id.
@@ -244,8 +244,8 @@ def record_identity(spec: DataTypeSpec, record: object) -> RecordIdentity | None
     shape = instant(end) if growing else None
     # The time leads the key only for locality: aliases of one period sit together in the
     # index, so the backfill (in time order) and each page's lookups touch few index pages.
-    moment = start if start is not None else end
-    assert moment is not None
+    # The temporal guard above guarantees at least one bound.
+    moment = start if start is not None else cast(datetime, end)
     stamp = as_utc(moment).strftime("%Y%m%dT%H%M%S")
     source = source_fingerprint(data_source)
     key = f"{KEY_PREFIX}:{stamp}:{digest}"
@@ -268,7 +268,7 @@ def pair_key(left: RecordIdentity, right: RecordIdentity) -> str:
     return left.key if left.key == right.key else left.match
 
 
-def key_under(spec: DataTypeSpec, record: dict, data_source: object) -> str | None:
+def key_under(spec: RecordType, record: dict, data_source: object) -> str | None:
     """The v2 key of ``record`` as the source ``data_source`` would send it (another form of
     its device: the key differs when their optional device fields do)."""
     identity = record_identity(spec, {**record, "dataSource": data_source})
@@ -297,7 +297,7 @@ def spare_record_id(identity: RecordIdentity, attempt: int) -> str:
     return f"synthetic:{SPECIFIC_PREFIX}:{digest}"
 
 
-def reading(spec: DataTypeSpec, record: object) -> str | None:
+def reading(spec: RecordType, record: object) -> str | None:
     """Hash of what a record measured: its payload without the source and with its time as
     parsed (civil times and offsets do not count; a growing interval counts by its start).
 
@@ -319,7 +319,7 @@ def reading(spec: DataTypeSpec, record: object) -> str | None:
     return payload_hash(payload)
 
 
-def _times(spec: DataTypeSpec, record: dict) -> tuple:
+def _times(spec: RecordType, record: dict) -> tuple:
     payload = payload_for(spec, record)
     return (
         payload.get("interval"),
@@ -330,7 +330,7 @@ def _times(spec: DataTypeSpec, record: dict) -> tuple:
     )
 
 
-def supersession_reason(spec: DataTypeSpec, old: dict, new: dict) -> str:
+def supersession_reason(spec: RecordType, old: dict, new: dict) -> str:
     """Why ``old`` and ``new`` (same v2 key) were two rows: the first difference found."""
     if spec.name in GROWING_INTERVAL_TYPES and temporal(spec, old)[1] != temporal(spec, new)[1]:
         return "growing-interval"

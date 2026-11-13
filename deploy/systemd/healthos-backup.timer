@@ -1,9 +1,9 @@
-# Daily at 03:30 local time; Persistent catches up after the host was powered off.
+# Daily at 03:30 UTC; Persistent catches up after the host was powered off.
 [Unit]
 Description=Daily HealthOS encrypted PostgreSQL backup
 
 [Timer]
-OnCalendar=*-*-* 03:30:00
+OnCalendar=*-*-* 03:30:00 UTC
 Persistent=true
 RandomizedDelaySec=5min
 Unit=healthos-backup.service

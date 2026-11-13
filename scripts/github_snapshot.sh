@@ -12,16 +12,21 @@
 #   --override <path>=<rev> take <path> from <rev> instead of the merged tree (repeatable);
 #                           a stopgap until the change reaches the source branch
 #   -m, --message <text>    commit message
-#                           (default: "HealthOS: snapshot of <source> [+ <extension> ...] (<date>)")
+#                           (default: first CHANGELOG.md version section, heading and body)
 #   --allow-references      update the branch even if the tree still names an excluded file
 #   --dry-run               build the tree, run the checks and print the diff, but create no commit
 #
+# Messages retain a matching dev <sha7> source trace, append it if absent, and reject mismatches.
 # The working tree and the real index are never touched: extensions are merged with
 # `git merge-tree --write-tree` (git 2.38 or later) and the tree is assembled in a temporary
 # index. Excluded paths, GitHub-only extensions and the commit identity live only in the local
 # clone:
 #   git config --add healthos.githubExclude <path>       # once per path, files or directories
 #   git config --add healthos.githubExtension <branch>   # once per GitHub-only extension branch
+#   git config --local --add healthos.githubForbidPattern <regex>  # case-insensitive ERE, repeatable
+#   # If unset, the checker's built-in private-marker patterns apply; configured values win.
+#   git config --local healthos.githubDataJsonLimit <bytes>  # 1..100000; only tightens the limit
+#   git config --local --add healthos.githubDataForbidExtension <extension>  # adds a ban
 #   git config healthos.githubAuthorName  <name>
 #   git config healthos.githubAuthorEmail <address>
 #
@@ -35,11 +40,17 @@
 # If the snapshot branch is checked out in a worktree, it is updated there with
 # `git merge --ff-only`; otherwise its ref is moved after a fast-forward check. Nothing is pushed.
 #
-# Exit 0: branch updated, or nothing to do. Exit 1: an excluded file is still referenced.
+# Maintainer runbooks and branch documentation are always excluded, including after path overrides.
+# Gitleaks must be installed. Content and message checks also run with --dry-run.
+# Data/export extensions, binary/envelope signatures and JSON over 100000 bytes stop publication.
+# Only reviewed path + SHA-256 + provenance entries in github_snapshot_checks.py may pass;
+# no option (including --allow-references) bypasses the data check or adds an allowance.
+# Exit 0: branch updated, or nothing to do. Exit 1: a publication check rejected the tree/message.
 # Exit 2: missing configuration, bad argument, missing extension branch, merge conflict, more
 # than one Alembic head, or a non-fast-forward update.
 set -euo pipefail
 
+checks="$(cd "$(dirname "$0")" && pwd)/github_snapshot_checks.py"
 cd "$(git rev-parse --show-toplevel)"
 
 source_rev=main
@@ -86,6 +97,7 @@ export GIT_AUTHOR_NAME="$author_name" GIT_AUTHOR_EMAIL="$author_email"
 export GIT_COMMITTER_NAME="$author_name" GIT_COMMITTER_EMAIL="$author_email"
 
 source_commit="$(git rev-parse --verify --quiet "$source_rev^{commit}")" || die "unknown revision: $source_rev"
+source_short="$(git rev-parse --short=7 "$source_commit")"
 parent="$(git rev-parse --verify --quiet "refs/heads/$branch^{commit}")" || die "unknown branch: $branch"
 
 # Merge the GitHub-only extensions into the source, one after another. Each intermediate
@@ -142,6 +154,8 @@ for item in "${overrides[@]+"${overrides[@]}"}"; do
   git update-index --add --cacheinfo "$mode,$blob,$path"
   echo "override: $path from $rev"
 done
+# These maintainer paths are never published, even if not listed in local exclusions.
+git rm --cached -r -f -q --ignore-unmatch -- docs/runbooks/ docs/BRANCHES.md
 tree="$(git write-tree)"
 unset GIT_INDEX_FILE
 
@@ -214,9 +228,17 @@ if len(heads) > 1:
     sys.exit(1)
 PY
 
+# Check before reference diagnostics, which may print source lines. Data findings print only
+# paths, reasons and byte counts, never the contents of a rejected export.
+# The sentinel preserves trailing newlines in a supplied message during command substitution.
+message="$(python3 "$checks" "$tree" "$message" "$source_short" && printf '.')"
+message="${message%.}"
+
 referenced=0
 for path in "${excludes[@]}"; do
   path="${path%/}"
+  # Tooling may name this mandatory exclusion; public documentation must not link to it.
+  [ "$path" != docs/BRANCHES.md ] || continue
   if [ "$(git cat-file -t "$merged_tree:$path" 2>/dev/null || true)" = tree ]; then
     if git grep -n -F -e "$path" "$tree" --; then referenced=1; fi
     continue
@@ -233,6 +255,8 @@ if [ "$referenced" -ne 0 ]; then
   [ "$allow_references" -eq 1 ] || { echo "not updating $branch; fix the source or pass --allow-references" >&2; exit 1; }
 fi
 
+echo "commit message:"
+printf '%s\n' "$message"
 echo "diff $source_rev -> snapshot:"
 git diff --stat "$source_commit" "$tree"
 if [ "$(git rev-parse "$parent^{tree}")" = "$tree" ]; then
@@ -241,7 +265,6 @@ if [ "$(git rev-parse "$parent^{tree}")" = "$tree" ]; then
 fi
 [ "$dry_run" -eq 0 ] || { echo "dry run: tree $tree"; exit 0; }
 
-[ -n "$message" ] || message="HealthOS: snapshot of $label ($(date +%Y-%m-%d))"
 commit="$(git commit-tree "$tree" -p "$parent" -m "$message")"
 
 worktree=""

@@ -12,7 +12,7 @@ from sqlalchemy.exc import DBAPIError
 from app.google_health.data_types import REGISTRY
 from app.models.health import ScalarMetric, Steps
 from app.models.state import RawHealthData
-from app.services.storage import store_records
+from app.services.archive.storage import store_records
 
 pytestmark = pytest.mark.integration
 

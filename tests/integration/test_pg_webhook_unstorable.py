@@ -1,7 +1,7 @@
 """Signed bodies jsonb cannot hold, against real PostgreSQL (see test_webhook_unstorable)."""
 
 import pytest
-from test_webhook_unstorable import KINDS
+from support.webhook_archive import KINDS
 from test_webhook_unstorable import (
     test_body_only_batch_is_prepared_from_its_raw_body as check_body_only,
 )

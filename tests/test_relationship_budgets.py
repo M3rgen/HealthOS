@@ -7,15 +7,18 @@ from unittest.mock import Mock
 import pytest
 from derived_records import BAND, DAY, PHONE, snapshot, store, summary
 from interpretation_records import SCOPE_ERROR, call
-from interpretation_records import production_reader as production_reader
 
 from app.parsers.common import canonical_json
-from app.services import health_interpretation as reader
-from app.services import interpretation_relationship_plan as planning
-from app.services import interpretation_stats as stats
-from app.services.codex_health import ArchiveQuery
-from app.services.interpretation_inputs import MAX_INPUT_BYTES, MAX_INPUT_RECORDS, BudgetError
-from app.services.interpretation_types import Refusal
+from app.services.interpretation import health_interpretation as reader
+from app.services.interpretation import interpretation_relationship_plan as planning
+from app.services.interpretation import interpretation_stats as stats
+from app.services.interpretation.interpretation_inputs import (
+    MAX_INPUT_BYTES,
+    MAX_INPUT_RECORDS,
+    BudgetError,
+)
+from app.services.interpretation.interpretation_types import Refusal
+from app.services.umay.codex_health import ArchiveQuery
 
 KIND = "daily-resting-heart-rate"
 
@@ -99,7 +102,7 @@ async def test_filtered_whole_query_budget_boundaries_precede_generation(
         "daily-oxygen-saturation",
         summary("daily-oxygen-saturation", averagePercentage=95),
     )
-    whole = (await call("relationship", **args))["summaries"]
+    whole = (await call(sessions, "relationship", **args))["summaries"]
     chosen = whole[0]
     selections = [
         {},
@@ -126,15 +129,20 @@ async def test_filtered_whole_query_budget_boundaries_precede_generation(
             assert len(references) > len(set(references))  # Every reuse counts.
         for ceiling in (count + 1, count):
             monkeypatch.setattr(reader, budget, ceiling)
-            page = await call("relationship", limit=1, **args, **selection)
+            page = await call(sessions, "relationship", limit=1, **args, **selection)
             assert page["total_summaries"] == len(expected)
             assert page["summaries"] == expected[:1]
-            assert (await call("relationship", limit=200, **args, **selection))[
+            assert (await call(sessions, "relationship", limit=200, **args, **selection))[
                 "summaries"
             ] == expected
             if page["next_cursor"]:
                 rest = await call(
-                    "relationship", cursor=page["next_cursor"], limit=200, **args, **selection
+                    sessions,
+                    "relationship",
+                    cursor=page["next_cursor"],
+                    limit=200,
+                    **args,
+                    **selection,
                 )
                 assert page["summaries"] + rest["summaries"] == expected
         if count:
@@ -145,7 +153,12 @@ async def test_filtered_whole_query_budget_boundaries_precede_generation(
                     for cursor in (None, page["next_cursor"]):
                         assert_refusal(
                             await call(
-                                "relationship", limit=limit, cursor=cursor, **args, **selection
+                                sessions,
+                                "relationship",
+                                limit=limit,
+                                cursor=cursor,
+                                **args,
+                                **selection,
                             ),
                             code,
                         )
@@ -164,14 +177,18 @@ async def test_sixteen_self_regimes_and_five_lags_refused_before_pair_planning(
     blocked = block_generation(monkeypatch)
     monkeypatch.setattr(planning, "RelationshipPlan", blocked)
     for limit in (1, 200):
-        assert_refusal(await call("relationship", limit=limit, **args), "summary_budget_exceeded")
+        assert_refusal(
+            await call(sessions, "relationship", limit=limit, **args), "summary_budget_exceeded"
+        )
     blocked.assert_not_called()
     await store(
         sessions,
         KIND,
         summary(KIND, "seventeenth", beatsPerMinute=50, source={**BAND, "platform": "OTHER"}),
     )
-    assert_refusal(await call("relationship", **args), "relationship_regime_budget_exceeded")
+    assert_refusal(
+        await call(sessions, "relationship", **args), "relationship_regime_budget_exceeded"
+    )
     blocked.assert_not_called()
 
 
@@ -194,7 +211,7 @@ async def test_default_budgets_reject_evidence_amplification_below_input_limits(
     blocked = block_generation(monkeypatch)
     for limit in (1, 200):
         assert_refusal(
-            await call("relationship", limit=limit, **args),
+            await call(sessions, "relationship", limit=limit, **args),
             f"relationship_{kind}_budget_exceeded",
         )
     blocked.assert_not_called()
@@ -283,26 +300,33 @@ async def test_dates_sorted_once_per_regime_and_cursor_tracks_unselected_inputs(
         return {key: Days(days) for key, days in series.items()}
 
     monkeypatch.setattr(reader, "daily_series", counted)
-    page = await call("relationship", limit=1, **args)
+    page = await call(sessions, "relationship", limit=1, **args)
     assert page["next_cursor"]
     assert visits["sorts"] == visits["regimes"] == 4
     selected = {
         key: page["summaries"][0][key]
         for key in ("source", "other_source", "definition", "other_definition")
     }
-    page = await call("relationship", limit=1, **args, **selected)
+    page = await call(sessions, "relationship", limit=1, **args, **selected)
     await store(
         sessions,
         "daily-oxygen-saturation",
         summary("daily-oxygen-saturation", averagePercentage=95),
     )
     assert_refusal(
-        await call("relationship", cursor=page["next_cursor"], **args, **selected), "stale_cursor"
+        await call(sessions, "relationship", cursor=page["next_cursor"], **args, **selected),
+        "stale_cursor",
     )
-    assert (await call("relationship", limit=1, **args, **selected))["summaries"] == page[
+    assert (await call(sessions, "relationship", limit=1, **args, **selected))["summaries"] == page[
         "summaries"
     ]
     assert_refusal(
-        await call("relationship", cursor=page["next_cursor"], **{**args, "lags": [0]}, **selected),
+        await call(
+            sessions,
+            "relationship",
+            cursor=page["next_cursor"],
+            **{**args, "lags": [0]},
+            **selected,
+        ),
         "cursor_query_mismatch",
     )

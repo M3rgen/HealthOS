@@ -1,0 +1,3 @@
+# Every path needs the maintainer's review on a pull request.
+# Enforced by the required code-owner review rule in .github/rulesets/main.json.
+* @M3rgen

@@ -1,0 +1,20 @@
+{
+  "_comment": "Stated layout floors, one row per viewport: every value is the minimum visible height in px (or minimum number of fully visible history rows). viewport-matrix.cjs reads this file; tests/test_viewport_floors.py pins the minimums, so a floor cannot be lowered without changing that test. Never lower a floor to match a measured result; fix the layout, or take the decision to the maintainer.",
+  "columns": ["width", "height", "card", "chart", "history", "historyRows"],
+  "sizes": [
+    [320, 256, 70, 0, 44, 0],
+    [320, 320, 120, 0, 44, 0],
+    [375, 667, 200, 100, 90, 2],
+    [390, 844, 260, 150, 90, 3],
+    [844, 390, 180, 60, 150, 3],
+    [1024, 600, 120, 40, 90, 3],
+    [1280, 256, 100, 0, 100, 0],
+    [1280, 420, 180, 60, 150, 3],
+    [1280, 500, 120, 40, 90, 2],
+    [1366, 649, 120, 40, 90, 3],
+    [1366, 650, 120, 40, 90, 3],
+    [1366, 768, 120, 40, 90, 3],
+    [1440, 900, 140, 40, 120, 3],
+    [1920, 1080, 150, 40, 120, 7]
+  ]
+}

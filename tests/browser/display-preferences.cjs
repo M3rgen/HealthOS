@@ -2,7 +2,7 @@
 // (desktop and phone) and an offline phone that falls back to its own copy. No live records.
 const assert = require('node:assert/strict');
 const path = require('node:path');
-const { BASE, launch, run, until, shot } = require('./lib.cjs');
+const { BASE, launch, run, until, shot, showSystemGroup } = require('./lib.cjs');
 const fx = require(path.join(__dirname, '../../frontend/preview/fixtures.cjs'));
 
 const overflow = page => page.evaluate(() => ({
@@ -45,6 +45,7 @@ async function device(browser, server, viewport, local = {}) {
   await page.goto(BASE);
   await page.waitForFunction(() => document.querySelector('#steps-value').textContent !== '—');
   await page.locator('[data-page="system"]').click();
+  await showSystemGroup(page, 'settings');
   await page.locator('#timezone').waitFor({ state: 'visible' });
   return { context, page, errors };
 }

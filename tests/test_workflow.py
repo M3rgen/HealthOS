@@ -1,4 +1,4 @@
-from datetime import UTC, datetime, timedelta
+from datetime import timedelta
 
 from sqlalchemy import func, select
 
@@ -7,6 +7,7 @@ from app.google_health.client import Page
 from app.google_health.data_types import REGISTRY
 from app.models.health import Steps
 from app.models.state import BackfillJob, JobStatus, RawHealthData
+from app.services.providers.ingestion import GoogleSource
 from app.sync.backfill import BackfillService
 from app.sync.incremental import IncrementalSync
 
@@ -32,19 +33,19 @@ class QueueClient:
         return self.pages.pop(0)
 
 
-async def test_mock_backfill_then_incremental_correction(sessions):
-    settings = Settings(backfill_start_date=datetime.now(UTC).date() - timedelta(days=1))
+async def test_mock_backfill_then_incremental_correction(sessions, frozen_now):
+    settings = Settings(backfill_start_date=frozen_now.date() - timedelta(days=1))
     backfill = BackfillService(
         settings,
         sessions,
-        QueueClient([Page([step(40)], None)]),
+        GoogleSource(QueueClient([Page([step(40)], None)])),
         {"steps": REGISTRY["steps"]},
     )
     assert await backfill.run(["steps"]) == 1
     incremental = IncrementalSync(
         settings,
         sessions,
-        QueueClient([Page([step(45)], None)]),
+        GoogleSource(QueueClient([Page([step(45)], None)])),
         {"steps": REGISTRY["steps"]},
     )
     await incremental.run("steps")
@@ -57,7 +58,7 @@ async def test_mock_backfill_then_incremental_correction(sessions):
     assert all(job.status == JobStatus.completed for job in jobs)
 
 
-async def test_mock_full_backfill_traverses_every_window_and_page(sessions):
+async def test_mock_full_backfill_traverses_every_window_and_page(sessions, frozen_now):
     class WindowedClient:
         def __init__(self):
             self.calls = []
@@ -82,11 +83,11 @@ async def test_mock_full_backfill_traverses_every_window_and_page(sessions):
     client = WindowedClient()
     service = BackfillService(
         Settings(
-            backfill_start_date=datetime.now(UTC).date() - timedelta(days=2),
+            backfill_start_date=frozen_now.date() - timedelta(days=2),
             backfill_window_days=1,
         ),
         sessions,
-        client,
+        GoogleSource(client),
         {"steps": REGISTRY["steps"]},
     )
 

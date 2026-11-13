@@ -1,0 +1,47 @@
+name: clock
+
+# The unit suite at eleven clock settings (tests/support/clock_matrix.sh). Too slow for every push,
+# so it runs weekly on the default branch; a failing setting fails the run.
+"on":
+  schedule:
+    - cron: "41 5 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  clock:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 350
+    env:
+      UV_PYTHON: "3.12.16"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: "0.13.6"
+          enable-cache: true
+      - name: Unit suite at each clock setting
+        env:
+          CLOCK_OUT: ${{ runner.temp }}/clock
+        run: |
+          uv python install 3.12.16
+          uv sync --frozen --extra dev
+          make test-clock
+      - name: Unit suite in a random order
+        # A new seed each week; the seed is printed, and `make test-order SEED=...` repeats a failure.
+        run: make test-order
+      - name: Keep the per-setting logs of a failed run
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: clock-logs
+          path: ${{ runner.temp }}/clock
+          retention-days: 7

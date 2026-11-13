@@ -6,6 +6,7 @@ import hashlib
 import secrets
 import time
 from collections.abc import Callable, Iterable
+from ipaddress import IPv6Address, ip_address
 from urllib.parse import urlencode, urlsplit
 
 from starlette.datastructures import Headers
@@ -21,7 +22,7 @@ LOGIN_PATH = "/login"
 LOGOUT_PATH = "/logout"
 # Requests that must work without the UI token. The OAuth callback arrives as a
 # cross-site redirect (SameSite=Strict cookies are withheld) and is guarded by the
-# HMAC-signed state that only the authenticated /auth/google/start can mint. The Apple
+# single-use HMAC-signed state and a separate Lax OAuth session cookie. The Apple
 # receiver checks its own bearer token (APPLE_RECEIVER_TOKEN_FILE), never the UI token.
 EXEMPT = frozenset(
     {
@@ -38,6 +39,8 @@ EXEMPT = frozenset(
         # Only ever removes a session; CSRF-checked like the login form.
         ("POST", LOGOUT_PATH),
         ("GET", "/auth/google/callback"),
+        # Spends a single-use ticket an authenticated start issued (app/api/auth.py).
+        ("GET", "/auth/google/handoff"),
     }
 )
 
@@ -63,15 +66,22 @@ class SessionStore:
         self.ttl = ttl_seconds
         self.clock = clock
         self._expiry: dict[str, float] = {}
+        # Called once a session ends, so an open chat socket closes with it.
+        self._watchers: dict[str, set[Callable[[], None]]] = {}
 
-    def issue(self) -> str:
+    def _end(self, key: str) -> None:
+        self._expiry.pop(key, None)
+        for callback in self._watchers.pop(key, ()):
+            callback()
+
+    def issue(self, ttl_seconds: float | None = None) -> str:
         now = self.clock()
         for key in [key for key, expiry in self._expiry.items() if expiry <= now]:
-            del self._expiry[key]
+            self._end(key)
         while len(self._expiry) >= self.MAX_SESSIONS:
-            del self._expiry[min(self._expiry, key=self._expiry.__getitem__)]
+            self._end(min(self._expiry, key=self._expiry.__getitem__))
         session_id = secrets.token_urlsafe(32)
-        self._expiry[_digest(session_id)] = now + self.ttl
+        self._expiry[_digest(session_id)] = now + (self.ttl if ttl_seconds is None else ttl_seconds)
         return session_id
 
     def valid(self, session_id: str | None) -> bool:
@@ -82,13 +92,27 @@ class SessionStore:
         if expiry is None:
             return False
         if expiry <= self.clock():
-            del self._expiry[key]
+            self._end(key)
             return False
         return True
 
     def revoke(self, session_id: str | None) -> None:
         if session_id:
-            self._expiry.pop(_digest(session_id), None)
+            self._end(_digest(session_id))
+
+    def watch(self, session_id: str, callback: Callable[[], None]) -> Callable[[], None]:
+        """Call ``callback`` when this live session ends; returns the matching unsubscribe."""
+        key = _digest(session_id)
+        self._watchers.setdefault(key, set()).add(callback)
+
+        def stop() -> None:
+            watchers = self._watchers.get(key)
+            if watchers is not None:
+                watchers.discard(callback)
+                if not watchers:
+                    del self._watchers[key]
+
+        return stop
 
 
 def token_matches(token: str, candidate: str | None) -> bool:
@@ -137,7 +161,9 @@ def safe_next(value: str | None) -> str:
         return "/"
     if parts.scheme or parts.netloc or parts.path.startswith(LOGIN_PATH):
         return "/"
-    return value
+    # Rebuilt rather than returned as received: the leading slash is ours and only the validated
+    # remainder comes from the caller, which code scanning can see and a reader need not infer.
+    return "/" + value[1:]
 
 
 def same_origin_form(headers: Headers, scheme: str) -> bool:
@@ -166,7 +192,8 @@ def same_origin_form(headers: Headers, scheme: str) -> bool:
         return False
 
 
-def _wants_html(scope: Scope, headers: Headers) -> bool:
+def wants_html(scope: Scope, headers: Headers) -> bool:
+    """A browser navigation to a page (not an API call, a script or an asset)."""
     if scope["method"] not in {"GET", "HEAD"} or scope["path"].startswith("/api/"):
         return False
     return headers.get("sec-fetch-mode") == "navigate" or "text/html" in headers.get("accept", "")
@@ -181,8 +208,26 @@ class UITokenMiddleware:
         self.sessions = sessions
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if not self.token or scope["type"] not in {"http", "websocket"}:
+        if scope["type"] not in {"http", "websocket"}:
             await self.app(scope, receive, send)
+            return
+        if not self.token:
+            public = scope["type"] == "http" and (
+                (scope["method"] in {"GET", "HEAD"} and scope["path"] == "/health/live")
+                or (scope["method"] == "POST" and scope["path"] == WEBHOOK_PATH)
+            )
+            # The client address decides, not the listener: a port-forward or NAT rule that
+            # lands on a loopback listener still brings the request from another host.
+            if public or _loopback(scope.get("client")):
+                await self.app(scope, receive, send)
+            elif scope["type"] == "websocket":
+                await send({"type": "websocket.close", "code": 1008, "reason": "loopback_required"})
+            else:
+                await JSONResponse(
+                    {"detail": "Giriş kapalıyken yalnız bu bilgisayardan erişilebilir."},
+                    status_code=403,
+                    headers={"Cache-Control": "no-store"},
+                )(scope, receive, send)
             return
         headers = Headers(scope=scope)
         exempt = scope["type"] == "http" and (scope["method"], scope["path"]) in EXEMPT
@@ -192,7 +237,7 @@ class UITokenMiddleware:
         if scope["type"] == "websocket":
             await send({"type": "websocket.close", "code": 1008, "reason": "auth_required"})
             return
-        if _wants_html(scope, headers):
+        if wants_html(scope, headers):
             target = scope["path"]
             if scope.get("query_string"):
                 target += "?" + scope["query_string"].decode("latin-1")
@@ -211,3 +256,15 @@ class UITokenMiddleware:
                 },
             )
         await response(scope, receive, send)
+
+
+def _loopback(endpoint: tuple[str, int] | None) -> bool:
+    if not endpoint:
+        return False
+    try:
+        address = ip_address(endpoint[0])
+    except ValueError:
+        return False
+    if isinstance(address, IPv6Address) and address.ipv4_mapped:
+        address = address.ipv4_mapped
+    return address.is_loopback

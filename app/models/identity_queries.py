@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
-from sqlalchemy import and_, or_, select, text, tuple_
+import uuid
+
+from sqlalchemy import SQLColumnExpression, and_, or_, select, text, tuple_
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
+from app.db.dialect import database
 from app.models.identity_constants import DEVICE_TABLE
 from app.models.identity_tables import RawHealthDataSupersession, RawSourceDevice
 from app.models.state import RawHealthData
@@ -34,7 +38,7 @@ def joined_pairs():
     )
 
 
-def in_force(link=RawHealthDataSupersession):
+def in_force(link: type[RawHealthDataSupersession] = RawHealthDataSupersession):
     """The supersession ``link`` (the class or an alias) is in force: its two fingerprints
     are one, or one device now. A link whose fingerprints are no longer one device (a
     rejected or refuted chain, two devices decided by the owner) hides nothing; one whose
@@ -60,20 +64,20 @@ def in_force_sql(link: str) -> str:
     )
 
 
-def superseded(raw_id):
+def superseded(raw_id: uuid.UUID | SQLColumnExpression[uuid.UUID]):
     """``EXISTS`` clause: the raw row ``raw_id`` is superseded by another row (an in-force
     link, whatever the holder's mark)."""
     link = aliased(RawHealthDataSupersession)
     return select(link.old_raw_id).where(link.old_raw_id == raw_id, in_force(link)).exists()
 
 
-def held_elsewhere(raw_id):
+def held_elsewhere(raw_id: uuid.UUID | SQLColumnExpression[uuid.UUID]):
     """``EXISTS`` clause: ``raw_id`` is superseded, by an in-force link, by a row that is
     neither marked deleted at the source nor quarantined. Readers skip exactly these rows (the
     holder counts their record); a superseded row whose holders were all marked deleted (or
     quarantined) counts again when it is live itself, so a link can never hide a live record
     behind a row that is not counted, and a link no longer in force hides nothing. The write
-    path decides with the very same test (app/services/identity.py, ``_Page.hiders``)."""
+    path decides with the very same test (app/services/identity_resolution.py, ``Page.hiders``)."""
     holder = aliased(RawHealthData)
     link = aliased(RawHealthDataSupersession)
     return (
@@ -89,15 +93,14 @@ def held_elsewhere(raw_id):
     )
 
 
-async def plan_each_query(session) -> None:
+async def plan_each_query(session: AsyncSession) -> None:
     """Plan every reader statement of this transaction with its own parameters (PostgreSQL):
     a generic plan, which a long-lived connection switches to after five executions, cannot
     use the bounds of ``in_force`` and of the time range, and reads many times more rows."""
-    if session.get_bind().dialect.name == "postgresql":
-        await session.execute(text("SET LOCAL plan_cache_mode = force_custom_plan"))
+    await database(session).control(session, text("SET LOCAL plan_cache_mode = force_custom_plan"))
 
 
-def key_held_elsewhere(data_type, google_data_point_id):
+def key_held_elsewhere(data_type: str, google_data_point_id: str | SQLColumnExpression[str]):
     """``held_elsewhere`` of the raw row with this data type and ``google_data_point_id``,
     found through the supersessions' ``(old_google_data_point_id, data_type)`` index: for a
     normalized row (keyed like its raw row), so a reader probes the links of the rows it reads
@@ -118,7 +121,7 @@ def key_held_elsewhere(data_type, google_data_point_id):
     )
 
 
-def holds_live(raw_id):
+def holds_live(raw_id: uuid.UUID | SQLColumnExpression[uuid.UUID]):
     """``EXISTS`` clause: ``raw_id`` holds, through an in-force link, a row that is live and
     not quarantined (a row marked deleted that a live duplicate stands for)."""
     held = aliased(RawHealthData)

@@ -108,7 +108,7 @@ run(async () => {
       assert.match(await google.locator('.workout-time').textContent(), /01:30.*02:30/);
       assert.deepEqual(await google.locator('dd').allTextContents(), ['58 dk', '—', '—']);
       assert.deepEqual(await manual.locator('dd').allTextContents(), ['1 sa 0 dk', '0 kcal', '0 km']);
-      assert.match(await manual.locator('.workout-source').textContent(), /Manuel/);
+      assert.match(await manual.locator('.workout-source').textContent(), /Elle girildi/);
       assert.match(await page.locator('[data-workout-id="overnight"] .workout-time').textContent(), /23:30.*2 Ocak 2026.*01:00/);
       assert.equal(await page.locator('.workout-entry img').count(), 0);
       assert.match(await page.locator('[data-workout-id="dense-0"] h4').textContent(), /<img/);
@@ -169,15 +169,15 @@ run(async () => {
       assert.equal(await page.locator('#workout-retry').isHidden(), true);
       await noPageScroll();
 
-      // Device entry times and the selected display zone differ. Saving chooses the start month.
+      // Device and selected entry/display zones differ. Saving chooses the selected-zone start month.
       await page.locator('#workout-add').click();
       await noPageScroll();
       for (const selector of ['[name="exercise_type"]', '[name="start_time"]', '[name="end_time"]', '[name="calories_kcal"]', '[name="distance_km"]', '#workout-cancel', '#workout-save']) await reachable(selector);
       await page.locator('[name="exercise_type"]').fill('Gece bisikleti');
-      await page.locator('[name="start_time"]').fill('2025-12-31T20:00');
-      await page.locator('[name="end_time"]').fill('2025-12-31T21:00');
+      await page.locator('[name="start_time"]').fill('2026-01-01T01:00');
+      await page.locator('[name="end_time"]').fill('2026-01-01T02:00');
       await page.locator('[name="distance_km"]').fill('5');
-      assert.match(await page.locator('#workout-timezone').textContent(), /America\/New_York/);
+      assert.match(await page.locator('#workout-timezone').textContent(), /Europe\/Istanbul/);
       // Navigation while the form is open retains the entered draft and keeps controls reachable.
       await reachable('#workout-prev'); await page.locator('#workout-prev').click(); await ready();
       assert.equal(await page.locator('[name="exercise_type"]').inputValue(), 'Gece bisikleti');
@@ -186,11 +186,11 @@ run(async () => {
       assert.equal(await page.locator('#workout-month').inputValue(), '2025-12');
       await reachable('#workout-save'); await page.locator('#workout-save').click();
       await page.waitForFunction(() => !document.querySelector('#workout-editor').open && document.querySelector('[data-workout-id="saved"]'));
-      assert.equal(saved.start_time, '2026-01-01T01:00:00.000Z');
+      assert.equal(saved.start_time, '2025-12-31T22:00:00.000Z');
       assert.equal(saved.calories_kcal, null); assert.equal(saved.distance_meters, 5000);
       assert.equal(await page.locator('#workout-month').inputValue(), '2026-01');
-      assert.match(await page.locator('[data-workout-id="saved"] .workout-time').textContent(), /04:00.*05:00/);
-      assert.match(await page.locator('[data-workout-id="saved"] .workout-source').textContent(), /Manuel/);
+      assert.match(await page.locator('[data-workout-id="saved"] .workout-time').textContent(), /01:00.*02:00/);
+      assert.match(await page.locator('[data-workout-id="saved"] .workout-source').textContent(), /Elle girildi/);
       await noPageScroll();
       await choose('2025-11'); await ready();
       await page.locator('#workout-add').click();

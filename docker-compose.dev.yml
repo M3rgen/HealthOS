@@ -2,8 +2,17 @@ services:
   postgres:
     ports:
       - "127.0.0.1:5432:5432"
+    # The base file keeps PostgreSQL on an internal network, which publishes nothing: this
+    # development override also attaches it to the app's network so the port above is real.
+    networks:
+      - database
+      - application
 
   app:
     environment:
       # Local development only: skips the production secret guard.
+      APP_ENV: development
+
+  migrate:
+    environment:
       APP_ENV: development

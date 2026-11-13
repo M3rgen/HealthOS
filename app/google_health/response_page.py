@@ -1,10 +1,8 @@
 """Validate collection and continuation evidence before constructing a page."""
 
 from app.google_health.data_types import AccessMethod
-
-
-class GoogleHealthError(RuntimeError):
-    pass
+from app.google_health.errors import GoogleHealthError as GoogleHealthError
+from app.google_health.errors import GoogleHealthErrorCode
 
 
 class InvalidResponseError(GoogleHealthError):
@@ -13,6 +11,8 @@ class InvalidResponseError(GoogleHealthError):
     Deterministic and never retried. Messages are fixed: the rejected contents
     (keys, values, codes) stay only in the raw archive.
     """
+
+    default_code = GoogleHealthErrorCode.INVALID_RESPONSE
 
 
 class DuplicateResponseKeyError(InvalidResponseError):
@@ -91,7 +91,10 @@ def page_values(payload: dict, access_method: AccessMethod) -> tuple[list[dict],
         raise InvalidCollectionResponseError()
     points = payload.get(expected, [])
     if not isinstance(points, list):
-        raise GoogleHealthError("Google Health response has an invalid data point list")
+        raise GoogleHealthError(
+            "Google Health response has an invalid data point list",
+            code=GoogleHealthErrorCode.INVALID_RESPONSE,
+        )
     # Check the selected collection as a whole before reading its continuation.
     # Do not filter invalid items: that would let a partial or empty page prove a
     # window complete and authorize deletion markers for records still at Google.

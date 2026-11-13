@@ -5,15 +5,16 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from app.api.deps import runtime as runtime_dep
 from app.google_health.client import GoogleHealthError
 from app.google_health.oauth import OAuthError
-from app.services.runtime import Runtime
+from app.runtime import Runtime
+from app.schemas.status import Capabilities, GoogleDevices
 
 router = APIRouter(prefix="/google-health", tags=["google-health"])
 
 
-@router.get("/capabilities")
+@router.get("/capabilities", response_model=Capabilities)
 async def capabilities(
     days: int = Query(30, ge=1, le=365), runtime: Runtime = Depends(runtime_dep)
-) -> dict:
+) -> Capabilities:
     try:
         return {
             "lookback_days": days,
@@ -23,8 +24,8 @@ async def capabilities(
         raise HTTPException(503, str(exc)) from exc
 
 
-@router.get("/devices")
-async def devices(runtime: Runtime = Depends(runtime_dep)) -> dict:
+@router.get("/devices", response_model=GoogleDevices)
+async def devices(runtime: Runtime = Depends(runtime_dep)) -> GoogleDevices:
     try:
         return {"devices": await runtime.discovery.devices()}
     except (OAuthError, GoogleHealthError) as exc:

@@ -27,7 +27,6 @@ from __future__ import annotations
 from datetime import datetime
 
 from sqlalchemy import (
-    DDL,
     JSON,
     BigInteger,
     DateTime,
@@ -38,16 +37,13 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
-    event,
     func,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
+from app.db.guards import GuardSet
 from app.models.state import RawJSON
-
-# Register the shared refusal function before this module's trigger listeners.
-import app.models.raw_versions  # noqa: E402, F401  isort: skip
 
 PAYLOADS = "apple_payloads"
 RECORDS = "apple_raw_records"
@@ -55,7 +51,7 @@ IMPORTS = "apple_imports"
 SOURCES = "apple_sources"
 # The append-only tables (the evidence); the other two are bookkeeping.
 TABLES = (PAYLOADS, RECORDS)
-_ID = BigInteger().with_variant(Integer(), "sqlite")
+_ID = BigInteger()
 
 
 class ApplePayload(Base):
@@ -145,38 +141,9 @@ class AppleSource(Base):
     records: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
 
 
-PG_TRIGGER_SQL = {}
-PROTECTIVE_TRIGGERS = []
-SQLITE_TRIGGER_SQL = {}
+GUARDS = GuardSet()
 for _table in TABLES:
-    for _suffix, _events, _level in (
-        ("append_only", "UPDATE OR DELETE", "ROW"),
-        ("no_truncate", "TRUNCATE", "STATEMENT"),
-    ):
-        _name = f"{_table}_{_suffix}"
-        PG_TRIGGER_SQL[_name] = (
-            _table,
-            f"CREATE TRIGGER {_name}\nBEFORE {_events} ON {_table} FOR EACH {_level}\n"
-            "EXECUTE FUNCTION healthos_refuse_change()",
-        )
-        PROTECTIVE_TRIGGERS.append((_table, _name, "healthos_refuse_change"))
-    for _operation in ("UPDATE", "DELETE"):
-        _name = f"{_table}_no_{_operation.lower()}"
-        SQLITE_TRIGGER_SQL[_name] = (
-            _table,
-            f"CREATE TRIGGER {_name}\nBEFORE {_operation} ON {_table}\nBEGIN\n"
-            f"    SELECT RAISE(ABORT, '{_table} keeps every record: {_operation} refused');\nEND",
-        )
-# healthos_refuse_change() belongs to 0011 and is verified with its other guards.
-FUNCTION_BODIES: dict[str, str] = {}
-POSTGRESQL_DDL = (
-    *(sql for _, sql in PG_TRIGGER_SQL.values()),
-    *(
-        f"ALTER TABLE {table} ENABLE ALWAYS TRIGGER {name}"
-        for table, name, _ in PROTECTIVE_TRIGGERS
-    ),
-)
-SQLITE_DDL = tuple(sql for _, sql in SQLITE_TRIGGER_SQL.values())
-for _dialect, _statements in (("postgresql", POSTGRESQL_DDL), ("sqlite", SQLITE_DDL)):
-    for _statement in _statements:
-        event.listen(Base.metadata, "after_create", DDL(_statement).execute_if(dialect=_dialect))
+    GUARDS.append_only(_table)
+
+FUNCTION_BODIES = GUARDS.functions
+POSTGRESQL_DDL = GUARDS.postgresql_ddl

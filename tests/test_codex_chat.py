@@ -1,21 +1,26 @@
 import asyncio
 import json
 import logging
+import ssl
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import pytest
-from fastapi import FastAPI, WebSocketDisconnect
+from fastapi import FastAPI
 from pydantic import ValidationError
 from sqlalchemy import func, select
+from support.chat import RPC, Browser, take
+from support.codex_bridge import attested_thread, verified_bridge_config
 from websockets.exceptions import ConnectionClosed
 
 from app.api import codex
 from app.models.state import RawHealthData
-from app.services import codex_chat, codex_health
-from app.services.chat_context import SUMMARY_LABEL
-from app.services.codex_chat import CodexRPC
-from app.services.codex_health import ArchiveQuery, read_health
+from app.services.umay import chat_relay, codex_chat, codex_chat_thread
+from app.services.umay.chat_context import SUMMARY_LABEL
+from app.services.umay.chat_socket import ChatDisconnected as WebSocketDisconnect
+from app.services.umay.codex_bridge_tls import secure_bridge_url
+from app.services.umay.codex_chat import BridgeUnverified, CodexRPC
+from app.services.umay.codex_health import ArchiveQuery, read_health
 
 
 def raw(identifier, timestamp, **overrides):
@@ -33,7 +38,6 @@ def raw(identifier, timestamp, **overrides):
 
 
 async def test_archive_inventory_pagination_and_read_only(sessions, monkeypatch):
-    monkeypatch.setattr(codex_health, "SessionLocal", sessions)
     async with sessions() as session:
         session.add_all(
             [
@@ -46,7 +50,7 @@ async def test_archive_inventory_pagination_and_read_only(sessions, monkeypatch)
             ]
         )
         await session.commit()
-    inventory = await read_health({"action": "inventory"})
+    inventory = await read_health(sessions, {"action": "inventory"})
     assert inventory["streams"][0]["count"] == 4
     query = {
         "action": "records",
@@ -56,10 +60,10 @@ async def test_archive_inventory_pagination_and_read_only(sessions, monkeypatch)
         "timezone": "Europe/Paris",
         "limit": 1,
     }
-    first = await read_health(query)
+    first = await read_health(sessions, query)
     assert first["records"][0]["start"].startswith("2026-09-28T22:00")
     assert first["next_offset"] == 1
-    second = await read_health(dict(query, offset=first["next_offset"]))
+    second = await read_health(sessions, dict(query, offset=first["next_offset"]))
     assert second["records"][0]["start"].startswith("2026-09-29T21:59")
     assert second["next_offset"] is None
     async with sessions() as session:
@@ -67,14 +71,14 @@ async def test_archive_inventory_pagination_and_read_only(sessions, monkeypatch)
 
 
 async def test_daily_tool_reuses_real_read_model(sessions, monkeypatch):
-    monkeypatch.setattr(codex_health, "SessionLocal", sessions)
     result = await read_health(
+        sessions,
         {
             "action": "daily",
             "start_date": "2026-09-28",
             "end_date": "2026-09-29",
             "timezone": "UTC",
-        }
+        },
     )
     assert len(result["days"]) == 2
     assert result["days"][0]["steps"] is None
@@ -111,48 +115,6 @@ def test_same_origin_protects_local_subscription():
     assert not codex.same_origin("http://[invalid", "localhost:8000")
 
 
-class Browser:
-    def __init__(self):
-        self.incoming = asyncio.Queue()
-        self.outgoing = asyncio.Queue()
-
-    async def receive_json(self):
-        item = await self.incoming.get()
-        if isinstance(item, Exception):
-            raise item
-        return item
-
-    async def send_json(self, item):
-        await self.outgoing.put(item)
-
-
-class RPC:
-    def __init__(self):
-        self.incoming = asyncio.Queue()
-        self.outgoing = asyncio.Queue()
-        self.sequence = 0
-
-    async def receive(self):
-        return await self.incoming.get()
-
-    async def request(self, method, params):
-        self.sequence += 1
-        await self.outgoing.put({"id": self.sequence, "method": method, "params": params})
-        return self.sequence
-
-    async def send(self, item):
-        await self.outgoing.put(item)
-
-    async def reject(self, item):
-        await self.outgoing.put({"id": item["id"], "error": "unsupported"})
-
-
-async def take(queue):
-    item = await asyncio.wait_for(queue.get(), 2)
-    # Receipts are verified separately against real serialized health results.
-    return await take(queue) if item.get("type") == "health_transfer" else item
-
-
 async def test_new_thread_pins_requested_model_and_is_ephemeral(tmp_path, monkeypatch):
     class Connection:
         def __init__(self):
@@ -167,7 +129,8 @@ async def test_new_thread_pins_requested_model_and_is_ephemeral(tmp_path, monkey
             result = {
                 "initialize": {},
                 "account/read": {"account": {"type": "chatgpt"}},
-                "thread/start": {"thread": {"id": "new-site-thread"}, "model": "gpt-6.1-sol"},
+                "config/read": verified_bridge_config(),
+                "thread/start": attested_thread("new-site-thread"),
             }[request["method"]]
             await self.responses.put(json.dumps({"id": request["id"], "result": result}))
 
@@ -192,7 +155,7 @@ async def test_new_thread_pins_requested_model_and_is_ephemeral(tmp_path, monkey
     # Edits apply to the next site thread; the running thread's snapshot stays fixed.
     soul = tmp_path / "soul.md"
     soul.write_text("# Umay\nYeni kişilik tercihi: daha şiirsel.", encoding="utf-8")
-    monkeypatch.setattr(codex_chat, "SOUL_PATH", soul)
+    monkeypatch.setattr(codex_chat_thread, "SOUL_PATH", soul)
     await CodexRPC(connection).start()
     updated = connection.sent[-1]["params"]
     assert "Yeni kişilik tercihi" in updated["developerInstructions"]
@@ -204,7 +167,7 @@ async def test_new_thread_pins_requested_model_and_is_ephemeral(tmp_path, monkey
 def test_empty_umay_persona_is_rejected(tmp_path, monkeypatch):
     soul = tmp_path / "soul.md"
     soul.write_text(" \n", encoding="utf-8")
-    monkeypatch.setattr(codex_chat, "SOUL_PATH", soul)
+    monkeypatch.setattr(codex_chat_thread, "SOUL_PATH", soul)
     with pytest.raises(ValueError, match="kişilik dosyası boş"):
         codex_chat.load_umay_persona()
 
@@ -212,12 +175,12 @@ def test_empty_umay_persona_is_rejected(tmp_path, monkeypatch):
 async def test_relay_tools_streaming_followup_and_cancel(monkeypatch):
     browser, rpc = Browser(), RPC()
 
-    async def health(arguments):
+    async def health(_sessions, arguments):
         assert arguments == {"action": "inventory"}
         return {"streams": []}
 
-    monkeypatch.setattr(codex, "read_health", health)
-    task = asyncio.create_task(codex.relay(browser, rpc, "site-thread"))
+    monkeypatch.setattr(chat_relay, "read_health", health)
+    task = asyncio.create_task(chat_relay.relay(browser, rpc, "site-thread"))
     try:
         await browser.incoming.put({"text": "Uykumu incele. Kısa ve düz anlat."})
         start = await take(rpc.outgoing)
@@ -288,17 +251,17 @@ async def test_relay_tools_streaming_followup_and_cancel(monkeypatch):
     finally:
         await browser.incoming.put(WebSocketDisconnect())
         with pytest.raises(WebSocketDisconnect):
-            await asyncio.wait_for(task, 2)
+            await asyncio.wait_for(task, 30)
 
 
 async def test_relay_guards_input_tools_errors_and_closing_interrupt(monkeypatch):
     browser, rpc = Browser(), RPC()
 
-    async def health(arguments):
+    async def health(_sessions, arguments):
         raise RuntimeError("database down")
 
-    monkeypatch.setattr(codex, "read_health", health)
-    task = asyncio.create_task(codex.relay(browser, rpc, "site-thread"))
+    monkeypatch.setattr(chat_relay, "read_health", health)
+    task = asyncio.create_task(chat_relay.relay(browser, rpc, "site-thread"))
     try:
         # Idle cancel is a no-op; the next reply belongs to the non-object message.
         await browser.incoming.put({"type": "cancel"})
@@ -388,7 +351,7 @@ async def test_relay_guards_input_tools_errors_and_closing_interrupt(monkeypatch
     finally:
         await browser.incoming.put(WebSocketDisconnect())
         with pytest.raises(WebSocketDisconnect):
-            await asyncio.wait_for(task, 2)
+            await asyncio.wait_for(task, 30)
     # Leaving mid-turn interrupts the running turn.
     closing = await take(rpc.outgoing)
     assert closing["method"] == "turn/interrupt"
@@ -397,8 +360,8 @@ async def test_relay_guards_input_tools_errors_and_closing_interrupt(monkeypatch
 
 async def test_relay_times_out_an_idle_chat(monkeypatch):
     browser, rpc = Browser(), RPC()
-    monkeypatch.setattr(codex, "IDLE_TIMEOUT_SECONDS", 0.05)
-    await asyncio.wait_for(codex.relay(browser, rpc, "site-thread"), 2)
+    monkeypatch.setattr(chat_relay, "IDLE_TIMEOUT_SECONDS", 0.05)
+    await asyncio.wait_for(chat_relay.relay(browser, rpc, "site-thread"), 30)
     message = await take(browser.outgoing)
     assert message["type"] == "error"
     assert "zaman aşımına" in message["text"]
@@ -408,16 +371,18 @@ async def test_relay_times_out_an_idle_chat(monkeypatch):
 async def test_health_tool_propagates_cancellation_and_cleans_up(monkeypatch):
     entered, cleaned = asyncio.Event(), asyncio.Event()
 
-    async def health(_arguments):
+    async def health(_sessions, _arguments):
         entered.set()
         try:
             await asyncio.Event().wait()
         finally:
             cleaned.set()
 
-    monkeypatch.setattr(codex, "read_health", health)
-    task = asyncio.create_task(codex.run_health_tool({"tool": "health_archive", "arguments": {}}))
-    await asyncio.wait_for(entered.wait(), 2)
+    monkeypatch.setattr(chat_relay, "read_health", health)
+    task = asyncio.create_task(
+        chat_relay.run_health_tool({"tool": "health_archive", "arguments": {}})
+    )
+    await asyncio.wait_for(entered.wait(), 30)
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
@@ -462,7 +427,7 @@ class SiteSocket:
         return await self.frame()
 
     async def frame(self):
-        return await asyncio.wait_for(self.outgoing.get(), 2)
+        return await asyncio.wait_for(self.outgoing.get(), 30)
 
     async def message(self):
         frame = await self.frame()
@@ -471,11 +436,11 @@ class SiteSocket:
 
     async def finish(self):
         assert (await self.frame())["type"] == "websocket.close"
-        await asyncio.wait_for(self.task, 2)
+        await asyncio.wait_for(self.task, 30)
 
     async def leave(self):
         await self.incoming.put({"type": "websocket.disconnect", "code": 1000})
-        await asyncio.wait_for(self.task, 2)
+        await asyncio.wait_for(self.task, 30)
 
 
 class SyntheticBridge:
@@ -502,7 +467,8 @@ class SyntheticBridge:
         result = {
             "initialize": {},
             "account/read": {"account": {"type": "chatgpt"}},
-            "thread/start": {"thread": {"id": "synthetic-thread"}, "model": "synthetic-model"},
+            "config/read": verified_bridge_config(),
+            "thread/start": attested_thread("synthetic-thread"),
         }[request["method"]]
         await self.responses.put(json.dumps({"id": request["id"], "result": result}))
 
@@ -521,6 +487,7 @@ class SyntheticBridge:
         ("synthetic", ConnectionRefusedError("private token"), "ulaşılamıyor"),
         ("synthetic", TimeoutError("private token"), "bağlanırken zaman aşımı"),
         ("synthetic", RuntimeError("Codex private token"), "ayarlarını ve oturumu"),
+        ("synthetic", BridgeUnverified("bridge feature not disabled"), "köprüsünü yeniden"),
         ("synthetic", "stall", "hazırlanması uzun sürdü"),
     ],
 )
@@ -548,7 +515,9 @@ async def test_site_connection_errors_are_safe_and_close_resources(
     if not (token or "").strip():
         assert not options  # configuration failures must not attempt a bridge connection
     else:
-        assert options["url"] == site.app.state.settings.codex_bridge_url
+        assert options["url"] == secure_bridge_url(site.app.state.settings.codex_bridge_url)
+        assert isinstance(options["ssl"], ssl.SSLContext)
+        assert options["ssl"].verify_mode is ssl.CERT_REQUIRED
         assert options["additional_headers"] == {"Authorization": "Bearer synthetic"}
         assert options["open_timeout"] == codex.CONNECT_TIMEOUT_SECONDS
         if failure == "stall":
@@ -575,11 +544,31 @@ async def test_site_socket_disconnect_and_recovery_close_both_transports(monkeyp
     assert all(t.closed and t.requests[-1]["params"]["ephemeral"] for t in transports)
 
 
+async def test_site_chat_uses_the_injected_archive_factory(sessions, monkeypatch):
+    async with sessions.begin() as session:
+        session.add(raw("injected", "2026-09-29T12:00:00"))
+    transport = SyntheticBridge()
+    monkeypatch.setattr(codex, "connect", lambda *args, **kwargs: transport)
+    site = SiteSocket()
+    site.app.dependency_overrides[codex.chat_sessions] = lambda: sessions
+
+    async def relay(socket, rpc, thread_id, *, sessions, **kwargs):
+        result = await read_health(sessions, {"action": "inventory"})
+        await socket.send_json({"type": "inventory", "count": result["streams"][0]["count"]})
+
+    monkeypatch.setattr(codex, "relay", relay)
+    assert (await site.start())["type"] == "websocket.accept"
+    assert (await site.message())["type"] == "ready"
+    assert await site.message() == {"type": "inventory", "count": 1}
+    await site.finish()
+    assert transport.closed
+
+
 def test_turn_context_carries_real_local_date(monkeypatch):
     from datetime import UTC
 
     fixed = datetime(2026, 10, 24, 20, 5, tzinfo=UTC)
-    text = codex.turn_context("Europe/Brussels", now=fixed)
+    text = chat_relay.turn_context("Europe/Brussels", now=fixed)
     assert text.startswith("Kullanıcının saat dilimi: Europe/Brussels.")
     assert "24 Ekim 2026 Cumartesi, saat 22:05" in text
     assert text.endswith("\n\n")

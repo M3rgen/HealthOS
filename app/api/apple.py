@@ -14,28 +14,26 @@ from __future__ import annotations
 import hmac
 import logging
 import re
-from pathlib import Path
 from typing import Any
 from urllib.parse import unquote
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 from sqlalchemy.exc import SQLAlchemyError
-from sqlalchemy.ext.asyncio import async_sessionmaker
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.api.deps import bounded_body, require_budget, require_job_request
 from app.api.deps import settings as settings_dep
-from app.core.apple_paths import APPLE_IMPORT_PATH, APPLE_RECEIVER_PATH
+from app.core.apple_paths import APPLE_IMPORT_PATH, APPLE_RECEIVER_PATH, receiver_token
 from app.core.config import Settings
 from app.core.logging import event
 from app.core.request_limits import RequestBudget
-from app.services import apple_import
+from app.schemas.apple import AppleImportRow, AppleReceiverResult, AppleReceiverStatus, AppleStatus
+from app.services.providers import apple_import
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["apple"])
 
-# The receiver token is at least this long (``health-mirror apple-token`` writes 43 characters).
-MIN_TOKEN_LENGTH = 32
 IMPORT_TYPES = frozenset(
     {"application/zip", "application/xml", "text/xml", "application/octet-stream"}
 )
@@ -63,15 +61,6 @@ def apple_limits(request: Request) -> AppleLimits:
     return limits
 
 
-def receiver_token(settings: Settings) -> str | None:
-    """The receiver token from its file; None when missing, unreadable or too short."""
-    try:
-        token = Path(settings.apple_receiver_token_file).expanduser().read_text("utf-8").strip()
-    except (OSError, UnicodeError):
-        return None
-    return token if len(token) >= MIN_TOKEN_LENGTH else None
-
-
 def _bearer(request: Request) -> str | None:
     values = request.headers.getlist("authorization")
     if len(values) != 1:
@@ -80,7 +69,7 @@ def _bearer(request: Request) -> str | None:
     return credentials.strip() if scheme.lower() == "bearer" else None
 
 
-@router.post(APPLE_RECEIVER_PATH, include_in_schema=False)
+@router.post(APPLE_RECEIVER_PATH, include_in_schema=False, response_model=AppleReceiverResult)
 async def apple_health_receiver(
     request: Request,
     settings: Settings = Depends(settings_dep),
@@ -135,6 +124,7 @@ def _filename(request: Request) -> str | None:
 @router.post(
     APPLE_IMPORT_PATH,
     dependencies=[Depends(require_job_request)],
+    response_model=AppleImportRow,
     openapi_extra={
         "requestBody": {
             "required": True,
@@ -168,6 +158,7 @@ async def apple_import_upload(
             origin=apple_import.UPLOAD,
             filename=_filename(request),
             max_bytes=limit,
+            reader=apple_import.export_reader(settings.apple_import_max_uncompressed),
         )
     except apple_import.AppleImportError as exc:
         raise HTTPException(exc.status, exc.message) from exc
@@ -176,23 +167,23 @@ async def apple_import_upload(
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
-async def _sources(session) -> Any:
+async def _sources(session: AsyncSession) -> Any:
     try:
-        from app.services.apple_readers import sources
+        from app.services.providers.apple_readers import sources
     except ImportError:
         return None
     return await sources(session)
 
 
-@router.get("/api/apple/status")
+@router.get("/api/apple/status", response_model=AppleStatus)
 async def apple_status(
     response: Response,
     settings: Settings = Depends(settings_dep),
     sessions: async_sessionmaker = Depends(sessions_dep),
-) -> dict:
+) -> AppleStatus:
     """Receiver configuration, the running import, the last imports and the Health sources."""
     response.headers["Cache-Control"] = "no-store"
-    receiver = {
+    receiver: AppleReceiverStatus = {
         "enabled": settings.apple_receiver_enabled,
         "token_file_present": receiver_token(settings) is not None,
         "endpoint_configured": settings.apple_receiver_endpoint_uri is not None,

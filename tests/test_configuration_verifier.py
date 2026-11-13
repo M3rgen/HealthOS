@@ -4,6 +4,7 @@ import pytest
 import yaml
 
 from scripts.verify_configuration import (
+    check_caddy_routes,
     check_compose_runtime,
     check_documentation_links,
     check_environment,
@@ -15,6 +16,60 @@ from scripts.verify_configuration import (
 
 def test_repository_configuration_is_consistent():
     assert check_repository() == []
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/*",
+        "/webhooks/*",
+        "/webhooks/google-health*",
+        "/api/status",
+        "/webhooks/google-health /api/status",
+    ],
+)
+def test_caddy_rejects_paths_exposing_the_interface(path):
+    config = f"""
+hooks.example {{
+    @delivery path {path}
+    handle @delivery {{
+        reverse_proxy app:8000
+    }}
+    handle {{
+        respond 404
+    }}
+}}
+"""
+    assert check_caddy_routes(config)
+
+
+def test_caddy_accepts_equivalent_matcher_name_quotes_and_comments():
+    assert (
+        check_caddy_routes("""
+hooks.example {
+    @delivery   path "/webhooks/google-health" # exact path
+    handle @delivery {
+        reverse_proxy app:8000
+    }
+    handle {
+        respond 404
+    }
+}
+""")
+        == []
+    )
+
+
+@pytest.mark.parametrize("change", ["unguarded_proxy", "missing_deny", "wrong_guard"])
+def test_caddy_requires_guarded_proxy_and_default_deny(change):
+    config = (Path(__file__).resolve().parents[1] / "Caddyfile").read_text()
+    if change == "unguarded_proxy":
+        config = config.replace("respond 404", "reverse_proxy app:8000")
+    elif change == "missing_deny":
+        config = config.replace("respond 404", "")
+    else:
+        config = config.replace("handle @google_health_webhook", "handle @other")
+    assert check_caddy_routes(config)
 
 
 def test_environment_check_reports_names_not_values(tmp_path: Path):

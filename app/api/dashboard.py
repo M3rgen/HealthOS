@@ -2,50 +2,46 @@ import csv
 import io
 import uuid
 from collections.abc import Callable, Coroutine
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import Any, Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import Response
 from pydantic import BaseModel, field_validator, model_validator
-from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import ManualWriteRoute, require_job_request
-from app.core.providers import APPLE, GOOGLE
-from app.core.timeutil import as_utc
 from app.db.session import get_session
-from app.models.eligibility import raw_counted
-from app.models.health import SleepSession, Steps
-from app.models.identity import plan_each_query
-from app.models.manual import ManualMeasurement, ManualWorkout
-from app.models.manual_flags import REASON_LENGTH, TEST_FLAG
-from app.models.state import RawHealthData
-from app.services import apple_readers, garmin_readers
-from app.services.current_workouts import current_workouts
-from app.services.dashboard import dashboard_data
-from app.services.dashboard_window import (
-    DateWindowError,
-    checked_dates,
-    daily_window,
-    monthly_window,
+from app.schemas.dashboard import Dashboard, History, Measurement, MeasurementFlag, Workout
+from app.services.archive.manual_flags import REASON_LENGTH, TEST_FLAG
+from app.services.dashboard_views.dashboard import dashboard_data
+from app.services.dashboard_views.dashboard_history import HistoryPageNotFound, history_data
+from app.services.dashboard_views.dashboard_workouts import create_workout, list_workouts
+
+# Compatibility for callers of the original API helper.
+from app.services.dashboard_views.dashboard_workouts import place_workouts as place_workouts
+from app.services.readers.dashboard_manual import (
+    MeasurementNotFound,
+    create_measurement,
+    list_measurements,
+    set_measurement_flag,
 )
-from app.services.manual_flags import active_flags, record_flag
-from app.services.source_precedence import (
-    MANUAL,
-    PRIMARY,
-    SECONDARY,
-    Observation,
-    Policy,
-    label,
-    resolve_sessions,
+from app.services.readers.dashboard_queries import DashboardQuery
+from app.services.readers.dashboard_window import DateWindowError
+from app.services.readers.manual_validation import (
+    valid_manual_date,
+    valid_manual_number,
+    valid_manual_text,
+    validate_measurement,
+    validate_workout,
 )
 
 
 class DashboardRoute(ManualWriteRoute):
-    """Answer an unrepresentable date window with 422 and only its fixed message."""
+    """Reject invalid inputs without echoing values that may not be JSON-serializable."""
 
     def get_route_handler(self) -> Callable[[Request], Coroutine[Any, Any, Response]]:
         handler = super().get_route_handler()
@@ -53,6 +49,8 @@ class DashboardRoute(ManualWriteRoute):
         async def window_handler(request: Request) -> Response:
             try:
                 return await handler(request)
+            except RequestValidationError as exc:
+                raise HTTPException(422, "Girdi geçersiz. Lütfen değerleri kontrol edin.") from exc
             except DateWindowError as exc:
                 raise HTTPException(422, str(exc)) from exc
 
@@ -75,179 +73,48 @@ class WorkoutInput(BaseModel):
         value = value.strip()
         if not value or len(value) > 128:
             raise ValueError("Spor türü 1–128 karakter olmalı.")
-        return value
+        return valid_manual_text(value)
+
+    @field_validator("start_time", "end_time")
+    @classmethod
+    def valid_date(cls, value: datetime) -> datetime:
+        return valid_manual_date(value)
+
+    @field_validator("calories_kcal", "distance_meters")
+    @classmethod
+    def valid_number(cls, value: Decimal | None) -> Decimal | None:
+        return valid_manual_number(value)
 
     @model_validator(mode="after")
     def valid_workout(self):
-        if self.start_time.tzinfo is None or self.end_time.tzinfo is None:
-            raise ValueError("Antrenman tarihleri saat dilimi içermeli.")
-        if self.end_time <= self.start_time or self.end_time > datetime.now(UTC):
-            raise ValueError("Bitiş başlangıçtan sonra olmalı ve gelecekte olmamalı.")
-        for value, maximum in ((self.calories_kcal, 100000), (self.distance_meters, 10000000)):
-            if value is not None and (not value.is_finite() or not 0 <= value <= maximum):
-                raise ValueError("Kalori ve mesafe geçerli, negatif olmayan değerler olmalı.")
+        validate_workout(self.model_dump(), now=datetime.now(UTC))
         return self
 
 
-def workout_dict(row, source: str) -> dict:
-    """A manual workout as the API lists it (``source`` is the display label, "Manuel")."""
-    return {
-        "id": str(row.id),
-        "exercise_type": row.exercise_type,
-        "start_time": as_utc(row.start_time),
-        "end_time": as_utc(row.end_time),
-        "duration_seconds": (
-            float(row.duration_seconds)
-            if source != "Manuel" and row.duration_seconds is not None
-            else (as_utc(row.end_time) - as_utc(row.start_time)).total_seconds()
-        ),
-        "calories_kcal": float(row.calories_kcal) if row.calories_kcal is not None else None,
-        "distance_meters": float(row.distance_meters) if row.distance_meters is not None else None,
-        "source": source,
-        "source_code": MANUAL,
-        "provider": MANUAL,
-        "priority": PRIMARY,
-        "group": None,
-        "alternatives": [],
-    }
-
-
-def relayed_apple_workouts(rows: list[dict]) -> dict[str, str]:
-    """Apple workouts Google also lists: key of the Apple row -> key of the Google row.
-
-    Google relays Apple Health data with the source code ``HEALTH_KIT``, the code Apple's own
-    rows carry, so ``resolve_sessions`` (which never sets one source against itself) would
-    list both. An Apple row that overlaps a Google ``HEALTH_KIT`` row by at least half of the
-    shorter of the two is the same workout: it is folded under that row (the first such by
-    start time) instead of being listed again.
-    """
-    google = sorted(
-        (
-            row
-            for row in rows
-            if row["provider"] == GOOGLE and row["source_code"] == apple_readers.HEALTH_KIT
-        ),
-        key=lambda row: (row["start_time"], str(row["id"])),
-    )
-    folded: dict[str, str] = {}
-    for row in rows:
-        if row["provider"] != APPLE:
-            continue
-        match = next(
-            (
-                other
-                for other in google
-                if apple_readers.overlap_share(
-                    row["start_time"], row["end_time"], other["start_time"], other["end_time"]
-                )
-                >= apple_readers.SAME_WORKOUT
-            ),
-            None,
-        )
-        if match is not None:
-            folded[_workout_key(row)] = _workout_key(match)
-    return folded
-
-
-def _workout_key(row: dict) -> str:
-    return f"{row['source_code']}:{row['provider']}:{row['id']}"
-
-
-def _alternative(row: dict) -> dict:
-    return {
-        "id": row["id"],
-        "source": label(row["source_code"]),
-        "source_code": row["source_code"],
-        "start_time": row["start_time"],
-        "end_time": row["end_time"],
-    }
-
-
-def place_workouts(rows: list[dict], policy: Policy | None = None) -> list[dict]:
-    """Label every row's source and place the device rows under the activity policy: a
-    session that overlaps a higher-ranked source's session is ``secondary`` and listed among
-    that session's ``alternatives``; nothing is merged or summed. Manual rows stay as they are.
-    An Apple workout Google also relays (``relayed_apple_workouts``) is ``secondary`` under
-    the Google row (or under the row that Google row is itself folded under).
-    """
-    policy = policy or Policy.from_settings()
-    folded = relayed_apple_workouts(rows)
-    placed = [row for row in rows if _workout_key(row) not in folded]
-    placements = resolve_sessions(
-        [
-            Observation(
-                row["source_code"],
-                row,
-                provider=row["provider"],
-                record_id=_workout_key(row),
-                start=row["start_time"],
-                end=row["end_time"],
-            )
-            for row in placed
-        ],
-        policy,
-    )
-    by_key = {_workout_key(row): row for row in rows}
-    for key, row in by_key.items():
-        if key in folded:
-            continue
-        placement = placements[key]
-        row["source"] = label(row["source_code"])
-        row["priority"] = placement.priority
-        row["group"] = (
-            by_key[placement.group]["id"] if placement.group in by_key else placement.group
-        )
-        row["alternatives"] = [_alternative(item.value) for item in placement.alternatives]
-    for key, holder_key in folded.items():
-        row, holder = by_key[key], by_key[holder_key]
-        primary = holder
-        if holder["priority"] == SECONDARY:
-            primary = next((other for other in placed if other["id"] == holder["group"]), holder)
-        row["source"] = label(row["source_code"])
-        row["priority"] = SECONDARY
-        row["group"] = primary["id"]
-        row["alternatives"] = []
-        primary["alternatives"].append(_alternative(row))
-    return rows
-
-
-@router.post("/workouts", status_code=201, dependencies=[Depends(require_job_request)])
-async def add_workout(body: WorkoutInput, session: AsyncSession = Depends(get_session)) -> dict:
-    item = ManualWorkout(**body.model_dump())
-    session.add(item)
+@router.post(
+    "/workouts",
+    status_code=201,
+    dependencies=[Depends(require_job_request)],
+    response_model=Workout,
+)
+async def add_workout(body: WorkoutInput, session: AsyncSession = Depends(get_session)) -> Workout:
+    result = await create_workout(session, body.model_dump())
     await session.commit()
-    await session.refresh(item)
-    return workout_dict(item, "Manuel")
+    return result
 
 
-@router.get("/workouts")
+@router.get("/workouts", response_model=list[Workout])
 async def workouts(
     month: date | None = None,
     timezone: str = "UTC",
     session: AsyncSession = Depends(get_session),
-) -> list[dict]:
+) -> list[Workout]:
     zone = check_zone(timezone)
     current = datetime.now(zone).date()
     first = (month or current).replace(day=1)
     if first > current:
         raise HTTPException(422, "Gelecek ay seçilemez.")
-    window = monthly_window(first, zone)
-    start, stop = window.start, window.stop
-    await plan_each_query(session)
-    rows = await current_workouts(session, start, stop)
-    rows.extend(await garmin_readers.workouts(session, start, stop))
-    rows.extend(await apple_readers.workouts(session, start, stop))
-    manual = (
-        await session.scalars(
-            select(ManualWorkout).where(
-                ManualWorkout.start_time >= start,
-                ManualWorkout.start_time < stop,
-            )
-        )
-    ).all()
-    rows.extend(workout_dict(row, "Manuel") for row in manual)
-    place_workouts(rows)
-    return sorted(rows, key=lambda row: row["start_time"], reverse=True)
+    return await list_workouts(session, first, zone)
 
 
 def check_zone(timezone: str) -> ZoneInfo:
@@ -257,91 +124,34 @@ def check_zone(timezone: str) -> ZoneInfo:
         raise HTTPException(422, "Geçerli bir saat dilimi seçin.") from exc
 
 
-@router.get("")
+@router.get("", response_model=Dashboard)
 async def dashboard(
     days: int = Query(7, ge=1, le=31),
     end_date: date | None = None,
     timezone: str = "UTC",
     session: AsyncSession = Depends(get_session),
-) -> dict:
+) -> Dashboard:
     zone = check_zone(timezone)
     end_date = end_date or datetime.now(zone).date()
     if end_date > datetime.now(zone).date():
         raise HTTPException(422, "Gelecek tarih seçilemez.")
-    return await dashboard_data(session, end_date, days, timezone)
+    return await dashboard_data(session, query=DashboardQuery(end_date, days, timezone))
 
 
-@router.get("/history")
+@router.get("/history", response_model=History)
 async def metric_history(
     metric: Literal["steps", "sleep", "heart"],
     page: int = Query(1, ge=1),
     timezone: str = "UTC",
     session: AsyncSession = Depends(get_session),
-) -> dict:
+) -> History:
     """Thirty civil days per page, newest first, through the full valid archive."""
     zone = check_zone(timezone)
     today = datetime.now(zone).date()
-    with checked_dates():
-        end_date = today - timedelta(days=30 * (page - 1))
-    # Even the oldest page is a full thirty-day window, not a clipped archive tail.
-    daily_window(end_date, 30, zone)
-    source_type, value_key = {
-        "steps": ("steps", "steps"),
-        "sleep": ("sleep", "sleep_seconds"),
-        "heart": ("daily-resting-heart-rate", "resting_bpm"),
-    }[metric]
-    # Daily heart summaries encode their civil date at UTC midnight. Sleep
-    # belongs to the wake-up date, matching the dashboard's daily aggregation.
-    date_zone = ZoneInfo("UTC") if metric == "heart" else zone
-    source_time = (
-        RawHealthData.source_end_time if metric == "sleep" else RawHealthData.source_start_time
-    )
-    stop = daily_window(today, 1, date_zone).stop
-    await plan_each_query(session)
-    bounds = select(func.min(source_time), func.max(source_time)).where(
-        RawHealthData.data_type == source_type,
-        raw_counted(data_types=(source_type,)),
-        source_time < stop,
-    )
-    if metric != "heart":
-        model = Steps if metric == "steps" else SleepSession
-        bounds = bounds.where(
-            select(model.id)
-            .where(
-                model.google_data_point_id == RawHealthData.google_data_point_id,
-                model.is_quarantined.is_(False),
-            )
-            .exists()
-        )
-    if metric == "sleep":
-        # Partial corrections cannot establish an archive wake day. These are current
-        # ingestion timestamps, never the retained SleepSession's historical interval.
-        bounds = bounds.where(
-            RawHealthData.source_start_time.is_not(None),
-            RawHealthData.source_end_time > RawHealthData.source_start_time,
-        )
-    earliest, latest = (await session.execute(bounds)).one()
-    with checked_dates():
-        earliest_date = as_utc(earliest).astimezone(date_zone).date() if earliest else None
-        latest_date = as_utc(latest).astimezone(date_zone).date() if latest else None
-    total_pages = ((today - earliest_date).days // 30 + 1) if earliest_date else 1
-    if page > total_pages:
-        raise HTTPException(422, "Bu geçmiş sayfası bulunamadı.")
-    data = await dashboard_data(session, end_date, 30, timezone)
-    return {
-        "metric": metric,
-        "page": page,
-        "total_pages": total_pages,
-        "start_date": data["start_date"],
-        "end_date": end_date,
-        "earliest_date": earliest_date,
-        "latest_date": latest_date,
-        "timezone": timezone,
-        "days": [
-            {"date": row["date"], "value": row[value_key], "partial": row["partial"]}
-            for row in data["days"]
-        ],
-    }
+    try:
+        return await history_data(session, metric, page, timezone, today)
+    except HistoryPageNotFound as exc:
+        raise HTTPException(422, str(exc)) from exc
 
 
 @router.get("/export.csv")
@@ -391,56 +201,32 @@ class MeasurementInput(BaseModel):
     @field_validator("measured_at")
     @classmethod
     def valid_date(cls, value: datetime) -> datetime:
-        if value.tzinfo is None or value > datetime.now(UTC):
-            raise ValueError("Ölçüm tarihi saat dilimi içermeli ve gelecekte olmamalı.")
+        value = valid_manual_date(value)
         return value
 
     @model_validator(mode="after")
     def valid_value(self):
-        bounds = {"height": (30, 260), "weight": (1, 500), "body_fat": (0, 100), "muscle": (0, 100)}
-        low, high = bounds[self.metric]
-        if not self.value.is_finite() or not low <= self.value <= high:
-            raise ValueError(f"Ölçüm {low}–{high} aralığında olmalı.")
+        validate_measurement(self.model_dump(), now=datetime.now(UTC))
         return self
 
 
-@router.post("/measurements", status_code=201, dependencies=[Depends(require_job_request)])
+@router.post(
+    "/measurements",
+    status_code=201,
+    dependencies=[Depends(require_job_request)],
+    response_model=Measurement,
+)
 async def add_measurement(
     body: MeasurementInput, session: AsyncSession = Depends(get_session)
-) -> dict:
-    item = ManualMeasurement(**body.model_dump())
-    session.add(item)
+) -> Measurement:
+    result = await create_measurement(session, body.model_dump())
     await session.commit()
-    await session.refresh(item)
-    return {
-        "id": str(item.id),
-        "metric": item.metric,
-        "value": item.value,
-        "measured_at": item.measured_at,
-        "source": "Manuel",
-    }
+    return result
 
 
-@router.get("/measurements")
-async def measurements(session: AsyncSession = Depends(get_session)) -> list[dict]:
-    rows = (
-        await session.scalars(
-            select(ManualMeasurement).order_by(ManualMeasurement.measured_at.desc()).limit(100)
-        )
-    ).all()
-    flags = await active_flags(session, [row.id for row in rows])
-    return [
-        {
-            "id": str(row.id),
-            "metric": row.metric,
-            "value": row.value,
-            "measured_at": row.measured_at,
-            "source": "Manuel",
-            # Flags set on it now; a "test" entry is listed but left out of the profile.
-            "flags": flags.get(row.id, []),
-        }
-        for row in rows
-    ]
+@router.get("/measurements", response_model=list[Measurement])
+async def measurements(session: AsyncSession = Depends(get_session)) -> list[Measurement]:
+    return await list_measurements(session)
 
 
 class FlagInput(BaseModel):
@@ -453,7 +239,7 @@ class FlagInput(BaseModel):
         value = value.strip() if value else None
         if value and len(value) > REASON_LENGTH:
             raise ValueError(f"Açıklama en fazla {REASON_LENGTH} karakter olmalı.")
-        return value or None
+        return valid_manual_text(value) if value else None
 
 
 async def _flag(
@@ -462,35 +248,45 @@ async def _flag(
     body: FlagInput | None,
     flagged: bool,
     response: Response,
-) -> dict:
+) -> MeasurementFlag:
     body = body or FlagInput()
-    if await session.get(ManualMeasurement, measurement_id) is None:
-        raise HTTPException(404, "Ölçüm bulunamadı.")
-    changed = await record_flag(session, measurement_id, body.flag, flagged, body.reason)
+    try:
+        result = await set_measurement_flag(
+            session, measurement_id, body.flag, flagged, body.reason
+        )
+    except MeasurementNotFound as exc:
+        raise HTTPException(404, str(exc)) from exc
     await session.commit()
     # Already in that state: nothing was added.
-    response.status_code = 201 if changed else 200
-    flags = await active_flags(session, [measurement_id])
-    return {"id": str(measurement_id), "flags": flags.get(measurement_id, []), "changed": changed}
+    response.status_code = 201 if result["changed"] else 200
+    return result
 
 
-@router.post("/measurements/{measurement_id}/flag", dependencies=[Depends(require_job_request)])
+@router.post(
+    "/measurements/{measurement_id}/flag",
+    dependencies=[Depends(require_job_request)],
+    response_model=MeasurementFlag,
+)
 async def flag_measurement(
     measurement_id: uuid.UUID,
     response: Response,
     body: FlagInput | None = None,
     session: AsyncSession = Depends(get_session),
-) -> dict:
+) -> MeasurementFlag:
     """Flag a measurement (``test``: a test entry). Appends an event; the entry is unchanged."""
     return await _flag(session, measurement_id, body, True, response)
 
 
-@router.post("/measurements/{measurement_id}/unflag", dependencies=[Depends(require_job_request)])
+@router.post(
+    "/measurements/{measurement_id}/unflag",
+    dependencies=[Depends(require_job_request)],
+    response_model=MeasurementFlag,
+)
 async def unflag_measurement(
     measurement_id: uuid.UUID,
     response: Response,
     body: FlagInput | None = None,
     session: AsyncSession = Depends(get_session),
-) -> dict:
+) -> MeasurementFlag:
     """Clear a flag. Appends an event too: the earlier decision stays as history."""
     return await _flag(session, measurement_id, body, False, response)

@@ -8,10 +8,12 @@ from app.core.timeutil import as_utc
 from app.google_health.client import Page
 from app.google_health.data_types import REGISTRY, query_iso
 from app.models.state import JobStatus, RawHealthData, SyncState, WebhookNotification
-from app.services.dashboard import dashboard_data
-from app.services.webhook_processing import WebhookBatchProcessor
-from app.sync.deletions import deletion_scope
+from app.services.archive.source_deletions import deletion_scope
+from app.services.dashboard_views.dashboard import dashboard_data
+from app.services.providers.ingestion import GoogleSource
+from app.services.readers.dashboard_queries import DashboardQuery
 from app.sync.incremental import IncrementalSync
+from app.sync.webhook_processing import WebhookBatchProcessor
 
 WINDOW_START = datetime(2026, 8, 1, tzinfo=UTC)
 WINDOW_END = datetime(2026, 8, 2, tzinfo=UTC)
@@ -41,9 +43,11 @@ class QueueClient:
 async def snapshot(sessions):
     async with sessions() as session:
         rows = (await session.scalars(select(RawHealthData))).all()
-        dashboard = await dashboard_data(session, date(2026, 8, 1), 1, "UTC")
+        dashboard = await dashboard_data(session, query=DashboardQuery(date(2026, 8, 1), 1, "UTC"))
         with_deleted = await dashboard_data(
-            session, date(2026, 8, 1), 1, "UTC", include_source_deleted=True
+            session,
+            include_source_deleted=True,
+            query=DashboardQuery(date(2026, 8, 1), 1, "UTC"),
         )
     deleted = {row.google_data_point_id.rsplit("/", 1)[1] for row in rows if row.source_deleted_at}
     return len(rows), deleted, dashboard["days"][0]["steps"], with_deleted["days"][0]["steps"]
@@ -51,7 +55,9 @@ async def snapshot(sessions):
 
 async def test_refetched_window_marks_missing_record_and_restores_it(sessions):
     client = QueueClient()
-    service = IncrementalSync(Settings(), sessions, client, {"steps": REGISTRY["steps"]})
+    service = IncrementalSync(
+        Settings(), sessions, GoogleSource(client), {"steps": REGISTRY["steps"]}
+    )
     a, b, c = steps("a", 10), steps("b", 11), steps("c", 12)
 
     client.responses = [Page([a, b, c], None)]
@@ -71,7 +77,9 @@ async def test_refetched_window_marks_missing_record_and_restores_it(sessions):
 
 async def test_records_outside_the_window_are_not_marked(sessions):
     client = QueueClient()
-    service = IncrementalSync(Settings(), sessions, client, {"steps": REGISTRY["steps"]})
+    service = IncrementalSync(
+        Settings(), sessions, GoogleSource(client), {"steps": REGISTRY["steps"]}
+    )
     client.responses = [Page([steps("a", 10), steps("b", 20)], None)]
     await service.run("steps", WINDOW_START, WINDOW_END)
 
@@ -85,7 +93,9 @@ async def test_records_outside_the_window_are_not_marked(sessions):
 async def test_resumed_window_cannot_infer_deletions(sessions):
     """Pages before a saved token were seen by an earlier process, not by this fetch."""
     client = QueueClient()
-    service = IncrementalSync(Settings(), sessions, client, {"steps": REGISTRY["steps"]})
+    service = IncrementalSync(
+        Settings(), sessions, GoogleSource(client), {"steps": REGISTRY["steps"]}
+    )
     client.responses = [Page([steps("a", 10), steps("b", 11)], None)]
     await service.run("steps", WINDOW_START, WINDOW_END)
     async with sessions.begin() as session:
@@ -126,7 +136,7 @@ def test_deletion_scope_mirrors_the_list_filter_per_record_kind():
 async def test_rollup_refetch_never_marks(sessions):
     client = QueueClient()
     spec = REGISTRY["total-calories"]
-    service = IncrementalSync(Settings(), sessions, client, {spec.name: spec})
+    service = IncrementalSync(Settings(), sessions, GoogleSource(client), {spec.name: spec})
     point = {
         "startTime": "2026-08-01T10:00:00Z",
         "endTime": "2026-08-01T10:01:00Z",
@@ -152,7 +162,9 @@ def steps_at(name, start_iso, count=100):
 async def test_sub_second_window_end_marks_only_what_google_was_asked_for(sessions):
     """Mark the rounded-up fraction, but keep the exclusive upper second outside."""
     client = QueueClient()
-    service = IncrementalSync(Settings(), sessions, client, {"steps": REGISTRY["steps"]})
+    service = IncrementalSync(
+        Settings(), sessions, GoogleSource(client), {"steps": REGISTRY["steps"]}
+    )
     a = steps_at("a", "2026-08-01T10:00:00Z")
     edge = steps_at("edge", "2026-08-02T00:00:00.200Z")
     outside = steps_at("outside", "2026-08-02T00:00:01Z")
@@ -225,7 +237,9 @@ async def webhook_delete(sessions, service, data_type, start_iso, end_iso):
 )
 async def test_webhook_delete_of_one_session_marks_it(sessions, data_type, start_iso, end_iso):
     client = RecordingClient()
-    service = IncrementalSync(Settings(), sessions, client, {data_type: REGISTRY[data_type]})
+    service = IncrementalSync(
+        Settings(), sessions, GoogleSource(client), {data_type: REGISTRY[data_type]}
+    )
     record = session_record(data_type, "gone", start_iso, end_iso)
     client.responses = [Page([record], None)]
     await service.run(data_type, WINDOW_START, WINDOW_START + timedelta(days=3))
@@ -249,7 +263,9 @@ async def test_webhook_delete_of_one_session_marks_it(sessions, data_type, start
 
 async def test_widened_webhook_window_never_moves_the_watermark_past_now(sessions):
     client = RecordingClient()
-    service = IncrementalSync(Settings(), sessions, client, {"exercise": REGISTRY["exercise"]})
+    service = IncrementalSync(
+        Settings(), sessions, GoogleSource(client), {"exercise": REGISTRY["exercise"]}
+    )
     begin = datetime.now(UTC).replace(microsecond=0) - timedelta(hours=1)
     client.responses = [Page([], None)]
     await webhook_delete(

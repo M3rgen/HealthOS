@@ -1,4 +1,4 @@
-# Bounded json-file logs so a chatty container cannot fill the VM disk (5 x 20 MB each).
+# Bounded json-file logs so a chatty container cannot fill the server disk (5 x 20 MB each).
 x-logging: &default-logging
   driver: json-file
   options:
@@ -9,6 +9,9 @@ services:
   postgres:
     image: postgres:17.10-alpine@sha256:742f40ea20b9ff2ff31db5458d127452988a2164df9e17441e191f3b72252193
     restart: unless-stopped
+    # Docker's default 10 s can end a fast shutdown mid-checkpoint; SIGKILL then costs a crash
+    # recovery on the next start. The image already stops on SIGINT (fast shutdown).
+    stop_grace_period: 60s
     read_only: true
     tmpfs:
       # The root entrypoint fixes ownership before switching to postgres.
@@ -32,6 +35,8 @@ services:
       - SETUID
     security_opt:
       - no-new-privileges:true
+    mem_limit: ${POSTGRES_MEM_LIMIT:-4g}
+    pids_limit: ${POSTGRES_PIDS_LIMIT:-256}
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U health -d health"]
       interval: 5s
@@ -44,6 +49,7 @@ services:
 
   app:
     build: .
+    image: ${COMPOSE_PROJECT_NAME:-healthos}-app:latest
     restart: unless-stopped
     stop_grace_period: 20s
     read_only: true
@@ -53,46 +59,121 @@ services:
       - ALL
     security_opt:
       - no-new-privileges:true
-    env_file: ${APP_ENV_FILE:-.env}
-    environment:
+    mem_limit: ${APP_MEM_LIMIT:-2g}
+    pids_limit: ${APP_PIDS_LIMIT:-256}
+    environment: &app-environment
+      # The app gets only the values it reads (app/core/config.py), never the whole .env: that
+      # file also holds deployment-only values (CLOUDFLARED_CREDENTIALS_FILE,
+      # CLOUDFLARE_WEBHOOK_HOSTNAME, BACKUP_*). A name
+      # listed with no value takes its value from .env (or the shell) and is left out when unset.
+      HEALTHOS_SOURCES:
+      HEALTHOS_ALLOW_LEGACY_SECRETS:
+      HEALTHOS_ALLOW_SUPERUSER_UNTIL:
+      LOG_LEVEL:
+      APP_PUBLIC_URL:
+      APP_TRUST_PROXY_HEADERS:
+      CODEX_BRIDGE_URL:
+      CODEX_BRIDGE_TOKEN:
+      GOOGLE_CLIENT_ID:
+      GOOGLE_CLIENT_SECRET:
+      GOOGLE_REDIRECT_URI:
+      GOOGLE_REFRESH_TOKEN:
+      GOOGLE_TOKEN_ENCRYPTION_KEY:
+      GOOGLE_TOKEN_ENCRYPTION_KEYS_OLD:
+      GOOGLE_CLOUD_PROJECT_NUMBER:
+      GOOGLE_HEALTH_BASE_URL:
+      GOOGLE_HEALTH_WEBHOOK_ENDPOINT_URI:
+      GOOGLE_HEALTH_WEBHOOK_SUBSCRIBER_ID:
+      GOOGLE_HEALTH_WEBHOOK_AUTHORIZATION:
+      GOOGLE_HEALTH_WEBHOOK_MAX_BODY_BYTES:
+      GOOGLE_HEALTH_WEBHOOK_PUBLIC_KEY_URL:
+      BACKFILL_START_DATE:
+      BACKFILL_WINDOW_DAYS:
+      GOOGLE_API_PAGE_SIZE:
+      GOOGLE_API_MAX_RETRIES:
+      GOOGLE_API_MIN_REQUEST_INTERVAL_SECONDS:
+      SYNC_CONCURRENCY:
+      EXTRA_DATA_TYPES:
+      ENABLED_DATA_TYPES:
+      RECONCILIATION_DAILY_DAYS:
+      RECONCILIATION_DAILY_HOUR_UTC:
+      RECONCILIATION_WEEKLY_DAY:
+      RECONCILIATION_WEEKLY_DAYS:
+      RECONCILIATION_WEEKLY_HOUR_UTC:
+      IDENTITY_RECONCILE_HOUR_UTC:
+      IDENTITY_RECONCILE_MINUTE:
+      IDENTITY_RECONCILE_UNTIL_HOUR_UTC:
+      IDENTITY_RECONCILE_UNTIL_MINUTE:
+      IDENTITY_RECONCILE_LOCK_WAIT_MINUTES:
+      GARMIN_ENABLED:
+      GARMIN_API_KEY_FILE:
+      GARMIN_PULL_INTERVAL_MINUTES:
+      GARMIN_LOOKBACK_DAYS:
+      GARMIN_DEVICE_NAME:
+      APPLE_RECEIVER_ENABLED:
+      APPLE_RECEIVER_TOKEN_FILE:
+      APPLE_RECEIVER_ENDPOINT_URI:
+      APPLE_RECEIVER_MAX_BODY_BYTES:
+      APPLE_RECEIVER_REQUESTS_PER_MINUTE:
+      APPLE_IMPORT_MAX_UPLOAD_BYTES:
+      APPLE_IMPORT_MAX_UNCOMPRESSED:
+      SOURCE_PRECEDENCE_ACTIVITY:
+      SOURCE_PRECEDENCE_HEALTH:
+      WATCHDOG_INTERVAL_SECONDS:
+      PIPELINE_STALE_THRESHOLD_MINUTES:
+      PIPELINE_FRESHNESS_REFRESH_SECONDS:
+      RECOVERY_COOLDOWN_MINUTES:
+      STARTUP_GAP_THRESHOLD_MINUTES:
+      AUTOMATIC_RECOVERY_ENABLED:
+      AUTOMATIC_RECOVERY_MAX_DAYS:
+      DEVICES_CONNECTED_HOURS:
+      DEVICES_DELAYED_DAYS:
+      MANUAL_WRITE_MAX_BODY_BYTES:
+      MANUAL_WRITE_REQUESTS_PER_MINUTE:
+      WEBHOOK_REQUESTS_PER_MINUTE:
+      TZ:
+      HTTP_PROXY:
+      HTTPS_PROXY:
+      NO_PROXY:
+      http_proxy:
+      https_proxy:
+      no_proxy:
+      HEALTHOS_MIGRATE_ON_START: "0"
+      # The container always listens on 8000. APP_PORT only chooses the host side of the
+      # published port below; passing it through from .env would move the listener away
+      # from the port the healthcheck and the mapping use.
+      APP_PORT: "8000"
+      # Compose builds the connection URLs below; the owner password stays out of the app.
+      POSTGRES_PASSWORD: ""
       # The Compose stack is the deployment path, so the startup guard in
       # app/core/config.py always runs here. docker-compose.dev.yml relaxes it.
       APP_ENV: production
       APP_HOST: 0.0.0.0
       APP_UI_TOKEN: ${APP_UI_TOKEN:?APP_UI_TOKEN must be set}
-      DATABASE_URL: postgresql+asyncpg://health:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set to a strong value}@postgres:5432/health
+      # The runtime connects as the non-superuser role of POSTGRES_APP_USER/POSTGRES_APP_PASSWORD
+      # when both are set (.env.example sets them for new installs). Without them an existing
+      # install keeps connecting as the owner, unchanged, until the operator opts in.
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_APP_USER:-health}:${POSTGRES_APP_PASSWORD:-${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set to a strong value}}@postgres:5432/health
       RECONCILIATION_ENABLED: ${RECONCILIATION_ENABLED:-true}
       WATCHDOG_ENABLED: ${WATCHDOG_ENABLED:-true}
       IDENTITY_RECONCILE_ENABLED: ${IDENTITY_RECONCILE_ENABLED:-true}
       BACKUP_STATUS_FILE: /run/healthos-backup/status.json
-      # Garmin Connect Personal API (optional, off by default). Enable in .env and mount the
-      # key file below; the key itself never goes into .env.
-      # GARMIN_API_KEY_FILE: /run/secrets/garmin-personal-api-key
-      # Apple Health receiver for Health Auto Export (optional, off by default). Enable in .env
-      # and mount the token file below (install.sh / install.ps1 create it; by hand: `health-mirror apple-token`).
-      # APPLE_RECEIVER_TOKEN_FILE: /run/secrets/apple-receiver-token
-    volumes:
+      # The optional Garmin source adds its key mount through docker-compose.garmin.yml.
+      # The optional Apple Health receiver (Health Auto Export, off by default) adds its token
+      # mount through docker-compose.apple.yml (install.sh / install.ps1 set it up; by hand,
+      # create the token with `healthos apple-token`).
+    volumes: &app-volumes
       # Mount the directory, not an inode replaced atomically by backup.sh.
       # Never mount BACKUP_HOST_DIR or encryption keys into the app.
-      # Long syntax does not create a missing source; without create_host_path an
-      # updated VM without the directory would fail `up`. Docker then creates it
-      # root-owned, which the root backup timer can still write (docs/RUNBOOK.md).
+      # A missing source is created (root-owned) instead of failing `up` on an updated server
+      # without the directory; the root backup timer can still write it (docs/RUNBOOK.md).
+      # Stated explicitly: Compose's default for a missing bind source has changed over time.
       - type: bind
         source: ${BACKUP_STATUS_HOST_DIR:-./backup-status}
         target: /run/healthos-backup
         read_only: true
         bind:
           create_host_path: true
-      # Garmin Personal API key, read-only (host file mode 600); see GARMIN_API_KEY_FILE above.
-      # - type: bind
-      #   source: ${GARMIN_API_KEY_HOST_FILE:-~/.config/garmin/connect-personal-api-key}
-      #   target: /run/secrets/garmin-personal-api-key
-      #   read_only: true
-      # Apple receiver token, read-only (host file mode 600); see APPLE_RECEIVER_TOKEN_FILE above.
-      # - type: bind
-      #   source: ${APPLE_RECEIVER_TOKEN_HOST_FILE:-~/.config/healthos/apple-receiver-token}
-      #   target: /run/secrets/apple-receiver-token
-      #   read_only: true
     ports:
       - "127.0.0.1:${APP_PORT:-8000}:8000"
     extra_hosts:
@@ -102,6 +183,10 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+      provision-app-role:
+        condition: service_completed_successfully
     networks:
       - database
       - application
@@ -112,12 +197,78 @@ services:
         - python
         - -c
         - >-
-          import urllib.request;
-          urllib.request.urlopen('http://127.0.0.1:8000/health/live', timeout=5).read()
+          import os, urllib.request;
+          urllib.request.urlopen('http://127.0.0.1:' + os.environ.get('APP_PORT', '8000') + '/health/live', timeout=5).read()
       interval: 10s
       timeout: 6s
       retries: 12
       start_period: 20s
+
+  migrate:
+    # Same code/configuration as app, but no HTTP server or external network.
+    image: ${COMPOSE_PROJECT_NAME:-healthos}-app:latest
+    command: ["alembic", "upgrade", "head"]
+    restart: "no"
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: ${MIGRATE_MEM_LIMIT:-2g}
+    pids_limit: ${MIGRATE_PIDS_LIMIT:-128}
+    environment:
+      <<: *app-environment
+      # Migrations run as the owner of the schema, never as the application role.
+      DATABASE_URL: &owner-database-url postgresql+asyncpg://health:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set to a strong value}@postgres:5432/health
+    # Same read-only mounts as the app; the Garmin override adds the key that production
+    # validation requires.
+    volumes: *app-volumes
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      disable: true
+    networks:
+      - database
+    logging: *default-logging
+
+  provision-app-role:
+    # After migrations, creates or updates the non-superuser application role and its grants:
+    # additive role changes and grants only; no record contents are read or changed.
+    # Without POSTGRES_APP_USER and POSTGRES_APP_PASSWORD it connects only to check whether
+    # archive records or a prior startup exist. New installs are refused; existing installs
+    # keep the owner login. POSTGRES_ALLOW_OWNER_RUNTIME=1 skips this check explicitly.
+    image: ${COMPOSE_PROJECT_NAME:-healthos}-app:latest
+    command: ["python", "scripts/provision_app_role.py"]
+    restart: "no"
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 256m
+    pids_limit: 64
+    environment:
+      DATABASE_URL: *owner-database-url
+      POSTGRES_APP_USER: ${POSTGRES_APP_USER:-}
+      POSTGRES_APP_PASSWORD: ${POSTGRES_APP_PASSWORD:-}
+      # Only for the rare operator who wants the app to run as the owner on a brand new database.
+      POSTGRES_ALLOW_OWNER_RUNTIME: ${POSTGRES_ALLOW_OWNER_RUNTIME:-}
+      HEALTHOS_ALLOW_LEGACY_SECRETS: ${HEALTHOS_ALLOW_LEGACY_SECRETS:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      disable: true
+    networks:
+      - database
+    logging: *default-logging
 
   backup:
     # Streams a custom-format dump to stdout; scripts/backup.sh encrypts it on the
@@ -137,6 +288,8 @@ services:
       - ALL
     security_opt:
       - no-new-privileges:true
+    mem_limit: ${BACKUP_MEM_LIMIT:-1g}
+    pids_limit: 32
     entrypoint:
       - /bin/sh
       - -c
@@ -153,6 +306,18 @@ services:
     image: caddy:2.11.4-alpine@sha256:5f5c8640aae01df9654968d946d8f1a56c497f1dd5c5cda4cf95ab7c14d58648
     profiles: ["webhook"]
     restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+    # Runs as root in the image; binding 80/443 is the only capability it needs.
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 256m
+    pids_limit: 64
     environment:
       WEBHOOK_HOST: ${WEBHOOK_HOST:-webhook.invalid}
     ports:

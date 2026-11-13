@@ -1,0 +1,28 @@
+/* Month inputs: Turkish label over the native control (see enhanceMonthInput). */
+.month-field {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+}
+.month-field input {
+  color: transparent;
+}
+.month-field input::-webkit-datetime-edit {
+  opacity: 0;
+}
+.month-label {
+  position: absolute;
+  left: 11px;
+  right: 38px;
+  top: 50%;
+  transform: translateY(-50%);
+  pointer-events: none;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.month-field input:disabled + .month-label {
+  opacity: 0.6;
+}

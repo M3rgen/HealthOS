@@ -1,0 +1,600 @@
+.history {
+  margin-top: 18px;
+  padding: 20px 22px 12px;
+}
+.history-heading {
+  display: flex;
+  justify-content: space-between;
+  gap: 20px;
+  align-items: center;
+}
+.history-heading p {
+  font-size: 0.8125rem;
+  margin-top: 5px;
+  color: var(--muted);
+  letter-spacing: 0.002em;
+}
+.history-actions {
+  display: flex;
+  gap: 9px;
+  align-items: center;
+  width: auto;
+}
+.history-footer {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  justify-content: flex-end;
+  min-height: 58px;
+  padding-top: 4px;
+}
+.history-footer p {
+  max-width: 860px;
+}
+.history th:last-child,
+.history td:last-child {
+  text-align: center;
+}
+/* Palette roles remain separate: icons, charts, service state and missing data. */
+.history .warning {
+  color: var(--missing);
+}
+#overview .history-heading {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  flex-shrink: 0;
+}
+#overview .history-heading > div:first-child {
+  grid-column: 2;
+  text-align: center;
+}
+#overview .history-actions {
+  grid-column: 3;
+  justify-self: end;
+}
+.history-handle {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 10px 12px;
+  background: transparent;
+  border: 0;
+  color: var(--muted);
+  font-size: 0.75rem;
+  touch-action: none;
+  user-select: none;
+  cursor: ns-resize;
+  transition: color var(--dur-fast);
+}
+.history-handle:hover {
+  color: var(--amber);
+}
+/* Beside the cards the panel opens sideways: its handle drags horizontally. */
+@media (max-height: 30em) and (min-width: bp(w568)) {
+  .history-handle {
+    cursor: ew-resize;
+  }
+}
+.drag-grip {
+  border-radius: 4px;
+  width: 40px;
+  height: 4px;
+  background: currentColor;
+  transition:
+    width var(--dur) var(--ease-out),
+    background var(--dur-fast);
+}
+.history.expanded {
+  position: fixed;
+  inset: 90px 24px 24px;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  transform-origin: top left;
+  border-color: var(--edge-strong);
+  box-shadow: var(--shadow-2),
+    0 -24px 60px -30px rgb(0 0 0 / 0.8);
+}
+.history.expanded .table-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+.history.expanded th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--surface);
+}
+.history-months {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  padding: 16px 0 0;
+  border-top: 1px solid var(--line-soft);
+  margin-top: 12px;
+  color: var(--muted);
+}
+.history-months input {
+  color: var(--text);
+  background: var(--inset);
+  border: 1px solid var(--control-border);
+  border-radius: 6px;
+  padding: 8px;
+  min-height: 42px;
+}
+#history-status {
+  padding: 12px;
+  color: var(--muted);
+  max-height: min(24dvh, 8em);
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+#overview .history {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  margin: 0;
+}
+#overview .history table {
+  margin-top: 4px;
+}
+#overview .history-handle,
+#overview .history-months {
+  flex-shrink: 0;
+}
+#overview .history .table-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--line) var(--surface);
+}
+#overview .history th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--surface);
+}
+.history-heading h2 {
+  letter-spacing: -0.02em;
+}
+.today-row,
+.today-row:hover {
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--amber) 13%, transparent),
+    color-mix(in srgb, var(--today) 55%, transparent) 30%,
+    color-mix(in srgb, var(--today) 30%, transparent)
+  );
+}
+.today-row td:first-child {
+  box-shadow: inset 2px 0 0 var(--amber);
+}
+/* Scrolled sideways (phones, large text), each value keeps the date of its row beside it. */
+#overview .history th:first-child,
+#overview .history td:first-child:not([colspan]) {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  background: var(--surface);
+}
+/* Above the other headings, which stick to the top with z-index 1. */
+#overview .history thead th:first-child {
+  z-index: 2;
+}
+#overview .history .today-row td:first-child {
+  background: color-mix(in srgb, var(--amber) 13%, var(--surface));
+}
+.history-handle:hover .drag-grip,
+.history-handle:focus-visible .drag-grip {
+  width: 56px;
+  background: var(--amber);
+}
+.history .dot {
+  padding: 0 8px 0 7px;
+  line-height: inherit;
+}
+/* Source precedence in the day table: a text badge names the shown source only where
+  another source disagrees; the toggle reveals those alternatives as text in one sub-row. */
+.source-badge {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 6px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-pill);
+  font-size: 0.75rem;
+  font-weight: 550;
+  letter-spacing: 0.01em;
+  color: var(--muted);
+  vertical-align: middle;
+  line-height: 1.5;
+}
+.source-toggle {
+  margin-left: 8px;
+  padding: 2px 8px;
+  border: 1px solid var(--amber-line);
+  border-radius: var(--radius-pill);
+  background: var(--amber-soft);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.75rem;
+  font-weight: 550;
+  line-height: 1.5;
+  vertical-align: middle;
+}
+.source-toggle:hover {
+  background: color-mix(in srgb, var(--amber) 20%, transparent);
+}
+.source-toggle[aria-expanded="true"] {
+  background: var(--amber);
+  color: var(--button-ink);
+  border-color: var(--amber);
+}
+/* Outranks the centred `.page td[colspan]` empty-table message style. */
+.page .source-alternatives td[colspan] {
+  white-space: normal;
+  text-align: left;
+  font-size: 0.75rem;
+  line-height: 1.5;
+  color: var(--muted);
+  padding: 0 12px 8px;
+  border-top: 0;
+  overflow-wrap: anywhere;
+}
+.today-row + .source-alternatives td {
+  box-shadow: inset 2px 0 0 var(--amber);
+}
+@media (max-width: bp(w1150)) {
+  .history-heading {
+    align-items: flex-start;
+  }
+}
+@media (max-width: bp(w900)), (max-height: 30em) {
+  .history-heading {
+    flex-direction: column;
+    gap: 14px;
+  }
+  .history-actions {
+    flex-wrap: wrap;
+  }
+  .history-footer p {
+    max-width: 85%;
+  }
+}
+@media (max-width: bp(w900)), (max-height: 40.5625em) {
+  #overview .history {
+    padding: 8px 12px;
+  }
+  #overview .history-heading {
+    display: flex;
+    flex-direction: row;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    gap: 8px;
+  }
+  #overview .history-heading > div:first-child {
+    text-align: left;
+  }
+  #overview .history-heading h2 {
+    font-size: 1.25rem;
+  }
+  #overview .history-actions {
+    width: auto;
+  }
+  #overview .history-actions .button {
+    padding: 8px;
+    font-size: 0.75rem;
+  }
+  #overview .history-handle {
+    min-height: 32px;
+    padding: 10px;
+  }
+}
+@media (max-width: bp(w760)) {
+  .history.expanded {
+    inset: 84px 10px 16px;
+  }
+  .history-months {
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+  .history-handle {
+    min-height: 48px;
+    font-size: 0.75rem;
+  }
+}
+@media (max-width: bp(w540)) {
+  #overview .history td {
+    padding-block: 8px;
+  }
+  .history {
+    padding: 16px 12px 10px;
+  }
+  .history-heading h2 {
+    font-size: 1.4375rem;
+  }
+  .history-actions {
+    gap: 7px;
+  }
+  .history-actions input {
+    width: 145px;
+  }
+  .history-actions .button {
+    padding: 8px 10px;
+  }
+  .history-heading p {
+    font-size: 0.75rem;
+  }
+  .history-footer {
+    align-items: flex-end;
+  }
+  .history-heading {
+    flex-direction: row;
+    align-items: center;
+    gap: 8px;
+  }
+  .page .source-alternatives td[colspan] {
+    padding: 0 10px 6px;
+    font-size: 0.75rem;
+  }
+}
+@media (min-width: bp(w901)) and (min-height: 30.0625em) {
+  .history {
+    margin: 0;
+    padding: 12px 16px;
+  }
+  .history-heading {
+    align-items: center;
+    gap: 12px;
+  }
+  .history-heading h2 {
+    font-size: 1.3125rem;
+    line-height: 1.25;
+  }
+  .history-heading p {
+    font-size: 0.75rem;
+    margin-top: 3px;
+  }
+  .history-actions {
+    gap: 10px;
+  }
+  .history-actions .button {
+    min-height: 34px;
+    padding: 6px 12px;
+    font-size: 0.75rem;
+  }
+  .history-actions .assistant-launcher {
+    width: 38px;
+    height: 38px;
+    padding: 6px;
+  }
+  .history table {
+    margin-top: 10px;
+    font-size: 0.75rem;
+  }
+  .history th,
+  .history td {
+    line-height: 1.0625rem;
+    font-size: 0.75rem;
+    padding: 4px 10px;
+  }
+  .history .ongoing-badge {
+    padding: 1px 7px;
+  }
+}
+@media (min-width: bp(w901)) and (min-height: 30.0625em) and (max-height: 46.25em) {
+  .history {
+    padding: 6px 14px;
+  }
+  .history table {
+    margin-top: 4px;
+  }
+  .history th,
+  .history td {
+    padding: 2px 8px;
+    line-height: 0.875rem;
+    font-size: 0.75rem;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .history {
+    scroll-behavior: auto;
+  }
+}
+/* Laptops with browser chrome: a slim handle and heading, at least the rows that fit. */
+@media (min-width: bp(w901)) and (min-height: 30.0625em) and (max-height: 40.5625em) {
+  #overview .history {
+    padding: 2px 12px;
+  }
+  #overview .history-handle {
+    min-height: 24px;
+    padding: 4px;
+  }
+  #overview .history-heading h2 {
+    font-size: 1rem;
+  }
+  #overview .history-heading > div:first-child {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    min-height: 1.75rem;
+  }
+  #overview .history-heading p {
+    margin-top: 0;
+  }
+  #overview .history-actions .button {
+    min-height: 1.75rem;
+    padding: 2px 10px;
+    font-size: 0.75rem;
+  }
+}
+/* On stacked panels the handle sits behind the heading; its height goes to table rows. */
+@media (max-width: bp(w900)) and (min-height: 30.0625em),
+  (min-height: 30.0625em) and (max-height: 40.5625em),
+  (max-height: 30em) and (min-height: 18.75em) and (height > 420px) and (max-width: bp(w567)) {
+  #overview .history:not(.expanded) {
+    position: relative;
+  }
+  #overview .history:not(.expanded) .history-handle {
+    position: absolute;
+    inset: 0 0 auto;
+    height: 3.25rem;
+    padding-top: 6px;
+    justify-content: flex-start;
+  }
+  #overview .history:not(.expanded) .history-heading {
+    position: relative;
+    z-index: 1;
+    pointer-events: none;
+    min-height: calc(3.25rem - 8px);
+    align-items: center;
+  }
+  #overview .history:not(.expanded) .history-actions .button {
+    pointer-events: auto;
+  }
+}
+@media (min-width: bp(w901)) and (min-height: 30.0625em) and (max-height: 40.5625em) {
+  #overview .history:not(.expanded) .history-handle {
+    height: 1.75rem;
+    padding-top: 3px;
+  }
+  #overview .history:not(.expanded) .history-heading {
+    min-height: 1.75rem;
+  }
+}
+/* Very short and narrow: the bar opens with the handle; right padding clears the launcher. */
+@media (height < 18.75em) and (max-width: bp(w567)),
+  (max-height: 30em) and (max-height: 420px) and (max-width: bp(w567)) {
+  #overview .history:not(.expanded) {
+    flex-direction: row;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 58px 2px 4px;
+  }
+  #overview .history:not(.expanded) .history-handle {
+    flex: none;
+    width: 44px;
+    min-height: 44px;
+    padding: 0;
+    justify-content: center;
+  }
+  #overview .history:not(.expanded) .history-heading {
+    flex: 1 1 auto;
+    min-width: 0;
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+  }
+  #overview .history:not(.expanded) .history-heading > div:first-child {
+    grid-column: auto;
+    min-width: 0;
+    text-align: left;
+  }
+  #overview .history:not(.expanded) .history-heading h2 {
+    font-size: 0.9375rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  #overview .history:not(.expanded) #range-caption,
+  #overview .history:not(.expanded) .table-scroll,
+  #overview .history:not(.expanded) #history-status {
+    display: none;
+  }
+  #overview .history:not(.expanded) .history-actions .button {
+    min-height: 44px;
+    padding: 0 10px;
+    font-size: 0.8125rem;
+  }
+}
+/* Short screens: the opened history uses the height under the compact top bar; its heading and
+   month row stay on one line so the table keeps the room. history-panel.js sets the sheet's top
+   from the top bar's bottom edge. */
+@media (max-height: 30em) {
+  .history.expanded {
+    bottom: 8px;
+    left: 8px;
+    right: 8px;
+    padding: 4px 8px;
+  }
+  .history.expanded .history-handle {
+    min-height: 2.25rem;
+    padding: 4px;
+  }
+  .history.expanded #range-caption {
+    display: none;
+  }
+  .history.expanded .history-heading {
+    gap: 4px;
+  }
+  .history.expanded .history-heading h2 {
+    font-size: 1rem;
+  }
+  .history-months {
+    flex-wrap: nowrap;
+    padding-top: 4px;
+    margin-top: 4px;
+    gap: 6px;
+  }
+  .history-months label {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+  }
+}
+/* Phones and landscape phones: the assistant launcher rests over the panel's bottom-right corner.
+   The table stops above it, so the bubble covers no value until the user drags it elsewhere; the
+   panel's track in overview.css grows by the same amount, so the table keeps its rows. */
+@media (max-width: bp(w900)) and (min-height: 30.0625em),
+  (max-height: 30em) and (min-width: bp(w568)) {
+  #overview {
+    --launcher-strip: 64px;
+  }
+  #overview .history:not(.expanded) .table-scroll {
+    margin-bottom: var(--launcher-strip);
+  }
+}
+@media (max-width: bp(w760)) and (min-height: 30.0625em) {
+  #overview {
+    --launcher-strip: 44px;
+  }
+}
+/* A small phone cannot spare the whole strip from the card above: the rows tighten instead. */
+@media (max-width: bp(w540)) and (max-height: 43.75em) {
+  #overview {
+    --launcher-share: 12px;
+  }
+  #overview .history td {
+    padding-block: 6px;
+  }
+}
+/* Very short screens: "CSV indir" keeps its icon beside the title (its words stay its accessible
+   name) instead of taking a line of its own. */
+@media (max-height: 30em) {
+  #overview .history:not(.expanded) #export-button {
+    min-width: 44px;
+    justify-content: center;
+  }
+  #overview .history:not(.expanded) #export-button > span:last-child {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+}

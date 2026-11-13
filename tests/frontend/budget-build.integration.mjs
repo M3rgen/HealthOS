@@ -7,6 +7,7 @@ import { randomBytes } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { build } from '../../frontend/node_modules/vite/dist/node/index.js';
+import { limits } from '../../frontend/build-budget.js';
 
 const frontend = fileURLToPath(new URL('../../frontend/', import.meta.url));
 const productionConfig = path.join(frontend, 'vite.config.js');
@@ -43,9 +44,9 @@ test('programmatic build and direct CLI enforce production config in alternative
   assert.ok(result.output.some(item => item.fileName === 'index.html'));
   const compiled = cli(root, path.join(root, 'ci-alternative-dist'));
   assert.equal(compiled.status, 0, compiled.log);
-  assert.match(compiled.log, /initial JS: raw \d+ B; gzip \d+ B; gzip limit 60000 B \(enforced\)/);
+  assert.match(compiled.log, /initial JS: raw \d+ B; gzip \d+ B; gzip limit 51310 B \(enforced\)/);
   assert.match(compiled.log, /initial CSS: raw \d+ B; gzip \d+ B; gzip limit 20000 B \(enforced\)/);
-  assert.match(compiled.log, /deferred JS:.*body\/three.js \(excluded\)/);
+  assert.match(compiled.log, /deferred JS: raw \d+ B; gzip \d+ B; gzip limit 170000 B \(enforced\)/);
 });
 
 for (const kind of ['JS', 'CSS']) {
@@ -56,7 +57,7 @@ for (const kind of ['JS', 'CSS']) {
     writeFileSync(file, readFileSync(file, 'utf8') + padding);
     const result = cli(root, path.join(root, 'oversized-dist'));
     assert.notEqual(result.status, 0, result.log);
-    assert.match(result.log, new RegExp(`Initial ${kind} gzip budget exceeded: measured \\d+ B > limit ${kind === 'JS' ? 60000 : 20000} B`));
+    assert.match(result.log, new RegExp(`Initial ${kind} gzip budget exceeded: measured \\d+ B > limit ${kind === 'JS' ? 51310 : 20000} B`));
   });
 }
 
@@ -67,3 +68,27 @@ test('a real production build rejects a static import of body and three.js', t =
   assert.notEqual(result.status, 0, result.log);
   assert.match(result.log, /body\/three.js entered the initial static graph/);
 });
+
+test('the real frontend build budgets the model and its textures', () => {
+  const report = cliRealBuild();
+  const { figure, deferred, initial } = report;
+  assert.ok(figure.files.some(file => file.endsWith('.glb')), 'the body model is measured');
+  assert.ok(figure.files.some(file => file.includes('skin-detail')), 'the skin textures are measured');
+  assert.ok(figure.bytes > 1_500_000, `figure assets measured as ${figure.bytes} B`);
+  assert.ok(deferred.js.gzip > 100_000, 'three.js is in the deferred budget');
+  assert.ok(initial.js.gzip < deferred.js.gzip);
+  assert.ok(initial.js.gzip <= limits.js - 800, `initial JS must retain 800 B headroom; measured ${initial.js.gzip} B`);
+});
+
+function cliRealBuild() {
+  const output = path.join(frontend, '.test-output');
+  mkdirSync(output, { recursive: true });
+  const out = mkdtempSync(path.join(output, 'budget-real-'));
+  try {
+    const result = spawnSync(process.execPath, [viteCLI, 'build', '--outDir', out, '--emptyOutDir'], { cwd: frontend, timeout: 180000, encoding: 'utf8' });
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    return JSON.parse(readFileSync(path.join(out, 'performance-budget-report.json'), 'utf8'));
+  } finally {
+    rmSync(out, { recursive: true, force: true });
+  }
+}

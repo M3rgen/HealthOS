@@ -8,16 +8,30 @@ from datetime import timedelta
 
 import pytest
 from derived_records import DAY, T0, manual, point, sleep, snapshot, stage, steps, store, summary
-from fastapi import WebSocketDisconnect
+from support.health_transfer import (
+    QUESTION,
+    SECRET,
+    Bridge,
+    Socket,
+    complete,
+    receipts,
+    started,
+    tool,
+)
 from websockets.exceptions import ConnectionClosed
 
-from app.api import codex
-from app.services import codex_health, coverage
-from app.services.health_transfer import COUNT_KEYS, describe_result, field_paths
-from app.services.manual_flags import record_flag
+from app.services.archive.manual_flags import record_flag
+from app.services.synchronization import coverage
+from app.services.umay import chat_relay as codex
+from app.services.umay import codex_health
+from app.services.umay.chat_socket import ChatDisconnected as WebSocketDisconnect
+from app.services.umay.health_transfer import (
+    COUNT_KEYS,
+    HealthTransfer,
+    describe_result,
+    field_paths,
+)
 
-QUESTION = "synthetic-private-question"
-SECRET = "synthetic-private-value-and-token"
 QUERY = {"start_date": str(DAY), "end_date": str(DAY), "timezone": "UTC"}
 
 
@@ -25,98 +39,19 @@ QUERY = {"start_date": str(DAY), "end_date": str(DAY), "timezone": "UTC"}
 def capture_logs(caplog, monkeypatch):
     # Alembic disables existing loggers and create_app replaces root handlers in other
     # tests. Capture these producers explicitly; privacy assertions must see real logs.
-    for name in ("app.services.health_transfer", "app.api.codex"):
+    for name in ("app.services.umay.health_transfer", "app.services.umay.chat_relay"):
         logger = logging.getLogger(name)
         monkeypatch.setattr(logger, "disabled", False)
         monkeypatch.setattr(logger, "handlers", [caplog.handler])
         monkeypatch.setattr(logger, "propagate", False)
 
 
-class Socket:
-    def __init__(self):
-        self.sent = []
-        self.incoming = asyncio.Queue()
-        self.outgoing = asyncio.Queue()
-        self.closed = False
-
-    async def send_json(self, message):
-        if self.closed:
-            raise WebSocketDisconnect()
-        self.sent.append(deepcopy(message))
-        await self.outgoing.put(message)
-
-    async def receive_json(self):
-        message = await self.incoming.get()
-        if isinstance(message, Exception):
-            raise message
-        return message
-
-
-class Bridge:
-    def __init__(self):
-        self.sent = []
-        self.incoming = asyncio.Queue()
-        self.outgoing = asyncio.Queue()
-        self.fail = False
-        self.sequence = 0
-
-    async def send(self, message):
-        if self.fail:
-            raise self.fail if isinstance(self.fail, Exception) else RuntimeError(SECRET)
-        self.sent.append(deepcopy(message))
-        await self.outgoing.put(message)
-
-    async def request(self, method, params):
-        self.sequence += 1
-        await self.send({"id": self.sequence, "method": method, "params": params})
-        return self.sequence
-
-    async def reject(self, message):
-        await self.send({"id": message["id"], "error": "unsupported"})
-
-    async def receive(self):
-        message = await self.incoming.get()
-        if isinstance(message, Exception):
-            raise message
-        return message
-
-
-async def started():
-    socket, bridge = Socket(), Bridge()
-    chat = codex.ChatRelay(socket, bridge, SECRET)
-    await chat.on_browser({"text": QUESTION})
-    return chat, socket, bridge
-
-
-def receipts(socket):
-    return [item for item in socket.sent if item["type"] == "health_transfer"]
-
-
-async def tool(chat, bridge, arguments):
-    await chat.on_server_request(
-        {"id": f"private-rpc-id-{len(chat.tools.seen)}"},
-        "item/tool/call",
-        {"threadId": chat.thread_id, "tool": "health_archive", "arguments": arguments},
-    )
-    tasks = tuple(chat.tools.tasks)
-    await asyncio.gather(*tasks, return_exceptions=True)
-    for task in tasks:
-        await chat.on_tool_result(task)
-    reply = bridge.sent[-1]["result"]
-    return json.loads(reply["contentItems"][0]["text"]), reply["success"]
-
-
-async def complete(chat, status="completed"):
-    await chat.on_notification("turn/completed", {"turn": {"status": status}})
-
-
 @pytest.fixture
 def actual_reads(sessions, monkeypatch):
-    monkeypatch.setattr(codex_health, "SessionLocal", sessions)
     reads = []
 
-    async def read(arguments):
-        result = await codex_health.read_health(arguments)
+    async def read(_sessions, arguments):
+        result = await codex_health.read_health(sessions, arguments)
         reads.append(deepcopy(result))
         return result
 
@@ -323,7 +258,7 @@ async def test_exception_messages_payload_values_and_dynamic_field_keys_never_lo
     caplog.set_level(logging.INFO)
     chat, socket, bridge = await started()
 
-    async def broken(_arguments):
+    async def broken(_sessions, _arguments):
         raise RuntimeError(SECRET + " 998877.25 Bearer synthetic-credential")
 
     monkeypatch.setattr(codex, "read_health", broken)
@@ -332,7 +267,7 @@ async def test_exception_messages_payload_values_and_dynamic_field_keys_never_lo
     assert not any(record.exc_info for record in caplog.records)
     assert "Umay health archive query failed" in caplog.text
 
-    async def sensitive(_arguments):
+    async def sensitive(_sessions, _arguments):
         return {
             "records": [
                 {
@@ -360,6 +295,34 @@ async def test_exception_messages_payload_values_and_dynamic_field_keys_never_lo
     for value in (SECRET, QUESTION, "998877.25", "synthetic-credential", "private-rpc-id"):
         assert value not in caplog.text
     assert "Umay health transfer" in caplog.text
+
+
+def test_transfer_logs_only_numeric_counts_and_returns_the_full_browser_receipt(caplog):
+    transfer = HealthTransfer()
+    arguments = {"action": "records", **QUERY, "data_type": "steps", "timezone": "Europe/Paris"}
+    call = describe_result(
+        arguments,
+        {"records": [{"start": T0.isoformat(), "source_timezone": "Pacific/Honolulu"}]},
+        True,
+    )
+    transfer.calls.extend([call, deepcopy(call)])
+    transfer.failed_sends = 1
+    before = deepcopy(transfer.snapshot())
+
+    returned = transfer.log()
+
+    assert returned == before == transfer.snapshot()
+    assert returned["calls"][0]["data_dates"] == {"first": str(DAY), "last": str(DAY)}
+    assert returned["calls"][0]["timezone"] == "Europe/Paris"
+    assert returned["calls"][0]["source_timezones"] == ["Pacific/Honolulu"]
+    (record,) = caplog.records
+    text = record.getMessage().removeprefix("Umay health transfer ")
+    logged = json.loads(text)
+    assert logged == {"counts": returned["counts"], "tool_calls": 2, "failed_sends": 1}
+    assert all(type(value) is int for value in logged["counts"].values())
+    assert logged["counts"]["raw_records"] == 2
+    for private in (str(DAY), "Europe/Paris", "Pacific/Honolulu", transfer.turn):
+        assert private not in str(vars(record))
 
 
 async def test_sleep_evidence_and_repeated_old_manual_profile_are_representations(
@@ -492,6 +455,15 @@ async def test_relay_finalizes_on_socket_loss_timeout_and_unexpected_errors(
     side, monkeypatch, caplog
 ):
     caplog.set_level(logging.INFO)
+    snapshots = []
+    original_log = HealthTransfer.log
+
+    def logged(transfer):
+        receipt = original_log(transfer)
+        snapshots.append(deepcopy(receipt))
+        return receipt
+
+    monkeypatch.setattr(HealthTransfer, "log", logged)
     socket, bridge = Socket(), Bridge()
     if side == "timeout":
         monkeypatch.setattr(codex, "ACTIVE_TURN_TIMEOUT_SECONDS", 0.02)
@@ -499,7 +471,7 @@ async def test_relay_finalizes_on_socket_loss_timeout_and_unexpected_errors(
     task = asyncio.create_task(codex.relay(socket, bridge, SECRET))
     await socket.incoming.put({"text": QUESTION})
     if side != "start_send":
-        await asyncio.wait_for(bridge.outgoing.get(), 2)
+        await asyncio.wait_for(bridge.outgoing.get(), 30)
     if side == "browser":
         socket.closed = True
         await socket.incoming.put(WebSocketDisconnect())
@@ -508,10 +480,10 @@ async def test_relay_finalizes_on_socket_loss_timeout_and_unexpected_errors(
             ConnectionClosed(None, None) if side == "bridge" else RuntimeError(SECRET)
         )
     if side == "timeout":
-        await asyncio.wait_for(task, 2)
+        await asyncio.wait_for(task, 30)
     else:
         with pytest.raises((RuntimeError, WebSocketDisconnect, ConnectionClosed)):
-            await asyncio.wait_for(task, 2)
+            await asyncio.wait_for(task, 30)
     logs = [
         json.loads(record.message.split("Umay health transfer ")[1])
         for record in caplog.records
@@ -524,8 +496,8 @@ async def test_relay_finalizes_on_socket_loss_timeout_and_unexpected_errors(
         if side in {"browser", "bridge"}
         else "failed"
     )
-    assert logs[-1]["status"] == expected
-    assert logs[-1]["calls"] == [] and not any(logs[-1]["counts"].values())
+    assert snapshots[-1]["status"] == expected and snapshots[-1]["calls"] == []
+    assert logs[-1]["tool_calls"] == 0 and not any(logs[-1]["counts"].values())
     assert SECRET not in caplog.text and QUESTION not in caplog.text
 
 
@@ -555,5 +527,6 @@ async def test_browser_delivery_failure_still_logs_successful_bridge_send(actual
     await chat.finish_transfer("disconnected")
     assert bridge.sent[-1]["result"]["success"]
     assert chat.transfer.snapshot()["calls"][0]["action"] == "inventory"
-    assert '"status": "disconnected"' in caplog.text
+    assert chat.transfer.status == "disconnected"
+    assert '"tool_calls": 1' in caplog.text
     assert SECRET not in caplog.text

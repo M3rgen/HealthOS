@@ -15,10 +15,11 @@ from app.google_health.client import GoogleHealthClient
 from app.google_health.data_types import REGISTRY
 from app.models.raw_versions import RawApiResponse, RawHealthDataEvent
 from app.models.state import RawHealthData
-from app.services.raw_history import verify_guards
-from app.services.responses import DatabaseResponseArchive, verify_responses
-from app.services.storage import store_page
-from app.sync.deletions import mark_source_deletions
+from app.services.archive.raw_history_verification import verify_guards
+from app.services.archive.responses import DatabaseResponseArchive, verify_responses
+from app.services.archive.source_deletions import mark_source_deletions
+from app.services.archive.storage import store_page
+from app.services.providers.ingestion import GoogleSource
 from app.sync.incremental import IncrementalSync
 
 pytestmark = pytest.mark.integration
@@ -73,7 +74,7 @@ async def test_sync_stores_pages_byte_for_byte_with_their_records(pg_sessions) -
     incremental = IncrementalSync(
         Settings(_env_file=None, app_env="test"),
         pg_sessions,
-        google(handler, pg_sessions),
+        GoogleSource(google(handler, pg_sessions)),
         {"steps": SPEC},
     )
     await incremental.run("steps")

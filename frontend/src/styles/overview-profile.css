@@ -1,0 +1,422 @@
+.profile-panel {
+  display: grid;
+  grid-template-columns: 56% 44%;
+  min-height: 492px;
+  padding: 24px 22px 18px;
+}
+.body-column {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.body-column h2 {
+  position: absolute;
+  z-index: 1;
+  top: 0;
+  left: 4px;
+}
+#body-model {
+  height: 398px;
+  flex: 1;
+  min-height: 330px;
+  position: relative;
+  overflow: hidden;
+  width: 100%;
+}
+/* Keep WebGL's drawing buffer out of intrinsic flex sizing. */
+#body-model canvas {
+  max-width: 100%;
+  outline: 0;
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  touch-action: pan-y;
+  opacity: 0;
+  transition: opacity 0.45s ease;
+}
+.profile-values {
+  display: flex;
+  flex-direction: column;
+  justify-content: safe center;
+  padding: 17px 0 0 13px;
+}
+.measurement {
+  border-top: 1px solid var(--line-soft);
+  padding: 12px 0;
+}
+.measurement label {
+  display: block;
+  font-size: 0.9375rem;
+  margin-bottom: 4px;
+  color: var(--muted);
+  font-weight: 500;
+  letter-spacing: 0.01em;
+}
+.measurement button {
+  display: block;
+  background: none;
+  border: 0;
+  text-align: left;
+  font-size: 1.5625rem;
+  font-weight: 640;
+  letter-spacing: -0.025em;
+  border-radius: 6px;
+  padding: 1px 6px;
+  margin-inline: -6px;
+  transition:
+    color var(--dur-fast),
+    background var(--dur-fast);
+}
+.measurement small {
+  display: block;
+  margin-top: 3px;
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+.profile-values > .fine-print {
+  margin-top: 11px;
+}
+.model-fallback {
+  height: 100%;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  flex-direction: column;
+  color: var(--muted);
+  gap: 16px;
+}
+.model-fallback svg {
+  height: 280px;
+  width: 140px;
+}
+/* Loading state: the static silhouette until body.glb has rendered, then it fades out under
+  the canvas. */
+#body-model .model-loading {
+  position: absolute;
+  inset: 0;
+  height: auto;
+  pointer-events: none;
+  transition:
+    opacity 0.45s ease,
+    visibility 0s linear 0.45s;
+}
+#body-model .model-loading svg {
+  height: min(280px, 82%);
+  width: auto;
+  opacity: 0.55;
+  animation: model-loading 1.6s ease-in-out infinite alternate;
+}
+#body-model[data-model-loaded] .model-loading {
+  opacity: 0;
+  visibility: hidden;
+}
+#body-model[data-model-failed] .model-loading svg {
+  animation: none;
+}
+.profile-values #add-measurement {
+  margin-top: 16px;
+}
+/* An empty archive: the one thing to do here comes first, above the rows it will fill, so the
+   panel's inner scrolling cannot hide it. */
+main:has(#overview-state[data-state="empty"]) .profile-values #add-measurement {
+  order: -1;
+  margin-top: 0;
+  margin-bottom: 6px;
+}
+main:has(#overview-state[data-state="empty"]) .profile-values {
+  justify-content: flex-start;
+}
+/* Center the dashboard headings while preserving its existing proportions. */
+#overview .profile-panel {
+  position: relative;
+  background: radial-gradient(
+      70% 60% at 28% 58%,
+      rgb(240 196 120 / 0.045),
+      transparent 70%
+    ),
+    var(--surface-sheen), var(--surface);
+}
+#overview .body-column {
+  position: relative;
+}
+#overview .body-column h2 {
+  left: 0;
+  width: 100%;
+  text-align: center;
+  pointer-events: none;
+  font-size: 0.8125rem;
+  font-weight: 650;
+  letter-spacing: 0.2em;
+  color: var(--muted);
+  line-height: 1;
+  top: 2px;
+}
+#overview .measurement {
+  text-align: center;
+}
+#overview .measurement button {
+  text-align: center;
+  margin-inline: auto;
+}
+.measurement button:hover {
+  color: var(--amber);
+  background: var(--amber-soft);
+}
+@media (min-width: bp(w1400)) {
+  .profile-panel {
+    min-height: 530px;
+  }
+  #body-model {
+    min-height: 420px;
+  }
+}
+@media (max-width: bp(w1150)) {
+  .profile-panel {
+    padding: 20px 14px;
+    grid-template-columns: 50% 50%;
+  }
+}
+@media (max-width: bp(w900)), (max-height: 30em) {
+  .profile-panel {
+    grid-template-columns: 50% 50%;
+    min-height: 460px;
+  }
+  #body-model {
+    height: 365px;
+    min-height: 330px;
+  }
+  .profile-values {
+    padding: 10px 10px 0;
+  }
+  #overview .profile-panel {
+    min-height: 0;
+    align-items: stretch;
+  }
+  #overview .body-column {
+    min-height: 0;
+  }
+  #overview #body-model {
+    height: auto;
+    flex: 1 1 auto;
+    min-height: 280px;
+  }
+  #overview .profile-values {
+    justify-content: safe center;
+  }
+  #overview .overview-grid[data-tabbed] .profile-panel {
+    height: 100%;
+  }
+  #overview .overview-grid[data-tabbed] #body-model {
+    min-height: 0;
+  }
+}
+/* Tab mode: each value is one line next to its label, keeping the 44 px button height and all
+   four rows visible next to the figure on phones. */
+@media (max-width: bp(w900)), (max-height: 30em) {
+  #overview .overview-grid[data-tabbed] .measurement {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    column-gap: 8px;
+    padding: 2px 0;
+    text-align: left;
+  }
+  #overview .overview-grid[data-tabbed] .measurement label {
+    grid-column: 1;
+    margin: 0;
+    font-size: 0.8125rem;
+  }
+  #overview .overview-grid[data-tabbed] .measurement small {
+    grid-column: 1;
+    margin: 0;
+  }
+  #overview .overview-grid[data-tabbed] .measurement button {
+    grid-column: 2;
+    grid-row: 1 / span 2;
+    margin: 0;
+    font-size: 1.125rem;
+    line-height: 1.15;
+    text-align: right;
+  }
+  #overview .overview-grid[data-tabbed] .profile-values #add-measurement {
+    margin-top: 6px;
+    min-height: 2.75rem;
+  }
+  #overview .overview-grid[data-tabbed] .profile-values {
+    container: values / inline-size;
+  }
+}
+/* Large text on a narrow column: label, value and date stack instead of colliding. */
+@container values (max-width: 8.5em) {
+  #overview .overview-grid[data-tabbed] .measurement {
+    grid-template-columns: minmax(0, 1fr);
+    row-gap: 0.125em;
+    align-items: start;
+  }
+  #overview .overview-grid[data-tabbed] .measurement label {
+    min-width: 0;
+    line-height: 1.35;
+  }
+  #overview .overview-grid[data-tabbed] .measurement button {
+    grid-column: 1;
+    grid-row: auto;
+    justify-self: start;
+    max-width: 100%;
+    text-align: left;
+  }
+  #overview .overview-grid[data-tabbed] .measurement small {
+    min-width: 0;
+    line-height: 1.35;
+  }
+}
+@media (max-width: bp(w540)) {
+  .profile-panel {
+    padding: 17px 11px;
+    min-height: 424px;
+    grid-template-columns: 47% 53%;
+  }
+  .body-column h2 {
+    font-size: 1.5625rem;
+  }
+  #body-model {
+    min-height: 318px;
+    height: 340px;
+  }
+  .measurement {
+    padding: 10px 0;
+  }
+  .measurement button {
+    font-size: 1.4375rem;
+  }
+  .profile-values {
+    padding-left: 7px;
+    padding-right: 0;
+  }
+  .profile-values .button {
+    padding: 8px;
+  }
+  #overview .body-column h2 {
+    font-size: 0.75rem;
+    letter-spacing: 0.16em;
+  }
+  #overview .profile-panel {
+    padding: 14px 10px 14px;
+  }
+  #overview #body-model {
+    min-height: 262px;
+  }
+  #overview .measurement {
+    padding: 7px 0;
+  }
+  #overview .measurement label {
+    font-size: 0.8125rem;
+    margin-bottom: 2px;
+  }
+  #overview .measurement button {
+    font-size: 1.3125rem;
+    line-height: 1.2;
+  }
+  #overview .measurement small {
+    font-size: 0.75rem;
+    margin-top: 1px;
+  }
+  #overview .profile-values #add-measurement {
+    margin-top: 10px;
+    min-height: 38px;
+    font-size: 0.8125rem;
+  }
+  /* The tab already names the card. */
+  #overview .overview-grid[data-tabbed] .profile-panel {
+    padding: 10px;
+  }
+}
+@media (min-width: bp(w901)) and (min-height: 30.0625em) {
+  .profile-panel {
+    min-height: 0;
+    padding: 16px;
+    grid-template-columns: 50% 50%;
+    overflow: auto;
+    overscroll-behavior: contain;
+  }
+  .body-column {
+    min-height: 0;
+  }
+  .body-column h2 {
+    font-size: 1.625rem;
+  }
+  #body-model {
+    height: auto;
+    min-height: 0;
+    flex: 1;
+  }
+  .profile-values {
+    min-height: 0;
+    padding: 0 0 0 12px;
+  }
+  .measurement {
+    padding: 8px 0;
+    line-height: 1.25;
+  }
+  .measurement label {
+    font-size: 0.8125rem;
+    margin-bottom: 2px;
+  }
+  .measurement button {
+    font-size: 1.4375rem;
+    line-height: 1.25;
+    min-height: 0;
+  }
+  .measurement small {
+    font-size: 0.75rem;
+    margin-top: 2px;
+    line-height: 1.25;
+  }
+  .profile-values #add-measurement {
+    margin-top: 10px;
+  }
+  .profile-values .button {
+    font-size: 0.75rem;
+    padding: 8px;
+    min-height: 36px;
+  }
+}
+@media (min-width: bp(w901)) and (min-height: 30.0625em) and (max-height: 46.25em) {
+  .profile-panel {
+    padding: 12px;
+  }
+  .measurement {
+    padding: 5px 0;
+  }
+  .measurement button {
+    font-size: 1.25rem;
+  }
+  .measurement small {
+    font-size: 0.75rem;
+  }
+}
+/* Laptops with browser chrome: the panel scrolls inside itself rather than pushing the page. */
+@media (min-width: bp(w901)) and (min-height: 30.0625em) and (max-height: 40.5625em) {
+  .profile-panel {
+    padding: 8px;
+  }
+  .measurement {
+    padding: 3px 0;
+  }
+  .measurement button {
+    font-size: 1.125rem;
+    line-height: 1.2;
+  }
+}
+/* Small phones give the launcher strip some of the card's height: the values close up so
+   "Ölçüm ekle" stays inside the card. */
+@media (max-width: bp(w540)) and (max-height: 43.75em) {
+  #overview .overview-grid[data-tabbed] .profile-values {
+    padding-top: 0;
+  }
+  #overview .overview-grid[data-tabbed] .profile-values #add-measurement {
+    margin-top: 6px;
+  }
+}

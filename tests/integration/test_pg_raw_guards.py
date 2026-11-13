@@ -16,14 +16,16 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
+from support.waits import blocked_on_a_lock
 from typer.testing import CliRunner
 
 from app.google_health.data_types import REGISTRY
 from app.models.raw_versions import RawHealthDataVersion
 from app.models.state import RawHealthData
 from app.parsers.common import payload_hash
-from app.services.raw_history import import_versions, record_history
-from app.services.storage import store_records
+from app.services.archive.raw_history import record_history
+from app.services.archive.raw_history_import import import_versions
+from app.services.archive.storage import store_records
 
 pytestmark = pytest.mark.integration
 
@@ -191,11 +193,13 @@ def test_verify_fails_when_a_guard_is_missing_disabled_or_replaced(
 # 5b. `verify` compared only name, enabled state and function body: a guard recreated
 #     with `WHEN (false)`, other events or other timing stayed green.
 async def test_verify_fails_when_a_guard_is_neutralised(pg_sessions) -> None:
-    from app.models.raw_versions import PG_TRIGGER_SQL
-    from app.services.raw_history import verify_guards
+    from app.db.guards import definitions
+
+    pg, _, _ = definitions()
+    from app.services.archive.raw_history_verification import verify_guards
 
     def recreate(trigger: str, sql: str) -> list[str]:
-        table = PG_TRIGGER_SQL[trigger][0]
+        table = pg[trigger][0]
         return [
             f"DROP TRIGGER {trigger} ON {table}",
             sql,
@@ -243,14 +247,14 @@ async def test_verify_fails_when_a_guard_is_neutralised(pg_sessions) -> None:
         ),
     }
     for label, (trigger, sql) in tampering.items():
-        table = PG_TRIGGER_SQL[trigger][0]
+        table = pg[trigger][0]
         await execute(pg_sessions, *recreate(trigger, sql))
         errors = await guards()
         assert any(f"protective trigger {table}.{trigger} was redefined" in e for e in errors), (
             label,
             errors,
         )
-        await execute(pg_sessions, *recreate(trigger, PG_TRIGGER_SQL[trigger][1]))
+        await execute(pg_sessions, *recreate(trigger, pg[trigger][1]))
         assert await guards() == [], label
     # An extra trigger on a guarded table (e.g. one that rewrites NEW first) is reported.
     await execute(
@@ -423,10 +427,10 @@ async def test_overlapping_pages_lock_in_key_order(database_url, pg_sessions) ->
             await store_records(holder, SPEC, [steps(2, first)])  # holds `first`
             # Page order z, a: without sorting it would lock `last`, then wait for `first`.
             writer = asyncio.create_task(store(pg_sessions, steps(3, last), steps(3, first)))
-            await asyncio.sleep(0.3)
+            await blocked_on_a_lock(pg_sessions, writer)
             assert not writer.done()
-            await asyncio.wait_for(store_records(holder, SPEC, [steps(2, last)]), 10)
-        await asyncio.wait_for(writer, 10)
+            await asyncio.wait_for(store_records(holder, SPEC, [steps(2, last)]), 30)
+        await asyncio.wait_for(writer, 30)
     finally:
         await other_engine.dispose()
     assert [item[2] for item in await chain(pg_sessions, last)] == ["1", "2", "3"]

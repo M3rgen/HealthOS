@@ -12,8 +12,11 @@ from alembic.config import Config
 from retrieval_records import BAD_TIMES, END, START, Client, Runner, point
 from sqlalchemy import create_engine, func, inspect, select, text
 from sqlalchemy.exc import DBAPIError
+from support import sqlite_guards
+from support.retrieval import rows, status
 
 from app.core.config import Settings, get_settings
+from app.core.timeutil import as_utc
 from app.google_health.client import InvalidPageTokenError, Page
 from app.google_health.data_types import REGISTRY
 from app.models import retrieval
@@ -21,28 +24,15 @@ from app.models.retrieval import RetrievalCheckpoint
 from app.models.retrieval import RetrievalEvent as Event
 from app.models.retrieval import RetrievalReceipt as Receipt
 from app.models.state import BackfillJob, FetchRound, RawHealthData, SyncState
-from app.services import retrieval as retrieval_writer
-from app.services import storage
-from app.services.raw_history import verify_guards
-from app.services.retrieval import query_scope
-from app.services.retrieval_coverage import coverage_report
+from app.services.archive import storage
+from app.services.archive.raw_history_verification import verify_guards
+from app.services.providers import ingestion
+from app.services.providers.ingestion import GoogleSource
+from app.services.shared.query_ranges import CivilDateRange
+from app.services.synchronization import retrieval as retrieval_writer
+from app.services.synchronization.retrieval import query_scope
+from app.services.synchronization.retrieval_coverage import coverage_report
 from app.sync import backfill, incremental
-
-
-async def rows(sessions):
-    async with sessions() as session:
-        return (
-            list((await session.scalars(select(Receipt).order_by(Receipt.started_at))).all()),
-            list((await session.scalars(select(Event).order_by(Event.id))).all()),
-        )
-
-
-async def status(sessions, runner):
-    async with sessions() as session:
-        report = await coverage_report(
-            session, REGISTRY, runner.start.date(), runner.start.date(), "UTC", runner.kind
-        )
-    return report["types"][0]["days"][0]
 
 
 @pytest.fixture(params=["sync", "backfill"])
@@ -139,14 +129,13 @@ async def test_token_reset_preserves_aborted_attempt_and_starts_at_first_page(se
 async def test_rollback_keeps_attempt_but_no_durable_page_or_completion(
     sessions, runner, monkeypatch
 ):
-    module = incremental if runner.lane == "sync" else backfill
-    original = module.store_page
+    original = ingestion.store_page
 
     async def rollback(session, *args, **kwargs):
         await original(session, *args, **kwargs)
         raise RuntimeError("synthetic transaction rollback")
 
-    monkeypatch.setattr(module, "store_page", rollback)
+    monkeypatch.setattr(ingestion, "store_page", rollback)
     client = Client(Page([point()], None))
     with pytest.raises(RuntimeError):
         await runner.run(client)
@@ -170,7 +159,7 @@ async def test_inflight_interruption_and_cancellation_never_claim_completion(ses
             await asyncio.Event().wait()
 
     task = asyncio.create_task(runner.run(Interrupted()))
-    await asyncio.wait_for(waiting.wait(), 5)
+    await asyncio.wait_for(waiting.wait(), 30)
     try:
         # As if the process stopped here: first page committed, no outcome ever written.
         _, events = await rows(sessions)
@@ -189,7 +178,7 @@ async def test_last_page_is_not_completion_when_final_transaction_rolls_back(ses
     async def failed_final(*args, **kwargs):
         raise RuntimeError("final transaction failed")
 
-    monkeypatch.setattr(incremental, "mark_source_deletions", failed_final)
+    monkeypatch.setattr(ingestion, "mark_source_deletions", failed_final)
     runner = Runner(sessions, "sync")
     with pytest.raises(RuntimeError):
         await runner.run(Client(Page([point()], None)))
@@ -234,7 +223,7 @@ def test_migration_is_additive_and_guard_sql_frozen(tmp_path, monkeypatch):
     migration = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(migration)
     assert migration.POSTGRESQL_DDL == retrieval.POSTGRESQL_DDL
-    assert migration.SQLITE_DDL == retrieval.SQLITE_DDL
+    assert migration.SQLITE_DDL == sqlite_guards.ddl(retrieval)
     assert migration.down_revision == "20261024_0014"
     url = f"sqlite:///{tmp_path / 'receipts.db'}"
     monkeypatch.setenv("DATABASE_URL", url)
@@ -268,7 +257,7 @@ def test_migration_is_additive_and_guard_sql_frozen(tmp_path, monkeypatch):
             assert connection.execute(text("SELECT * FROM raw_health_data")).all() == before
             assert connection.scalar(text("SELECT count(*) FROM manual_measurements")) == 1
             assert set(retrieval.RECEIPT_TABLES) <= set(inspect(connection).get_table_names())
-            for name, (_, sql) in retrieval.SQLITE_TRIGGER_SQL.items():
+            for name, (_, sql) in sqlite_guards.definitions(retrieval.GUARDS).items():
                 installed = connection.scalar(
                     text("SELECT sql FROM sqlite_master WHERE name=:n"), {"n": name}
                 )
@@ -350,7 +339,7 @@ async def test_resume_after_repeated_token_can_complete_the_valid_chain(sessions
 
 async def test_webhook_processing_uses_the_production_receipt_writer(sessions):
     from app.models.state import OAuthToken
-    from app.services.webhook_processing import WebhookBatchProcessor
+    from app.sync.webhook_processing import WebhookBatchProcessor
 
     async with sessions.begin() as session:
         session.add(
@@ -361,7 +350,7 @@ async def test_webhook_processing_uses_the_production_receipt_writer(sessions):
             )
         )
     sync = incremental.IncrementalSync(
-        Settings(), sessions, Client(), {"heart-rate": REGISTRY["heart-rate"]}
+        Settings(), sessions, GoogleSource(Client()), {"heart-rate": REGISTRY["heart-rate"]}
     )
     processor = WebhookBatchProcessor(sessions, sync, {"heart-rate"})
     ingested = await processor.ingest_verified(
@@ -390,18 +379,23 @@ async def test_webhook_processing_uses_the_production_receipt_writer(sessions):
     assert (await status(sessions, Runner(sessions, "sync")))["retrieval"] == "completed_empty"
 
 
-async def test_reconciliation_uses_the_production_receipt_writer(sessions):
+async def test_reconciliation_uses_the_production_receipt_writer(sessions, frozen_now):
     from datetime import timedelta
 
     from app.sync.reconciliation import ReconciliationService
 
     sync = incremental.IncrementalSync(
-        Settings(), sessions, Client(), {"heart-rate": REGISTRY["heart-rate"]}
+        Settings(), sessions, GoogleSource(Client()), {"heart-rate": REGISTRY["heart-rate"]}
     )
     await ReconciliationService(sync, sessions).run(3)
-    yesterday = datetime.now(UTC).date() - timedelta(days=1)
+    yesterday = frozen_now.date() - timedelta(days=1)
     async with sessions() as session:
-        report = await coverage_report(session, REGISTRY, yesterday, yesterday, "UTC", "heart-rate")
+        report = await coverage_report(
+            session,
+            REGISTRY,
+            "heart-rate",
+            dates=CivilDateRange(yesterday, yesterday, "UTC"),
+        )
     assert report["types"][0]["days"][0]["retrieval"] == "completed_empty"
     receipts, _ = await rows(sessions)
     assert len(receipts) == 1 and receipts[0].lane == "sync"
@@ -429,14 +423,13 @@ def attempt_clock(clock, runner, monkeypatch):
     clock.now = datetime(2026, 10, 1, tzinfo=UTC)
     for module in (incremental, backfill, retrieval_writer):
         monkeypatch.setattr(module, "datetime", storage.datetime)
-    module = incremental if runner.lane == "sync" else backfill
-    original, starts = module.store_page, []
+    original, starts = ingestion.store_page, []
 
     async def recording(session, spec, page, **options):
         starts.append(options["fetch_started"])
         return await original(session, spec, page, **options)
 
-    monkeypatch.setattr(module, "store_page", recording)
+    monkeypatch.setattr(ingestion, "store_page", recording)
     return clock, starts
 
 
@@ -481,8 +474,8 @@ async def test_reset_moves_boundary_and_only_new_attempt_keeps_records_live(
     receipts, events = await rows(sessions)
     assert [stamp.replace(tzinfo=UTC) for stamp in starts] == [initial, clock.now]
     token, boundary, _ = await checkpoint(sessions, runner)
-    assert token is None and boundary == clock.now.replace(tzinfo=None)
-    assert receipts[-1].started_at == boundary and receipts[-1].starts_first
+    assert token is None and as_utc(boundary) == clock.now
+    assert as_utc(receipts[-1].started_at) == as_utc(boundary) and receipts[-1].starts_first
     assert receipts[-1].parent_event_id is None
     if resume:
         assert all(
@@ -521,7 +514,7 @@ async def test_interruption_after_reset_keeps_checkpoint_and_attempt_for_continu
                 token, boundary, pointer = await checkpoint(sessions, runner)
                 receipts, events = await rows(sessions)
                 assert token is None and pointer is None
-                assert boundary == receipts[-1].started_at == reset_at.replace(tzinfo=None)
+                assert as_utc(boundary) == as_utc(receipts[-1].started_at) == reset_at
                 assert events[-1].kind == "reset" and receipts[-1].starts_first
             return await super().list_data_points(spec, start, end, page_token)
 
@@ -530,7 +523,7 @@ async def test_interruption_after_reset_keeps_checkpoint_and_attempt_for_continu
         await runner.run(Inspecting(InvalidPageTokenError("expired"), *pages, failure))
     token, boundary, pointer = await checkpoint(sessions, runner)
     assert token == ("new-next" if committed else None)
-    assert boundary == reset_at.replace(tzinfo=None) and bool(pointer) == committed
+    assert as_utc(boundary) == reset_at and bool(pointer) == committed
     async with sessions() as session:
         assert (await session.scalars(select(RawHealthData))).one().source_deleted_at is None
     assert (await status(sessions, runner))["retrieval"] == "incomplete"
@@ -540,7 +533,7 @@ async def test_interruption_after_reset_keeps_checkpoint_and_attempt_for_continu
     assert client.tokens == (["new-next"] if committed else [None])
     expected_start = reset_at if committed else clock.now
     assert starts[-1] == expected_start
-    assert (await checkpoint(sessions, runner))[1] == expected_start.replace(tzinfo=None)
+    assert as_utc((await checkpoint(sessions, runner))[1]) == expected_start
     assert (await status(sessions, runner))["retrieval"] == "completed_with_records"
 
 

@@ -5,7 +5,7 @@ from argparse import Namespace
 import pytest
 from alembic import command
 from sqlalchemy import create_engine, text
-from test_pg_migrations import HEAD
+from support.migration_chain import HEAD
 
 pytestmark = pytest.mark.integration
 PREVIOUS = "20261025_0020"

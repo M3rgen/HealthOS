@@ -11,16 +11,15 @@ from derived_records import BAND, PHONE, point, snapshot, store
 from retrieval_records import START
 from retrieval_records import point as response_point
 from sqlalchemy import select
-from test_coverage import archive as archive
-from test_coverage import daily, query
-from test_retrieval_coverage_api import PATH, QUERY, fetch
-from test_retrieval_coverage_api import api as api
+from support.coverage_fixtures import PATH, QUERY, daily, fetch, query
+from support.coverage_fixtures import api as api
+from support.coverage_fixtures import archive as archive
 
 from app.google_health.data_types import REGISTRY
 from app.models.raw_rejections import RawHealthDataRejection
 from app.models.raw_versions import RawHealthDataVersion
 from app.models.state import RawHealthData
-from app.services.codex_health import read_health
+from app.services.umay.codex_health import read_health
 
 KINDS = [
     ("daily-resting-heart-rate", "beatsPerMinute", {}),
@@ -45,8 +44,8 @@ def measurement(kind, field, value, fallback, name="one", source=BAND):
     )
 
 
-async def reports(api, kind):
-    card = await read_health(query(START.date(), START.date(), data_type=kind))
+async def reports(sessions, api, kind):
+    card = await read_health(sessions, query(START.date(), START.date(), data_type=kind))
     response = await api.get(PATH, params=QUERY | {"data_type": kind})
     assert response.status_code == 200, response.text
     return card["metrics"][0], response.json()["types"][0]
@@ -120,7 +119,7 @@ async def test_final_unit_presence_preserves_archive(
             assert len(versions) == int(corrected)
             if corrected:
                 assert versions[0].raw_json == seed
-    card, report = await reports(api, kind)
+    card, report = await reports(sessions, api, kind)
     assert_values(card, report, int(present), int(not present and not rejected))
     assert card["retrieval"]["state"] == report["days"][0]["retrieval"] == "unknown"
     async with sessions() as session:
@@ -139,7 +138,7 @@ async def test_invalid_correction_keeps_other_valid_record_on_same_day(
     await store(sessions, kind, current)
     async with sessions() as session:
         before = await snapshot(session)
-    card, report = await reports(api, kind)
+    card, report = await reports(sessions, api, kind)
     assert_values(card, report, 1, 1)
     assert card["source_regimes"] == report["source_regimes"]
     assert card["source_regimes"][0]["platform"] == source["platform"]
@@ -160,7 +159,7 @@ async def test_excluded_invalid_values_are_not_counted_twice(
         setattr(row, flag, True if flag == "is_quarantined" else START)
     async with sessions() as session:
         before = await snapshot(session)
-    card, report = await reports(api, kind)
+    card, report = await reports(sessions, api, kind)
     assert_values(card, report, 0, 0)
     assert card["exclusions"][exclusion] == report["exclusions"][exclusion] == 1
     async with sessions() as session:
@@ -191,11 +190,11 @@ async def test_excluded_invalid_values_are_not_counted_twice(
 )
 @pytest.mark.parametrize("value,present", [("sNaN", False), ("not numeric", True)])
 async def test_raw_daily_field_selection_precedes_validation(
-    archive, kind, preferred, fallback, value, present
+    sessions, archive, kind, preferred, fallback, value, present
 ):
     day = START.date()
     await archive(daily(kind, "priority", day, {preferred: value, fallback: "0"}))
-    metric = (await read_health(query(day, day, data_type=kind)))["metrics"][0]
+    metric = (await read_health(sessions, query(day, day, data_type=kind)))["metrics"][0]
     assert metric["value_days"] == metric["sampling"]["sample_count"] == int(present)
     assert metric["exclusions"]["invalid_shape"] == int(not present)
 

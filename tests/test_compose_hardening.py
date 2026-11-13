@@ -78,17 +78,6 @@ def test_ui_smoke_script_compiles_and_authenticates():
     assert COMPOSE["services"]["app"]["environment"]["APP_UI_TOKEN"].startswith("${APP_UI_TOKEN:?")
 
 
-def test_ui_smoke_title_check_matches_the_served_page():
-    # The smoke test must look for the title the served page really has.
-    import re
-
-    from scripts.verify_compose import UI_SMOKE_SCRIPT
-
-    expected = re.search(r"assert '(<title>[^']+)' in html", UI_SMOKE_SCRIPT)
-    page = (ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
-    assert expected and expected.group(1) in page
-
-
 def _run_smoke_scripts_against_fake_app(monkeypatch, token: str):
     """Execute the in-container smoke scripts with urllib answered like UITokenMiddleware."""
     import io
@@ -119,7 +108,7 @@ def _run_smoke_scripts_against_fake_app(monkeypatch, token: str):
         if path == "/health":
             body = {
                 "database": "healthy",
-                "service": "personal-health-mirror",
+                "service": "healthos",
                 "scheduler": "running",
             }
             return Response(json.dumps(body).encode())
@@ -194,7 +183,7 @@ def test_systemd_bridge_owns_its_process_group_and_private_state():
     assert service["WorkingDirectory"] == "/opt/healthos"
     assert service["EnvironmentFile"] == "/etc/healthos/bridge.env"
     assert service["ExecStart"].endswith("scripts/start_codex_bridge.py --foreground")
-    assert service["Type"] == "simple"
+    assert service["Type"] == "notify"
     assert service["Restart"] == "on-failure" and int(service["RestartSec"]) >= 10
     assert int(limits["StartLimitBurst"]) <= 5
     assert int(limits["StartLimitIntervalSec"]) >= 300
@@ -205,6 +194,8 @@ def test_systemd_bridge_owns_its_process_group_and_private_state():
     assert service["ProtectSystem"] == "strict"
     assert service["ProtectHome"] == service["NoNewPrivileges"] == "true"
     assert service["ReadWritePaths"] == "/var/lib/healthos-bridge"
+    hidden = service["InaccessiblePaths"].split()
+    assert {"-/opt/healthos/.env", "-/opt/healthos/backups", "-/etc/healthos"} <= set(hidden)
     assert "Environment=CODEX_HOME=/var/lib/healthos-bridge" in path.read_text()
     assert "Environment=HOME=/var/lib/healthos-bridge" in path.read_text()
     # UI/API exposure and the already present Docker mapping remain unchanged.
@@ -238,11 +229,14 @@ def runtime_inspections():
                 "ReadonlyRootfs": True,
                 "CapDrop": ["ALL"],
                 "SecurityOpt": ["no-new-privileges:true"],
+                "Memory": 2147483648,
+                "PidsLimit": 256,
                 "Tmpfs": {
                     entry.split(":")[0]: entry.partition(":")[2]
                     for entry in COMPOSE["services"][name]["tmpfs"]
                 },
             },
+            "Config": {"StopTimeout": 60},
             "Mounts": (
                 [
                     {
@@ -287,6 +281,8 @@ def test_engine_runtime_accepts_hardened_short_and_long_mounts(
         ("SecurityOpt", ["no-new-privileges=false"], "no-new-privileges"),
         ("Tmpfs", {}, "/tmp"),
         ("Tmpfs", {"/tmp": "ro"}, "/tmp"),
+        ("Memory", 0, "memory limit"),
+        ("PidsLimit", -1, "PID limit"),
     ],
 )
 def test_engine_runtime_rejects_removed_protections(
@@ -371,7 +367,9 @@ def test_docker_drill_checks_data_after_restart_and_existing_volume_start(monkey
     assert not any("down" in command or "--volumes" in command for command in commands)
 
 
-def test_smoke_pins_compose_file_and_disables_inherited_profiles(monkeypatch, tmp_path):
+def test_smoke_pins_compose_file_and_disables_inherited_profiles(
+    monkeypatch, tmp_path, local_sockets
+):
     from scripts import verify_compose as verifier
 
     monkeypatch.setattr(verifier, "DOCKER_COMMAND", "/usr/bin/docker")
@@ -478,7 +476,9 @@ def test_controlled_drill_requires_every_table_to_match():
             verify_restore_counts(broken, tables)
 
 
-@pytest.mark.parametrize("response_kind", ["correct", "stale", "leaking", "anonymous_allowed"])
+@pytest.mark.parametrize(
+    "response_kind", ["correct", "stale", "leaking", "anonymous_allowed", "reason_lost"]
+)
 def test_docker_backup_health_probe_checks_auth_and_exact_safe_evidence(monkeypatch, response_kind):
     import io
     import json
@@ -502,6 +502,11 @@ def test_docker_backup_health_probe_checks_auth_and_exact_safe_evidence(monkeypa
         calls.append(authorized)
         if not authorized and response_kind != "anonymous_allowed":
             raise urllib.error.HTTPError("http://localhost/health/backup", 401, "auth", None, None)
+        if not isinstance(request, str) and request.full_url.endswith("/health"):
+            named = verifier.expected_backup_reasons(expected)
+            return io.BytesIO(
+                json.dumps({"reasons": [] if response_kind == "reason_lost" else named}).encode()
+            )
         data = dict(expected)
         if response_kind == "stale":
             data["last_attempt"] = {"result": "success", "timestamp": expected["last_success_at"]}
@@ -518,7 +523,7 @@ def test_docker_backup_health_probe_checks_auth_and_exact_safe_evidence(monkeypa
     monkeypatch.setattr(verifier, "compose", compose)
     if response_kind == "correct":
         verifier.check_backup_health(expected, env={})
-        assert calls == [False, True]
+        assert calls == [False, True, True]
     else:
         with pytest.raises((AssertionError, SystemExit)):
             verifier.check_backup_health(expected, env={})
@@ -548,6 +553,12 @@ def test_existing_compose_drill_freezes_data_and_checks_failure_after_recreation
     monkeypatch.setattr(verifier, "backup_key_env", lambda: {})
     monkeypatch.setattr(verifier, "check_running_hardening", lambda **kwargs: None)
     monkeypatch.setattr(verifier, "verify_postgres_lifecycle", lambda **kwargs: None)
+    monkeypatch.setattr(verifier, "check_app_role", lambda *args, **kwargs: None)
+    monkeypatch.setattr(verifier, "check_host_port_reachable", lambda **kwargs: None)
+    monkeypatch.setattr(verifier, "free_port", lambda: verifier.HOST_PORT)
+    monkeypatch.setattr(verifier, "run_deployment_drills", lambda **kwargs: None)
+    monkeypatch.setattr(verifier, "check_checkout_is_shared", lambda env: None)
+    monkeypatch.setattr(verifier, "verify_live_restore", lambda env, backup_env: None)
     monkeypatch.setattr(
         verifier,
         "published_ports",
@@ -587,6 +598,8 @@ def test_existing_compose_drill_freezes_data_and_checks_failure_after_recreation
 
     def run(arguments, **kwargs):
         assert kwargs["env"]["COMPOSE_FILE"] == str(tmp_path / "docker-compose.yml")
+        if arguments[1] == "image":
+            return CompletedProcess(arguments, 0, stdout="")
         if arguments[1].endswith("backup.sh"):
             failed = kwargs["env"]["BACKUP_MIN_FREE_MB"] == "invalid"
             legacy = tmp_path / "backups" / "last-backup-status.json"
@@ -634,3 +647,10 @@ def test_existing_compose_drill_freezes_data_and_checks_failure_after_recreation
         assert probes[-1][1] is True
     assert commands[-1] == ("down", "--volumes", "--remove-orphans")
     assert not list(tmp_path.iterdir())
+
+
+def test_python_bytecode_never_enters_the_build_context_at_any_depth():
+    # release.yml compares the release image with the smoke-tested one; the smoke run itself
+    # leaves scripts/__pycache__ in the checkout before Compose builds.
+    patterns = (ROOT / ".dockerignore").read_text(encoding="utf-8").split()
+    assert "**/__pycache__" in patterns

@@ -15,16 +15,16 @@ from datetime import UTC, date, datetime, timedelta
 import pytest
 from identity_records import counted_rows, mark, raw_rows, store, versions_of
 from interpretation_records import call
-from interpretation_records import production_reader as production_reader
 from sqlalchemy import select, update
 
 from app.google_health.data_types import REGISTRY
 from app.models.health import RespiratoryRate
-from app.models.identity import RawHealthDataSupersession
+from app.models.identity_tables import RawHealthDataSupersession
 from app.models.state import RawHealthData
 from app.parsers.common import hollow_name, payload_hash, source_id, temporal
-from app.services.identity import verify_identities
-from app.services.retrieval_coverage import coverage_report
+from app.services.identities.identity_verification import verify_identities
+from app.services.shared.query_ranges import CivilDateRange
+from app.services.synchronization.retrieval_coverage import coverage_report
 
 SPEC = REGISTRY["respiratory-rate-sleep-summary"]
 NAME = "users/0/dataTypes/respiratory-rate-sleep-summary/dataPoints/"
@@ -96,7 +96,12 @@ async def legacy_row(sessions, *payloads: dict) -> uuid.UUID:
 
 async def wake_days(sessions, first: date, last: date) -> tuple[list[date], int]:
     async with sessions() as session:
-        report = await coverage_report(session, REGISTRY, first, last, ZONE, SPEC.name)
+        report = await coverage_report(
+            session,
+            REGISTRY,
+            SPEC.name,
+            dates=CivilDateRange(first, last, ZONE),
+        )
     found = report["types"][0]
     days = [date.fromisoformat(d["date"]) for d in found["days"] if d["has_value"]]
     return days, sum(regime["record_count"] for regime in found["source_regimes"])
@@ -168,6 +173,7 @@ async def test_coverage_counts_each_sleep_on_the_local_day_it_ended(sessions):
 async def test_umay_dates_sleep_summaries_by_their_wake_day(sessions):
     await store(sessions, SPEC, summary(ACROSS_MIDNIGHT, 14), *(summary(at, 16) for at in SPLIT))
     result = await call(
+        sessions,
         "physiology",
         data_type=SPEC.name,
         start_date="2026-09-21",

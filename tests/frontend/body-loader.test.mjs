@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { setupBodyLoader } from '../../frontend/src/body-loader.js';
 
-function environment(t, { observer = true, load } = {}) {
+function environment(t, { observer = true, narrow = false, load } = {}) {
   const globals = ['document', 'window', 'matchMedia', 'IntersectionObserver', 'requestAnimationFrame', 'cancelAnimationFrame', 'setTimeout', 'clearTimeout'];
   const saved = globals.map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)]);
   t.after(() => saved.forEach(([key, descriptor]) => {
@@ -33,7 +33,7 @@ function environment(t, { observer = true, load } = {}) {
   };
   let imports = 0;
   const values = {
-    document: doc, window: win, matchMedia: () => reduced,
+    document: doc, window: win, matchMedia: query => query.includes('max-width') ? { matches: narrow } : reduced,
     requestAnimationFrame(callback) { frames.set(++serial, callback); return serial; },
     cancelAnimationFrame(id) { frames.delete(id); },
     setTimeout(callback, ms) { timers.set(++serial, { callback, ms }); return serial; },
@@ -63,6 +63,36 @@ function environment(t, { observer = true, load } = {}) {
   };
 }
 const flush = () => Promise.resolve();
+
+for (const observer of [true, false]) test(`narrow hidden figure waits, then loads once (observer: ${observer})`, async t => {
+  const env = environment(t, { narrow: true, observer });
+  env.setVisible(false); env.painted(); env.intersect(); env.fallback();
+  assert.equal(env.imports, 0, 'neither a stale intersection nor the timer loads a hidden card');
+  env.setVisible(true);
+  assert.equal(env.imports, 0);
+  env.intersect(); env.fallback(); await flush();
+  assert.equal(env.calls, 1);
+  env.intersect(); env.fallback();
+  assert.equal(env.imports, 1);
+});
+
+test('narrow background tab waits through the fallback and loads when seen', async t => {
+  const env = environment(t, { narrow: true });
+  env.doc.hidden = true; env.painted(); env.intersect(); env.fallback();
+  assert.equal(env.imports, 0);
+  assert.equal(env.timers.size, 1);
+  env.doc.hidden = false; env.doc.emit('visibilitychange'); await flush();
+  assert.equal(env.calls, 1);
+  assert.equal(env.timers.size, 0);
+});
+
+test('narrow figure outside the viewport is not loaded by the safety timer', async t => {
+  const env = environment(t, { narrow: true });
+  env.painted(); env.intersect(false); env.fallback();
+  assert.equal(env.imports, 0);
+  env.intersect(); await flush();
+  assert.equal(env.calls, 1);
+});
 
 test('only imports once after a paint and intersection, cleaning every waiting resource', async t => {
   const env = environment(t);
@@ -126,6 +156,18 @@ test('hidden tab with suspended animation frames has a bounded fallback', async 
   assert.equal(env.applied.motion.at(-1), true);
 });
 
+test('a model on another page is not fetched by the fallback; it loads once shown', async t => {
+  const env = environment(t);
+  env.setVisible(false); env.painted();
+  env.fallback();
+  assert.equal(env.imports, 0, 'the fallback alone does not download a hidden model');
+  assert.deepEqual([...env.timers.values()].map(timer => timer.ms), [5000], 'the wait is re-armed');
+  env.fallback(); await flush();
+  assert.equal(env.imports, 0);
+  env.setVisible(true); env.intersect(); await flush();
+  assert.equal(env.calls, 1);
+});
+
 test('hidden model or silent observer cannot prevent loading indefinitely', async t => {
   const env = environment(t);
   env.setVisible(false); env.painted(); env.intersect(false);
@@ -161,4 +203,36 @@ test('pagehide cancels delayed import and removes state listeners', t => {
   assert.equal(env.connected, false);
   assert.equal(env.timers.size + env.frames.size, 0);
   assert.equal(env.doc.listeners.size + env.reduced.listeners.size, 0);
+});
+
+test('a page restored from the back/forward cache shows the silhouette, then a fresh model', async t => {
+  const env = environment(t);
+  env.controller.setBodyMetrics({ weightKg: 74 });
+  env.painted(); env.intersect(); await flush();
+  assert.equal(env.calls, 1);
+  env.container.dataset.modelLoaded = 'true';
+  env.win.emit('pagehide');
+  assert.equal(env.applied.disposed, 1);
+  assert.equal('modelLoaded' in env.container.dataset, false, 'the silhouette is uncovered');
+  env.win.listeners.get('pageshow')({ persisted: false });
+  env.painted(); env.intersect(); env.fallback(); await flush();
+  assert.equal(env.calls, 1, 'a fresh page load is not a restore');
+  env.win.listeners.get('pageshow')({ persisted: true });
+  assert.equal(env.doc.listeners.has('visibilitychange'), true);
+  assert.deepEqual([...env.timers.values()].map(timer => timer.ms), [5000]);
+  env.painted(); env.intersect(); await flush();
+  assert.equal(env.calls, 2);
+  assert.deepEqual(env.applied.metrics.at(-1), { weightKg: 74 }, 'the latest measurements reach the new model');
+  env.win.listeners.get('pageshow')({ persisted: true });
+  assert.equal(env.calls, 2, 'a second pageshow without a pagehide changes nothing');
+});
+
+test('a restore after a failed import keeps the silhouette and does not retry', async t => {
+  const env = environment(t, { load: () => Promise.reject(new Error('offline')) });
+  env.painted(); env.intersect(); await flush();
+  env.win.emit('pagehide');
+  env.win.listeners.get('pageshow')({ persisted: true });
+  env.painted(); env.intersect(); env.fallback(); await flush();
+  assert.equal(env.imports, 1);
+  assert.equal(env.container.dataset.modelFailed, 'true');
 });

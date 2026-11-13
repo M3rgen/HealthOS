@@ -18,8 +18,8 @@ from app.db.base import Base
 from app.db.session import get_session
 from app.google_health.client import Page
 from app.models.reconciliation import ReconciliationResult, ReconciliationRun
-from app.services import reconciliation_reports as reports
-from app.services.storage import store_records
+from app.services.archive.storage import store_records
+from app.services.synchronization import reconciliation_reports as reports
 from app.sync import reconciliation
 
 PATH = "/api/sync/reconciliation"

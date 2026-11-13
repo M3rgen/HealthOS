@@ -19,7 +19,8 @@ from app.google_health.client import Page
 from app.models.health import Steps
 from app.models.raw_versions import RawHealthDataVersion
 from app.models.state import RawHealthData
-from app.services import codex_health, retrieval_coverage
+from app.services.synchronization import retrieval_coverage
+from app.services.umay import codex_health
 
 LAST = DAY + timedelta(days=2)
 DATES = [(DAY + timedelta(days=i)).isoformat() for i in range(3)]
@@ -34,7 +35,6 @@ async def api(sessions, monkeypatch):
             return (T0 + timedelta(days=3)).astimezone(tz)
 
     monkeypatch.setattr(dashboard, "datetime", Now)
-    monkeypatch.setattr(codex_health, "SessionLocal", sessions)
     app = FastAPI()
     app.state.settings = Settings(_env_file=None)
     app.include_router(dashboard.router)
@@ -70,9 +70,11 @@ async def outputs(api, sessions, expected):
     assert [row["steps"] for row in reversed(exported)] == [
         "" if value is None else str(value) for value in expected
     ]
-    daily = await codex_health.read_health({"action": "daily", **QUERY})
+    daily = await codex_health.read_health(sessions, {"action": "daily", **QUERY})
     assert [row["steps"] for row in reversed(daily["days"])] == expected
-    card = await codex_health.read_health({"action": "coverage", "data_type": "steps", **QUERY})
+    card = await codex_health.read_health(
+        sessions, {"action": "coverage", "data_type": "steps", **QUERY}
+    )
     [metric] = card["metrics"]
     present = [day for day, value in zip(DATES, expected, strict=True) if value is not None]
     assert metric["value_days"] == metric["sampling"]["sample_count"] == len(present)

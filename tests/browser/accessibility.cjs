@@ -1,7 +1,7 @@
 // Exercise native keyboard behavior against synthetic HTTP/WebSocket responses.
 const assert = require('node:assert/strict');
-const { BASE, launch, run, until } = require('./lib.cjs');
-const { mock, tabTo, active, visibleFocus, contained, scrollKey } = require('./helpers/accessibility.cjs');
+const { BASE, launch, run, until, showSystemGroup } = require('./lib.cjs');
+const { mock, tabTo, active, visibleFocus, contained, scrollKey, showCard } = require('./helpers/accessibility.cjs');
 const fx = require('../../frontend/preview/fixtures.cjs');
 
 const sizes = [{width: 1280, height: 800}, {width: 390, height: 844}, {width: 360, height: 640}];
@@ -28,6 +28,16 @@ async function trap(page, id, count = 22) {
   }
 }
 async function scrollEnd(page, selector) {
+  await page.waitForFunction(selector => {
+    const el = document.querySelector(selector);
+    const over = el.scrollHeight > el.clientHeight || el.scrollWidth > el.clientWidth;
+    return el.getAttribute('tabindex') === (over ? '0' : null);
+  }, selector);
+  const overflow = await page.locator(selector).evaluate(el => el.scrollHeight > el.clientHeight || el.scrollWidth > el.clientWidth);
+  if (!overflow) {
+    assert.equal(await page.locator(selector).getAttribute('tabindex'), null, `${selector}: fitting content has no Tab stop`);
+    return contained(page);
+  }
   await tabTo(page, selector);
   const scrolls = await page.locator(selector).evaluate(el => el.scrollHeight > el.clientHeight);
   await scrollKey(page, selector, 'End');
@@ -37,6 +47,7 @@ async function scrollEnd(page, selector) {
 }
 
 async function profile(page, state) {
+  await showCard(page, 'profile');
   await tabTo(page, '#profile-weight');
   const original = await page.locator('#profile-weight').elementHandle();
   const previous = await page.locator('#profile-weight').textContent();
@@ -108,7 +119,10 @@ async function overviewActions(page, state) {
   assert.equal(exported.pathname, '/api/dashboard/export.csv');
   assert.equal(exported.searchParams.get('days'), '7');
   await download.cancel();
-  await press(page, '#sync-button', 'Space', true);
+  // Narrow screens: from the Bağlantı tab the button is ahead; wide screens: behind the export.
+  const tabbed = await page.locator('.overview-tabs').isVisible();
+  await showCard(page, 'connection', true);
+  await press(page, '#sync-button', 'Space', !tabbed);
   await until(() => state.syncPosts === 1, 'keyboard sync starts');
   assert(await active(page, '#sync-button'), 'busy sync must keep its keyboard focus');
   await page.keyboard.press('Enter');
@@ -121,7 +135,9 @@ async function overviewActions(page, state) {
 async function system(page, state) {
   await press(page, '[data-page="system"]', 'Space', true);
   await page.waitForFunction(() => document.querySelectorAll('#sync-rows tr').length === 80);
-  await scrollEnd(page, '#system');
+  await showSystemGroup(page, 'sync');
+  await scrollEnd(page, '[data-group="sync"]');
+  await showSystemGroup(page, 'status');
   await press(page, '#coverage-open');
   await dialogOpen(page, 'coverage-dialog');
   assert(await active(page, '#coverage-start'));
@@ -162,6 +178,7 @@ async function system(page, state) {
   await press(page, '#refresh-system', 'Enter', true);
   await until(() => state.dashboards > before, 'keyboard system refresh');
   assert(await active(page, '#refresh-system'));
+  await showSystemGroup(page, 'settings');
   await tabTo(page, '#timezone');
   const previousZone = await page.locator('#timezone').inputValue();
   // Type-ahead selects on every platform; ArrowDown opens the native picker on macOS instead.
@@ -237,6 +254,7 @@ async function sports(page, state) {
 
 async function metricHistory(page, state) {
   await press(page, '[data-page="overview"]', 'Enter', true);
+  await showCard(page, 'steps');
   await press(page, '[data-history-metric="steps"]');
   await dialogOpen(page, 'metric-history-dialog');
   assert(await active(page, '#metric-history-close'));
@@ -244,7 +262,7 @@ async function metricHistory(page, state) {
   await trap(page, 'metric-history-dialog', 18);
   await press(page, '#metric-history-pages button:last-child');
   await page.waitForFunction(() => document.querySelector('#metric-history-page-note').textContent.startsWith('2 /'));
-  assert(await active(page, '[data-history-tab="steps"]'), 'pagination replacement keeps focus on a stable control');
+  assert(await active(page, '#metric-history-pages [data-pager="next"]'), 'keyboard paging leaves focus on the control that turned the page');
   await press(page, '[data-history-tab="sleep"]', 'Space');
   await page.waitForFunction(() => document.querySelector('#metric-history-title').textContent === 'Uyku geçmişi');
   await scrollEnd(page, '#metric-history-content');
@@ -291,15 +309,25 @@ async function layeredEscape(page) {
 
   await press(page, '#assistant-open'); // The socket has deliberately not emitted ready.
   assert(await active(page, '#assistant-close'));
+  const messagesScroll = await page.locator('#assistant-messages').evaluate(el => el.scrollHeight > el.clientHeight);
+  await page.waitForFunction(over => document.querySelector('#assistant-messages').getAttribute('tabindex') === (over ? '0' : null), messagesScroll);
   await page.keyboard.press('Tab');
-  assert(await active(page, '#assistant-messages'));
+  assert(await active(page, messagesScroll ? '#assistant-messages' : '#assistant-new'));
   assert(await page.locator('#assistant-messages').evaluate(el => {
     const r = el.getBoundingClientRect(); return el.contains(document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2));
   }), 'expanded history cannot cover the focused chat region');
-  await scrollKey(page, '#assistant-messages', 'End');
-  await page.keyboard.press('Shift+Tab');
-  await page.keyboard.press('Shift+Tab');
-  assert(await active(page, '#assistant-open'), 'Umay remains nonmodal');
+  if (messagesScroll) await scrollKey(page, '#assistant-messages', 'End');
+  const {width: viewportWidth, height: viewportHeight} = page.viewportSize();
+  if (viewportWidth <= 700 || viewportHeight <= 500) {
+    // Phones: the panel is a modal, so leaving it means closing it; focus returns to the launcher.
+    assert.equal(await page.locator('#assistant-dialog').getAttribute('aria-modal'), 'true');
+    await page.keyboard.press('Escape');
+    assert(await active(page, '#assistant-open'), 'closing the phone modal returns focus to the launcher');
+  } else {
+    await page.keyboard.press('Shift+Tab');
+    await page.keyboard.press('Shift+Tab');
+    assert(await active(page, '#assistant-open'), 'Umay remains nonmodal on wide screens');
+  }
   await page.evaluate(() => window.accessibilitySocket.ready());
   assert(await active(page, '#assistant-open'), 'ready must not steal focus after the user leaves');
   await page.keyboard.press('Enter');
@@ -337,6 +365,7 @@ async function layeredEscape(page) {
 
   // A modal in another view must not invoke Escape on the now hidden history.
   await press(page, '[data-page="system"]', 'Enter', true);
+  await showSystemGroup(page, 'status');
   await press(page, '#coverage-open');
   await page.evaluate(() => window.accessibilitySocket.ready());
   assert(await active(page, '#coverage-start'), 'socket events cannot leave the modal');
@@ -365,6 +394,8 @@ run(async () => {
       await page.goto(BASE);
       await page.waitForFunction(() => document.querySelectorAll('#history-rows tr').length === 7 && 'appearanceReady' in document.documentElement.dataset);
       // DOM order follows the visible menu, in both directions.
+      await page.keyboard.press('Tab');
+      assert(await active(page, '.skip-link'));
       await page.keyboard.press('Tab');
       assert(await active(page, '.brand'));
       for (const name of ['overview', 'measurements', 'system', 'sports']) {

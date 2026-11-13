@@ -8,6 +8,7 @@ from app.google_health.client import Page
 from app.google_health.data_types import REGISTRY
 from app.google_health.pagination import PageBudget
 from app.models.state import BackfillJob
+from app.services.providers.ingestion import GoogleSource
 from app.sync.backfill import BackfillService
 from app.sync.incremental import IncrementalSync
 
@@ -73,9 +74,9 @@ class Runner:
     async def run(self, client):
         specs = {self.kind: REGISTRY[self.kind]}
         if self.lane == "sync":
-            return await IncrementalSync(Settings(), self.sessions, client, specs).run(
-                self.kind, self.start, self.end
-            )
+            return await IncrementalSync(
+                Settings(), self.sessions, GoogleSource(client), specs
+            ).run(self.kind, self.start, self.end)
         if self.job_id is None:
             self.job_id = uuid.uuid4()
             async with self.sessions.begin() as session:
@@ -88,5 +89,5 @@ class Runner:
                     )
                 )
         # The production per-window step: select this runnable job and fetch it.
-        service = BackfillService(Settings(), self.sessions, client, specs)
+        service = BackfillService(Settings(), self.sessions, GoogleSource(client), specs)
         return await service._run_next_window(self.kind, PageBudget())

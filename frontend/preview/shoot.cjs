@@ -3,14 +3,15 @@
 // every backend route with SYNTHETIC fixtures, screenshots each view at each
 // viewport and fails when the main page can scroll in any direction.
 //
-//   node preview/shoot.cjs --out /path/to/dir [--base http://127.0.0.1:5174]
+//   node preview/shoot.cjs [--out .test-output/shoot] [--base http://127.0.0.1:5174]
 //        [--viewports 1920x976,390x844] [--views overview,umay] [--reduced-motion]
 const fs = require('node:fs');
 const path = require('node:path');
 const { chromium } = require('playwright');
 const fx = require('./fixtures.cjs');
 
-const VIEWPORTS = ['1920x976', '1440x900', '1280x720', '1024x650', '390x844', '320x700'];
+const VIEWPORTS = require('../../tests/browser/viewport-floors.json').sizes.map(([w, h]) => `${w}x${h}`);
+const LANGUAGES = ['tr', 'en'];
 const VIEWS = {
   overview: async () => {},
   'history-drag': async (page) => {
@@ -27,6 +28,8 @@ const VIEWS = {
     await page.waitForFunction(() => document.querySelector('#history-panel.expanded') && document.querySelector('#history-status').hidden && document.querySelectorAll('#history-rows tr').length > 0);
   },
   'metric-history': async (page) => {
+    // ≤900 px shows one overview card at a time (overview-tabs.js).
+    if (await page.locator('#overview-tab-steps').isVisible()) await page.locator('#overview-tab-steps').click();
     await page.locator('.steps-card').click();
     await page.locator('#metric-history-days li').first().waitFor();
   },
@@ -58,7 +61,7 @@ const VIEWS = {
   },
   system: async (page) => {
     await page.locator('[data-page="system"]').click();
-    await page.locator('#sync-rows tr').first().waitFor();
+    await page.locator('#sync-rows tr').first().waitFor({ state: 'attached' });
   },
   sports: async (page) => {
     await page.locator('[data-page="sports"]').click();
@@ -72,6 +75,7 @@ const VIEWS = {
   appearance: async (page) => {
     await page.locator('[data-page="system"]').click();
     await page.waitForFunction(() => 'appearanceReady' in document.documentElement.dataset);
+    if (await page.locator('#system-tab-settings').isVisible()) await page.locator('#system-tab-settings').click();
     await page.locator('#appearance-open').click();
     await page.locator('#appearance-dialog[open] .preset-tile').first().waitFor();
   },
@@ -99,12 +103,25 @@ const VIEWS = {
   notice: { scenario: 'sync-error', run: async (page) => { await page.locator('#notice:not([hidden])').waitFor(); } },
   'empty-overview': { scenario: 'empty', run: async () => {} },
   'empty-history': { scenario: 'empty', run: async (page) => {
+    if (await page.locator('#overview-tab-steps').isVisible()) await page.locator('#overview-tab-steps').click();
     await page.locator('.steps-card').click();
     await page.locator('#metric-history-chart .history-empty').waitFor();
   } },
   'empty-system': { scenario: 'empty', run: async (page) => {
     await page.locator('[data-page="system"]').click();
     await page.locator('#google-empty:not([hidden])').waitFor();
+  } },
+  // No source selected: the empty overview offers the sample data, Sistem lists the three ways.
+  'none-overview': { scenario: 'none', run: async (page) => { await page.locator('#overview-state-sample:not([hidden])').waitFor(); } },
+  'none-system': { scenario: 'none', run: async (page) => {
+    await page.locator('[data-page="system"]').click();
+    await page.locator('#source-guide:not([hidden])').waitFor();
+  } },
+  // Sample data loaded: the banner on every page, the sample's label on its workouts.
+  'sample-overview': { scenario: 'sample', run: async (page) => { await page.locator('#sample-banner:not([hidden])').waitFor(); } },
+  'sample-sports': { scenario: 'sample', run: async (page) => {
+    await page.locator('[data-page="sports"]').click();
+    await page.locator('#sample-banner:not([hidden])').waitFor();
   } },
   // Two sources on the same day: source badges in the table and the opened "Diğer kaynaklar" sub-row.
   kaynaklar: { scenario: 'kaynaklar', run: async (page) => {
@@ -118,9 +135,8 @@ const VIEWS = {
   } },
 };
 
-function args() {
-  const out = { base: 'http://127.0.0.1:5174', viewports: VIEWPORTS, views: Object.keys(VIEWS), reducedMotion: false };
-  const argv = process.argv.slice(2);
+function args(argv = process.argv.slice(2)) {
+  const out = { base: 'http://127.0.0.1:5174', viewports: VIEWPORTS, views: Object.keys(VIEWS), out: path.join(__dirname, '../.test-output/shoot'), reducedMotion: true };
   for (let i = 0; i < argv.length; i++) {
     const [key, inline] = argv[i].split('=');
     const value = () => inline ?? argv[++i];
@@ -132,7 +148,6 @@ function args() {
     else if (key === '--help' || key === '-h') { console.log(fs.readFileSync(__filename, 'utf8').split('\n').slice(1, 7).join('\n')); process.exit(0); }
     else throw new Error(`Unknown argument ${argv[i]}`);
   }
-  if (!out.out) throw new Error('--out <dir> is required');
   const unknown = out.views.filter(v => !VIEWS[v]);
   if (unknown.length) throw new Error(`Unknown views: ${unknown.join(', ')} (known: ${Object.keys(VIEWS).join(', ')})`);
   return out;
@@ -157,6 +172,7 @@ async function mock(page, base, problems, scenario) {
     if (p === '/api/dashboard/workouts') return method === 'POST'
       ? json(route, { id: 'new', ...route.request().postDataJSON(), source: 'Manuel' }, 201) : json(route, call(data.workouts, q));
     if (p === '/api/dashboard/export.csv') return route.fulfill({ body: 'date,steps\n', contentType: 'text/csv' });
+    if (p === '/api/settings/display') return json(route, { schema_version: 1, preferences: { timezone: 'UTC', motion: false }, updated_at: fx.NOW });
     if (p === '/api/settings/appearance') {
       if (method === 'PUT') appearance = { selection: route.request().postDataJSON(), updated_at: new Date().toISOString() };
       return json(route, appearance);
@@ -164,6 +180,7 @@ async function mock(page, base, problems, scenario) {
     if (p === '/api/sync/coverage') return json(route, call(data.coverage, q));
     if (p === '/api/webhooks/status') return json(route, data.webhookStatus);
     if (p === '/api/devices') return json(route, data.devices);
+    if (p === '/api/apple/status') return json(route, data.appleStatus);
     if (p === '/sync/status') return json(route, data.syncStatus);
     if (p === '/sync/all') return json(route, { status: 'accepted', data_types: ['steps'] }, 202);
     if (/^\/(api|sync|auth|docs|health|google-health)(\/|$)/.test(p)) { problems.push(`unmocked ${method} ${p}`); return json(route, { detail: 'preview: not mocked' }, 404); }
@@ -193,23 +210,52 @@ async function measure(page) {
   });
 }
 
-(async () => {
+// Repeated captures must not depend on raster history. While the overview settles, the history
+// table header moves in each of its first frames (~80 ms) as rows and columns fill in, and how far
+// raster has got at each step differs between runs: on Linux the right part of the phone header
+// ("Dinlenme nabzı" from x 270) sometimes kept its glyphs 1 px to the side of the settled raster
+// (375x667 tr overview, 3 of 10 runs), with identical DOM and layout. Hiding the page for two
+// frames and showing it again repaints every tile from the settled display list, and
+// --disable-partial-raster makes each of those a full re-raster. The focused control stays
+// visible, so focus, focus rings and focus events are left as they were.
+async function repaintSettled(page) {
+  await page.evaluate(async () => {
+    const frames = (count) => new Promise((resolve) => {
+      const step = () => (--count ? requestAnimationFrame(step) : resolve());
+      requestAnimationFrame(step);
+    });
+    const style = document.createElement('style');
+    style.textContent = 'html { visibility: hidden !important; } :focus { visibility: visible !important; }';
+    document.head.append(style);
+    await frames(2);
+    style.remove();
+    await frames(2);
+  });
+}
+
+async function main() {
   const opt = args();
   fs.mkdirSync(opt.out, { recursive: true });
-  // channel 'chromium' = full Chromium in new headless mode; it uses the GPU for
-  // the WebGL body model instead of SwiftShader, which is ~10x cheaper.
-  const browser = await chromium.launch({ headless: true, channel: 'chromium' });
+  // Partial raster re-draws only an invalidated part of a tile, and its anti-aliased seam can differ
+  // by a few levels between runs (seen at the phone Steps card icon after #473). Full re-raster keeps
+  // repeated captures byte-identical; differing content still shows up in tests/browser/preview-shoot.cjs.
+  const browser = await chromium.launch({ headless: true, args: ['--disable-partial-raster'] });
   const rows = [];
   let failed = false;
   try {
-    await Promise.all(opt.viewports.map(async (viewport) => {
+    for (const viewport of opt.viewports) for (const language of LANGUAGES) {
       const [width, height] = viewport.split('x').map(Number);
       const contextOptions = { viewport: { width, height }, deviceScaleFactor: 1,
-        locale: 'tr-TR', timezoneId: 'UTC', reducedMotion: opt.reducedMotion ? 'reduce' : 'no-preference',
-        hasTouch: width < 600, isMobile: false };
+        locale: language === 'en' ? 'en-US' : 'tr-TR', timezoneId: 'UTC', reducedMotion: opt.reducedMotion ? 'reduce' : 'no-preference',
+        hasTouch: width <= 900, isMobile: false };
       for (const view of opt.views) {
         // A fresh context per view: stored appearance/uploads never leak between views.
         const context = await browser.newContext(contextOptions);
+        await context.addInitScript(lang => {
+          localStorage.setItem('healthos.language', lang);
+          localStorage.setItem('healthos.timezone.v2', 'UTC');
+          localStorage.setItem('healthos.motion', 'false');
+        }, language);
         const page = await context.newPage();
         const problems = [];
         page.on('pageerror', (e) => problems.push(`pageerror: ${e.message}`));
@@ -219,33 +265,39 @@ async function measure(page) {
         await page.goto(opt.base, { waitUntil: 'domcontentloaded' });
         await page.waitForFunction(() => document.querySelectorAll('#history-rows tr').length === 7);
         await page.evaluate(() => document.fonts.ready);
-        await page.waitForSelector('#body-model[data-model-loaded]', { timeout: 6000 }).catch(() => {});
+        // Narrow screens open on the Steps card and load the model only once Profile is shown (#473):
+        // wait for it only where it is on screen, or every phone capture idles for the full 6 s.
+        if (await page.locator('#body-model').isVisible()) await page.waitForSelector('#body-model[data-model-loaded]', { timeout: 6000 }).catch(() => {});
         await page.waitForTimeout(500); // let the body model fade in and settle
         let result;
         try { result = await spec.run(page); } catch (e) { problems.push(`view step failed: ${e.message.split('\n')[0]}`); }
-        const order = opt.viewports.indexOf(viewport) * 100 + opt.views.indexOf(view);
-        if (result === 'skip') { rows.push({ order, viewport, view, skipped: true }); await context.close(); continue; }
+        const order = (opt.viewports.indexOf(viewport) * LANGUAGES.length + LANGUAGES.indexOf(language)) * opt.views.length + opt.views.indexOf(view);
+        if (result === 'skip') { rows.push({ order, viewport, language, view, skipped: true }); await context.close(); continue; }
         await page.waitForFunction(() => document.getAnimations().every(a => a.playState !== 'running' || a.effect?.getComputedTiming().iterations === Infinity), null, { timeout: 2000 }).catch(() => {});
         await page.waitForTimeout(150);
         const m = await measure(page);
         const overflow = m.sh > m.ih || m.sw > m.iw;
-        await page.screenshot({ path: path.join(opt.out, `${viewport}-${view}.png`) });
+        await repaintSettled(page);
+        await page.screenshot({ animations: 'disabled', caret: 'hide', path: path.join(opt.out, `${viewport}-${language}-${view}.png`) });
         if (overflow || problems.length) failed = true;
-        rows.push({ order, viewport, view, ...m, overflow, problems });
+        rows.push({ order, viewport, language, view, ...m, overflow, problems });
         await context.close();
       }
-    }));
+    }
   } finally { await browser.close(); }
 
   rows.sort((a, b) => a.order - b.order);
   const pad = (s, n) => String(s).padEnd(n);
-  console.log(`${pad('viewport', 11)}${pad('view', 20)}${pad('scrollH/innerH', 16)}${pad('scrollW/innerW', 16)}result`);
+  console.log(`${pad('viewport', 11)}${pad('lang', 6)}${pad('view', 20)}${pad('scrollH/innerH', 16)}${pad('scrollW/innerW', 16)}result`);
   for (const r of rows) {
-    if (r.skipped) { console.log(`${pad(r.viewport, 11)}${pad(r.view, 20)}${pad('-', 16)}${pad('-', 16)}skipped (not applicable)`); continue; }
-    console.log(`${pad(r.viewport, 11)}${pad(r.view, 20)}${pad(`${r.sh}/${r.ih}`, 16)}${pad(`${r.sw}/${r.iw}`, 16)}${r.overflow ? 'OVERFLOW' : 'ok'}`);
+    if (r.skipped) { console.log(`${pad(r.viewport, 11)}${pad(r.language, 6)}${pad(r.view, 20)}${pad('-', 16)}${pad('-', 16)}skipped (not applicable)`); continue; }
+    console.log(`${pad(r.viewport, 11)}${pad(r.language, 6)}${pad(r.view, 20)}${pad(`${r.sh}/${r.ih}`, 16)}${pad(`${r.sw}/${r.iw}`, 16)}${r.overflow ? 'OVERFLOW' : 'ok'}`);
     for (const p of r.problems) console.log(`    ! ${p}`);
   }
   console.log(`\nScreenshots: ${path.resolve(opt.out)}`);
   console.log(failed ? 'FAIL: page overflow or problems detected' : 'PASS: no main-page overflow in any view');
   process.exit(failed ? 1 : 0);
-})().catch((error) => { console.error(error); process.exit(2); });
+}
+
+module.exports = { VIEWPORTS, LANGUAGES, args };
+if (require.main === module) main().catch((error) => { console.error(error); process.exit(2); });

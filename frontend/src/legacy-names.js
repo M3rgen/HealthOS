@@ -1,6 +1,7 @@
 // Carries browser data over from the product's earlier, misspelled name ("healtos"). Each
 // copy runs once, fills only what the new name does not already hold, and never removes or
 // changes the old copy: a browser that downgrades still finds its data where it was.
+import { browserStorage } from './local-store.js';
 
 // New localStorage key → the key the same value was kept under before.
 export const LEGACY_KEYS = {
@@ -14,8 +15,10 @@ export const LEGACY_KEYS = {
 // (e.g. motion back to its default, a pending mark after a send) does not come back.
 export const KEYS_MIGRATED = 'healthos.legacy-keys.migrated';
 
-export function migrateLegacyKeys(storage = globalThis.localStorage) {
+/** @param {Pick<Storage, 'getItem'|'setItem'>|null} [storage] */
+export function migrateLegacyKeys(storage) {
   try {
+    storage ??= browserStorage();
     if (!storage || storage.getItem(KEYS_MIGRATED) === '1') return;
     for (const [key, legacy] of Object.entries(LEGACY_KEYS)) {
       if (storage.getItem(key) !== null) continue;
@@ -33,19 +36,23 @@ export const LEGACY_UPLOAD_DB = 'healtos-appearance';
 // it keeps an upload the user removed later from coming back. getUpload never reads it.
 export const UPLOADS_MIGRATED = 'migrated:healtos-appearance';
 
+/** @template T @param {IDBRequest<T>} request @returns {Promise<T>} */
 const settle = request => new Promise((resolve, reject) => {
   request.onsuccess = () => resolve(request.result);
   request.onerror = () => reject(request.error);
 });
 
 // → the existing database, null when it never existed, undefined when that is unknown.
+/** @param {IDBFactory} factory @param {string} name @returns {Promise<IDBDatabase | null | undefined>} */
 function openExisting(factory, name) {
   return new Promise((resolve) => {
-    let request, absent = false;
+    /** @type {IDBOpenDBRequest} */
+    let request;
+    let absent = false;
     try { request = factory.open(name); } catch { resolve(undefined); return; }
     request.onupgradeneeded = () => {
       absent = true; // Opening created it: abort, so no empty database is left behind.
-      try { request.transaction.abort(); } catch { /* resolved by onerror */ }
+      try { request.transaction?.abort(); } catch { /* resolved by onerror */ }
     };
     request.onsuccess = () => resolve(request.result);
     request.onerror = (event) => { event?.preventDefault?.(); resolve(absent ? null : undefined); };
@@ -53,6 +60,7 @@ function openExisting(factory, name) {
   });
 }
 
+/** @param {IDBDatabase} db @param {string} storeName @returns {Promise<[IDBValidKey, unknown][]>} */
 async function readAll(db, storeName) {
   if (!db.objectStoreNames.contains(storeName)) return [];
   const store = db.transaction(storeName, 'readonly').objectStore(storeName);
@@ -63,6 +71,9 @@ async function readAll(db, storeName) {
 /**
  * Copies the old database's uploads into `db` (already open, with `storeName`) once. An
  * upload already in `db` wins. → true when nothing is left to carry over, false to retry.
+ * @param {IDBDatabase} db
+ * @param {{factory?: IDBFactory, from?: string, storeName?: string}} [options]
+ * @returns {Promise<boolean>}
  */
 export async function migrateLegacyUploads(db, { factory = globalThis.indexedDB, from = LEGACY_UPLOAD_DB, storeName = 'uploads' } = {}) {
   try {
@@ -70,6 +81,7 @@ export async function migrateLegacyUploads(db, { factory = globalThis.indexedDB,
     if (await settle(done)) return true;
     const legacy = await openExisting(factory, from);
     if (legacy === undefined) return false;
+    /** @type {[IDBValidKey, unknown][]} */
     let records = [];
     if (legacy) {
       try { records = await readAll(legacy, storeName); } finally { legacy.close(); }

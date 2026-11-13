@@ -14,6 +14,7 @@ BASH = shutil.which("bash")
 pytestmark = pytest.mark.skipif(GIT is None or BASH is None, reason="git and bash are required")
 
 MIGRATION = 'revision = "{rev}"\ndown_revision = {down}\n\n\ndef upgrade():\n    pass\n'
+RELEASE = "Unreleased\n\n### Fixed\n\n- Preserve every source record.\n  Keep its history."
 
 
 class Repo:
@@ -63,7 +64,13 @@ class Repo:
 def repo(tmp_path: Path) -> Repo:
     home = tmp_path / "home"
     home.mkdir()
+    bin_dir = home / "bin"
+    bin_dir.mkdir()
+    scanner = bin_dir / "gitleaks"
+    scanner.write_text('#!/bin/sh\nprintf "%s\\n" "$@" >> "$HOME/scanner-args"\nexit 0\n')
+    scanner.chmod(0o755)
     repo = Repo(tmp_path / "repo", home)
+    repo.env["PATH"] = f"{bin_dir}:{repo.env['PATH']}"
     repo.path.mkdir()
     repo.git("-c", "init.defaultBranch=main", "init", "-q")
     for key, value in {
@@ -76,14 +83,22 @@ def repo(tmp_path: Path) -> Repo:
         "healthos.extensionMarker": "secretword",
         "healthos.githubExtension": "eklenti/apple",
         "healthos.githubExtensionMarker": "applehealth",
+        "healthos.githubForbidPattern": "private-host-fixture",
     }.items():
         repo.git("config", key, value)
-    for script in ("github_snapshot.sh", "check_no_extension.sh"):
+    for script in (
+        "github_snapshot.sh",
+        "github_snapshot_checks.py",
+        "check_no_extension.sh",
+        "hooks/pre-push",
+    ):
         repo.write(f"scripts/{script}", (ROOT / "scripts" / script).read_text(encoding="utf-8"))
     repo.commit(
         "base",
         {
             "README.md": "HealthOS\n",
+            "CHANGELOG.md": f"# Changelog\n\n## {RELEASE}\n\n## 0.1.0\n\n- Older release.\n",
+            "docs/BRANCHES.md": "private-host-fixture\n",
             "app/core.py": "VALUE = 1\n",
             "notes/maintainer-log.md": "maintainer notes\n",
             "migrations/versions/m0001.py": MIGRATION.format(rev="0001", down="None"),
@@ -114,8 +129,9 @@ def test_snapshot_merges_github_only_extension(repo: Repo) -> None:
     assert "migrations/versions/m0002_apple.py" in files
     assert "notes/maintainer-log.md" not in files
     assert "app/private_ext.py" not in files
-    message = repo.git("log", "-1", "--format=%s", "github-main")
-    assert message.startswith("HealthOS: snapshot of main + eklenti/apple (")
+    message = repo.git("log", "-1", "--format=%B", "github-main")
+    assert message == f"{RELEASE}\nSource: dev {repo.git('rev-parse', '--short=7', 'main')}"
+    assert "docs/BRANCHES.md" not in files
     assert repo.git("rev-list", "--count", "github-main") == "2"
 
 
@@ -205,17 +221,17 @@ def test_check_snapshot_allows_github_only_but_not_private(repo: Repo) -> None:
     assert "github-main:app/leak.py" in result.stdout
 
 
-def test_check_github_only_mode_on_live(repo: Repo) -> None:
-    repo.git("switch", "-q", "-c", "live")
+def test_check_github_only_mode_on_deployment(repo: Repo) -> None:
+    repo.git("switch", "-q", "-c", "deployed")
     repo.git("merge", "-q", "--no-ff", "--no-edit", "eklenti/x")
-    result = repo.run("check_no_extension.sh", "--github-only", "live")
+    result = repo.run("check_no_extension.sh", "--github-only", "deployed")
     assert result.returncode == 0, result.stdout + result.stderr
-    assert repo.run("check_no_extension.sh", "live").returncode == 1
+    assert repo.run("check_no_extension.sh", "deployed").returncode == 1
 
     repo.git("merge", "-q", "--no-ff", "--no-edit", "eklenti/apple")
-    result = repo.run("check_no_extension.sh", "--github-only", "live")
+    result = repo.run("check_no_extension.sh", "--github-only", "deployed")
     assert result.returncode == 1
-    assert "live:app/apple_import.py (added by eklenti/apple, GitHub-only)" in result.stdout
+    assert "deployed:app/apple_import.py (added by eklenti/apple, GitHub-only)" in result.stdout
 
 
 def test_check_github_only_mode_needs_no_private_marker(repo: Repo) -> None:

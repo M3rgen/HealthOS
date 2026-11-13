@@ -13,14 +13,24 @@ import re
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 
+import garmin_records
+import pytest
 from garmin_records import activity, daily_steps, daily_stress, daily_summary, heart_rate, sleep
 from identity_records import STEPS, fitbit, steps, store
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
+from support.garmin import unlocked
 
 from app.api.dashboard import place_workouts, workouts
 from app.core.config import Settings
 from app.core.providers import GARMIN, GOOGLE, garmin_record_key
-from app.models.garmin import GarminPullState, GarminRawRecord
+from app.models.garmin import (
+    GarminApiResponse,
+    GarminHeartMember,
+    GarminHeartSet,
+    GarminPullState,
+    GarminRawRecord,
+    GarminRecordObservation,
+)
 from app.models.health import (
     Distance,
     ExerciseSession,
@@ -33,20 +43,27 @@ from app.models.health import (
 )
 from app.models.state import RawHealthData
 from app.parsers.identity import kindred, stable_class, stable_source
-from app.services import garmin_normalize, garmin_readers
-from app.services.coverage import coverage_response
-from app.services.dashboard import dashboard_data
-from app.services.devices import device_report
-from app.services.garmin_normalize import normalize_window
-from app.services.garmin_pull import KIND_NAMES, GarminPull
-from app.services.source_precedence import PRIMARY, SECONDARY, Policy
-from app.sync.deletions import mark_source_deletions
+from app.services.archive.source_deletions import mark_source_deletions
+from app.services.dashboard_views.dashboard import dashboard_data
+from app.services.dashboard_views.devices import device_report
+from app.services.identities.source_precedence import PRIMARY, SECONDARY, Policy
+from app.services.providers import garmin_normalize, garmin_readers
+from app.services.providers.garmin_normalize import normalize_window
+from app.services.readers.dashboard_queries import DashboardQuery
+from app.services.synchronization.coverage import coverage_response
 
 DAY = date(2026, 11, 6)
 NOW = datetime(2026, 11, 7, 12, 0, tzinfo=UTC)
 # Garmin heart-rate samples and the sleep of DAY, in milliseconds since the epoch (UTC).
 MS = int(datetime(2026, 11, 6, 0, 0, tzinfo=UTC).timestamp() * 1000)
 REVERSED = Policy(activity=("FITBIT", "GARMIN"), health=("GARMIN", "FITBIT"))
+STEP_INPUT = daily_steps(DAY)
+HEART_INPUT = heart_rate(DAY)
+SLEEP_INPUT = sleep(DAY)
+SUMMARY_INPUT = daily_summary(DAY)["bodyBattery"]
+HRV_INPUT = garmin_records.hrv_summary(DAY)
+STRESS_INPUT = daily_stress(DAY)["values"]
+ACTIVITY_INPUT = activity(1001, DAY)
 
 
 def raw(kind: str, key: str, body, seen: datetime = NOW, suffix: str = "a") -> GarminRawRecord:
@@ -61,8 +78,6 @@ def raw(kind: str, key: str, body, seen: datetime = NOW, suffix: str = "a") -> G
 
 def garmin_heart(day: date, samples: list[tuple[int, int | None]]) -> dict:
     record = heart_rate(day)
-    record["startTimestampGMT"] = f"{day.isoformat()}T00:00:00.0"
-    record["endTimestampGMT"] = f"{day.isoformat()}T23:59:59.0"
     record["heartRateValues"] = [[MS + minute * 60_000, bpm] for minute, bpm in samples]
     return record
 
@@ -75,7 +90,7 @@ def garmin_sleep(day: date) -> dict:
     return record
 
 
-def garmin_activity(activity_id: int, day: date, start: str = "17:05:00", duration=2410.0):
+def garmin_activity(activity_id: int, day: date, start: str = "17:00:00", duration=2400.0):
     record = activity(activity_id, day)
     record["startTimeGMT"] = f"{day.isoformat()} {start}"
     record["duration"] = duration
@@ -84,35 +99,17 @@ def garmin_activity(activity_id: int, day: date, start: str = "17:05:00", durati
 
 async def archive_day(sessions, day: date = DAY) -> None:
     """One synthetic Garmin day in the raw archive: every kind the normalization reads."""
+    heart = garmin_heart(day, [(0, 60), (1, 70), (2, None)])
+    spo2 = {"calendarDate": day.isoformat(), "averageSpO2": 100.0}
     async with sessions.begin() as session:
         session.add_all(
             [
-                raw("steps", day.isoformat(), daily_steps(day, steps=7400), suffix="1"),
-                raw("daily-summaries", day.isoformat(), daily_summary(day, resting=52), suffix="2"),
-                raw(
-                    "heart-rate",
-                    day.isoformat(),
-                    garmin_heart(day, [(0, 61), (1, 64), (2, None)]),
-                    suffix="3",
-                ),
+                raw("steps", day.isoformat(), daily_steps(day), suffix="1"),
+                raw("daily-summaries", day.isoformat(), daily_summary(day), suffix="2"),
+                raw("heart-rate", day.isoformat(), heart, suffix="3"),
                 raw("sleep", day.isoformat(), garmin_sleep(day), suffix="4"),
-                raw(
-                    "hrv-summaries",
-                    day.isoformat(),
-                    {
-                        "calendarDate": day.isoformat(),
-                        "lastNightAvg": 43,
-                        "status": "UNBALANCED",
-                        "lastNight5MinHigh": 61,
-                    },
-                    suffix="5",
-                ),
-                raw(
-                    "spo2",
-                    day.isoformat(),
-                    {"calendarDate": day.isoformat(), "averageSpO2": 96.5},
-                    suffix="6",
-                ),
+                raw("hrv-summaries", day.isoformat(), garmin_records.hrv_summary(day), suffix="5"),
+                raw("spo2", day.isoformat(), spo2, suffix="6"),
                 raw("stress", day.isoformat(), daily_stress(day), suffix="7"),
                 raw("activities", "1001", garmin_activity(1001, day), suffix="8"),
                 GarminPullState(kind="steps", last_success_at=NOW, last_attempt_at=NOW),
@@ -147,50 +144,50 @@ async def test_a_day_becomes_tagged_rows_in_the_shared_tables_once(sessions):
     async with sessions() as session:
         steps = (await session.scalars(select(Steps))).one()
         assert steps.provider == GARMIN and steps.device == "Garmin Test"
-        assert steps.google_data_point_id == garmin_record_key("steps", DAY.isoformat())
+        assert steps.google_data_point_id == garmin_record_key("steps", DAY.isoformat(), "v2")
         assert steps.source_record_id == f"steps:{DAY.isoformat()}"
-        assert steps.count == 7400
+        assert steps.count == STEP_INPUT["totalSteps"]
         # The civil day's UTC bounds from the heart-rate record, half open.
         assert (steps.start_time.replace(tzinfo=UTC), steps.end_time.replace(tzinfo=UTC)) == (
             datetime(2026, 11, 6, tzinfo=UTC),
             datetime(2026, 11, 7, tzinfo=UTC),
         )
         distance = (await session.scalars(select(Distance))).one()
-        assert distance.meters == Decimal("5476")  # 7400 * 0.74
+        assert distance.meters == Decimal(str(STEP_INPUT["totalDistance"]))
         samples = (await session.scalars(select(HeartRate).order_by(HeartRate.timestamp))).all()
-        assert [int(s.bpm) for s in samples] == [61, 64]
+        assert [int(s.bpm) for s in samples] == [60, 70]
         assert samples[0].google_data_point_id == garmin_record_key(
-            "heart-rate", DAY.isoformat(), str(MS)
+            "heart-rate", DAY.isoformat(), str(MS), "v2"
         )
         resting = (await session.scalars(select(RestingHeartRate))).one()
-        assert resting.bpm == 52 and resting.timestamp.replace(tzinfo=UTC) == datetime(
-            2026, 11, 6, tzinfo=UTC
-        )
+        assert resting.bpm == HEART_INPUT["restingHeartRate"] and resting.timestamp.replace(
+            tzinfo=UTC
+        ) == datetime(2026, 11, 6, tzinfo=UTC)
         night = (await session.scalars(select(SleepSession))).one()
         assert (night.duration_seconds, night.deep_sleep_seconds, night.awake_seconds) == (
-            25200,
-            5400,
-            600,
+            SLEEP_INPUT["sleepTimeSeconds"],
+            SLEEP_INPUT["deepSleepSeconds"],
+            SLEEP_INPUT["awakeSleepSeconds"],
         )
         hrv = (await session.scalars(select(HeartRateVariability))).one()
-        assert hrv.rmssd == 43 and hrv.metrics == {"status": "UNBALANCED", "lastNight5MinHigh": 61}
+        assert hrv.rmssd == HRV_INPUT["lastNightAvg"] and hrv.metrics == {
+            key: HRV_INPUT[key] for key in ("status", "lastNight5MinHigh")
+        }
         scalars = {
             row.data_type: row for row in (await session.scalars(select(ScalarMetric))).all()
         }
-        assert (
-            scalars["garmin-stress"].value == 24
-            and scalars["garmin-stress"].attributes["restStressDuration"] == 31000
-        )
-        assert (
-            scalars["garmin-body-battery"].value == 42
-            and scalars["garmin-body-battery"].attributes["max"] == 88
-        )
+        stress, battery = scalars["garmin-stress"], scalars["garmin-body-battery"]
+        assert stress.value == STRESS_INPUT["overallStressLevel"]
+        assert stress.attributes["restStressDuration"] == STRESS_INPUT["restStressDuration"]
+        assert battery.value == SUMMARY_INPUT["latestValue"]
+        assert battery.attributes["max"] == SUMMARY_INPUT["maxValue"]
         workout = (await session.scalars(select(ExerciseSession))).one()
         assert workout.exercise_type == "walking" and workout.provider == GARMIN
         assert workout.end_time.replace(tzinfo=UTC) - workout.start_time.replace(
             tzinfo=UTC
-        ) == timedelta(seconds=2410)
-        assert workout.calories_kcal == 210 and workout.distance_meters == Decimal("3120.5")
+        ) == timedelta(seconds=ACTIVITY_INPUT["duration"])
+        assert workout.calories_kcal == ACTIVITY_INPUT["calories"]
+        assert workout.distance_meters == Decimal(str(ACTIVITY_INPUT["distance"]))
         # Nothing Google-shaped was written.
         assert await session.scalar(select(func.count()).select_from(RawHealthData)) == 0
 
@@ -212,7 +209,7 @@ async def test_normalizing_again_writes_nothing_and_a_new_payload_version_update
             raw(
                 "steps",
                 DAY.isoformat(),
-                daily_steps(DAY, steps=7512),
+                daily_steps(DAY, steps=7500),
                 seen=NOW + timedelta(hours=2),
                 suffix="9",
             )
@@ -222,7 +219,7 @@ async def test_normalizing_again_writes_nothing_and_a_new_payload_version_update
     assert third.inserted == 0 and third.updated == 2  # steps and distance changed
     async with sessions() as session:
         steps = (await session.scalars(select(Steps))).one()
-        assert steps.count == 7512 and steps.id == stamps[0][1]  # the same row, in place
+        assert steps.count == 7500 and steps.id == stamps[0][1]  # the same row, in place
         assert (
             await session.scalar(
                 select(func.count())
@@ -233,34 +230,33 @@ async def test_normalizing_again_writes_nothing_and_a_new_payload_version_update
         )
 
 
-async def test_a_record_without_what_a_row_needs_is_skipped_not_invented(sessions):
+@pytest.mark.parametrize(
+    "start, duration",
+    [
+        (None, 60),
+        (str(DAY), 0),
+        (str(DAY), "1e30"),
+        (str(DAY), "1e1000"),
+        ("9999-12-31T23:59:50", 60),
+    ],
+)
+async def test_a_record_without_what_a_row_needs_is_skipped_not_invented(sessions, start, duration):
     async with sessions.begin() as session:
         session.add_all(
             [
+                raw("sleep", str(DAY), {"sleepTimeSeconds": 100}, suffix="1"),
                 raw(
-                    "sleep",
-                    DAY.isoformat(),
-                    {"calendarDate": DAY.isoformat(), "sleepTimeSeconds": 100},
-                    suffix="1",
+                    "activities",
+                    "7",
+                    {"activityId": 7, "startTimeGMT": start, "duration": duration},
+                    suffix="2",
                 ),
-                raw("activities", "7", {"activityId": 7, "activityName": "no start"}, suffix="2"),
-                raw(
-                    "spo2",
-                    DAY.isoformat(),
-                    {"calendarDate": DAY.isoformat(), "averageSpO2": None},
-                    suffix="3",
-                ),
+                raw("spo2", str(DAY), {"averageSpO2": None}, suffix="3"),
             ]
         )
     async with sessions.begin() as session:
         stats = await normalize_window(session, DAY, DAY)
     assert stats.inserted == 0 and stats.skipped == 1  # the activity; the others yield no candidate
-    assert (
-        garmin_normalize.activity_row(
-            {"activityId": 7, "startTimeGMT": "2026-11-06 10:00:00", "duration": 0}, "Garmin"
-        )
-        is None
-    )
     assert garmin_normalize.day_bounds(DAY, None) == (
         datetime(2026, 11, 6, tzinfo=UTC),
         datetime(2026, 11, 7, tzinfo=UTC),
@@ -279,7 +275,7 @@ async def test_pull_service_normalizes_with_the_configured_device_name(sessions,
         garmin_api_key_file=key,
         garmin_device_name="Forerunner Test",
     )
-    pull = GarminPull(settings, sessions, clock=lambda: NOW)
+    pull = unlocked(settings, sessions, clock=lambda: NOW)
     stats = await pull.normalize(DAY, DAY)
     assert stats.inserted == 11
     async with sessions() as session:
@@ -296,7 +292,7 @@ async def test_google_readers_never_see_garmin_rows(sessions, clock):
     google = steps(8000, datetime(2026, 11, 6, 7, 0, tzinfo=UTC), source=fitbit("Fitbit Air"))
     await store(sessions, STEPS, google, fetch_started=fetch)
     async with sessions() as session:
-        before_dashboard = await dashboard_data(session, DAY, 1, "UTC")
+        before_dashboard = await dashboard_data(session, query=DashboardQuery(DAY, 1, "UTC"))
         before_coverage = await coverage_response(
             session, DAY - timedelta(days=1), DAY, "UTC", "steps"
         )
@@ -304,12 +300,12 @@ async def test_google_readers_never_see_garmin_rows(sessions, clock):
     async with sessions.begin() as session:
         await normalize_window(session, DAY, DAY)
     async with sessions() as session:
-        after = await dashboard_data(session, DAY, 1, "UTC")
+        after = await dashboard_data(session, query=DashboardQuery(DAY, 1, "UTC"))
         coverage = await coverage_response(session, DAY - timedelta(days=1), DAY, "UTC", "steps")
     # The Google value is selected (health: Fitbit first) and is the Google value alone.
     assert after["days"][0]["steps"] == 8000 == before_dashboard["days"][0]["steps"]
     assert after["days"][0]["sources"]["steps"]["alternatives"] == [
-        {"source": GARMIN, "label": "Garmin", "value": 7400}
+        {"source": GARMIN, "label": "Garmin", "value": STEP_INPUT["totalSteps"]}
     ]
     assert "GARMIN" not in json.dumps(coverage, default=str) and "Garmin" not in json.dumps(
         coverage, default=str
@@ -339,11 +335,13 @@ async def test_google_readers_never_see_garmin_rows(sessions, clock):
     )
     async with sessions() as session:
         garmin_steps = (await session.scalars(select(Steps).where(Steps.provider == GARMIN))).one()
-        assert garmin_steps.count == 7400 and garmin_steps.is_quarantined is False
-        final = await dashboard_data(session, DAY, 1, "UTC")
+        assert (
+            garmin_steps.count == STEP_INPUT["totalSteps"] and garmin_steps.is_quarantined is False
+        )
+        final = await dashboard_data(session, query=DashboardQuery(DAY, 1, "UTC"))
     # With the Google row gone, Garmin's value is shown, alone, not added to anything.
     assert (
-        final["days"][0]["steps"] == 7400
+        final["days"][0]["steps"] == STEP_INPUT["totalSteps"]
         and final["days"][0]["sources"]["steps"]["source"] == GARMIN
     )
     assert final["days"][0]["sources"]["steps"]["alternatives"] == []
@@ -368,27 +366,34 @@ async def test_dashboard_resolves_every_metric_and_the_policy_can_be_reversed(se
     async with sessions.begin() as session:
         await normalize_window(session, DAY, DAY)
     async with sessions() as session:
-        default = await dashboard_data(session, DAY, 1, "UTC")
-        reversed_ = await dashboard_data(session, DAY, 1, "UTC", policy=REVERSED)
+        default = await dashboard_data(session, query=DashboardQuery(DAY, 1, "UTC"))
+        reversed_ = await dashboard_data(
+            session, policy=REVERSED, query=DashboardQuery(DAY, 1, "UTC")
+        )
     day = default["days"][0]
     assert day["resting_bpm"] == 58 and day["sources"]["resting_bpm"]["source"] == "FITBIT"
     assert day["sources"]["resting_bpm"]["alternatives"] == [
-        {"source": GARMIN, "label": "Garmin", "value": 52.0}
+        {"source": GARMIN, "label": "Garmin", "value": HEART_INPUT["restingHeartRate"]}
     ]
     # Metrics only Garmin measured are shown from Garmin (no Google value to prefer).
-    assert day["steps"] == 7400 and day["sources"]["steps"]["source"] == GARMIN
-    assert day["sleep_seconds"] == 25200 - 600 and day["sleep_assumptions"] == [
-        "from_normalized_columns"
-    ]
-    assert day["hrv_ms"] == 43 and day["spo2"] == 96.5
+    assert day["steps"] == STEP_INPUT["totalSteps"] and day["sources"]["steps"]["source"] == GARMIN
+    assert (
+        day["sleep_seconds"] == SLEEP_INPUT["sleepTimeSeconds"] - SLEEP_INPUT["awakeSleepSeconds"]
+    )
+    assert day["sleep_assumptions"] == ["from_normalized_columns"]
+    assert day["hrv_ms"] == HRV_INPUT["lastNightAvg"] and day["spo2"] == 100.0
     assert day["status"] == "complete"
     assert default["precedence"] == Policy().as_dict()
     flipped = reversed_["days"][0]
-    assert flipped["resting_bpm"] == 52 and flipped["sources"]["resting_bpm"]["source"] == GARMIN
+    assert (
+        flipped["resting_bpm"] == HEART_INPUT["restingHeartRate"]
+        and flipped["sources"]["resting_bpm"]["source"] == GARMIN
+    )
     assert flipped["sources"]["resting_bpm"]["alternatives"][0]["value"] == 58.0
     # The hourly heart chart: Garmin is the only source with samples here.
     assert (
-        default["charts"]["heart_rate"][0] == 62.5
+        default["charts"]["heart_rate"][0]
+        == sum(value for _, value in HEART_INPUT["heartRateValues"]) / 2
         and default["charts"]["sources"]["heart_rate"]["source"] == GARMIN
     )
     assert default["charts"]["sources"]["heart_rate"]["activity_windows"] == GARMIN
@@ -397,7 +402,7 @@ async def test_dashboard_resolves_every_metric_and_the_policy_can_be_reversed(se
 async def test_heart_chart_takes_fitbit_outside_and_garmin_inside_a_garmin_workout(sessions, clock):
     from identity_records import HEART, heart
 
-    minute = datetime(2026, 11, 6, 17, 10, tzinfo=UTC)  # inside the 17:05 walk
+    minute = datetime(2026, 11, 6, 17, 10, tzinfo=UTC)  # inside the 17:00 walk
     outside = datetime(2026, 11, 6, 9, 0, tzinfo=UTC)
     await store(
         sessions,
@@ -419,7 +424,7 @@ async def test_heart_chart_takes_fitbit_outside_and_garmin_inside_a_garmin_worko
     async with sessions.begin() as session:
         await normalize_window(session, DAY, DAY)
     async with sessions() as session:
-        data = await dashboard_data(session, DAY, 1, "UTC")
+        data = await dashboard_data(session, query=DashboardQuery(DAY, 1, "UTC"))
     chart = data["charts"]["heart_rate"]
     assert chart[9] == 70.0  # health policy: the Fitbit sample, Garmin's 80 not averaged in
     assert chart[17] == 120.0  # inside the Garmin workout: the Garmin sample
@@ -514,7 +519,7 @@ async def test_garmin_daily_projection_says_where_garmin_stands(sessions, tmp_pa
     await archive_day(sessions)
     key = tmp_path / "key"
     key.write_text("synthetic")
-    default = GarminPull(
+    default = unlocked(
         Settings(_env_file=None, garmin_enabled=True, garmin_api_key_file=key), sessions
     )
     card = await default.daily(DAY, DAY)
@@ -522,8 +527,11 @@ async def test_garmin_daily_projection_says_where_garmin_stands(sessions, tmp_pa
         card["precedence"]["steps"] == SECONDARY
         and card["precedence"]["sleep_seconds"] == SECONDARY
     )
-    assert card["policy"] == Policy().as_dict() and card["days"][0]["steps"] == 7400
-    flipped = GarminPull(
+    assert (
+        card["policy"] == Policy().as_dict()
+        and card["days"][0]["steps"] == STEP_INPUT["totalSteps"]
+    )
+    flipped = unlocked(
         Settings(
             _env_file=None,
             garmin_enabled=True,
@@ -549,7 +557,7 @@ def test_identity_keeps_garmin_apart_from_fitbit():
 
 
 def test_umay_tool_description_states_the_rule():
-    from app.services.codex_health import HEALTH_TOOL
+    from app.services.umay.codex_health import HEALTH_TOOL
 
     text = HEALTH_TOOL["description"]
     assert "Garmin first" in text and "Fitbit first" in text and "never summed" in text
@@ -575,50 +583,123 @@ async def test_readers_report_only_garmin_rows(sessions):
         assert await garmin_readers.workouts(session, NOW - timedelta(days=30), NOW) == []
 
 
-async def test_backfill_normalizes_activities_archived_before_normalization_existed(
-    sessions, tmp_path
+async def test_normalize_window_uses_observations_for_daily_and_activity_reversions(sessions):
+    for index, value in enumerate((100, 200, 100, 100)):
+        for kind, body in (
+            ("steps", daily_steps(DAY, steps=value)),
+            ("activities", {**garmin_activity(1, DAY), "calories": value}),
+        ):
+            await garmin_records.store_page(sessions, kind, [body], NOW + timedelta(minutes=index))
+        async with sessions.begin() as session:
+            stats = await normalize_window(
+                session, DAY, DAY, seen_since=NOW + timedelta(minutes=index)
+            )
+        assert stats.updated == (3 if index in (1, 2) else 0)
+        async with sessions() as session:
+            assert (await session.scalars(select(Steps))).one().count == value
+            assert (await session.scalars(select(ExerciseSession))).one().calories_kcal == value
+    assert stats.inserted == stats.updated == 0 and stats.unchanged == 3
+
+
+@pytest.mark.parametrize("replacement", ["removed", "null", "overflow", "empty"])
+@pytest.mark.parametrize("quarantined", [False, True])
+@pytest.mark.parametrize(
+    "collection", ["valid", 123, 1.5, True, False, "text", {}, None, "missing"]
+)
+async def test_heart_membership_tracks_prepared_samples_without_changing_archive(
+    sessions, replacement, collection, quarantined
 ):
-    """A phase-1 archive (activities first seen long before this run) gets its activities into
-    ``exercise_sessions`` from a backfill over their window; the second run writes nothing."""
-    key = tmp_path / "key"
-    key.write_text("synthetic")
-    old = NOW - timedelta(days=120)
-    async with sessions.begin() as session:
-        session.add_all(
-            [
-                raw("activities", "4001", garmin_activity(4001, DAY), seen=old, suffix="a"),
-                raw(
-                    "activities",
-                    "4002",
-                    garmin_activity(4002, DAY - timedelta(days=30)),
-                    seen=old,
-                    suffix="b",
-                ),
-                raw("steps", DAY.isoformat(), daily_steps(DAY), seen=old, suffix="c"),
-                # Every kind already finished these bounds: the backfill fetches nothing.
-                *(
-                    GarminPullState(
-                        kind=name,
-                        backfill_since=DAY - timedelta(days=60),
-                        backfill_until=DAY,
-                        backfill_next=None,
-                    )
-                    for name in KIND_NAMES
-                ),
-            ]
+    a = garmin_heart(DAY, [(0, 60), (1, 70)])
+    variants = {
+        "removed": [(0, 60)],
+        "null": [(0, 60), (1, None)],
+        "overflow": [(0, 60), (1, 10**30)],
+        "empty": [],
+    }
+    b = garmin_heart(DAY, variants[replacement])
+    if collection == "missing":
+        b.pop("heartRateValues")
+    elif collection != "valid":
+        b["heartRateValues"] = collection
+    elif replacement != "empty":
+        b["heartRateValues"] += [None, 123, True, "text", {}, [], [MS], ["bad", 60]]
+    start = datetime.combine(DAY, datetime.min.time(), UTC)
+    stop = start + timedelta(days=1)
+    evidence = (GarminRawRecord, GarminRecordObservation, GarminHeartSet, GarminHeartMember)
+    evidence += (GarminApiResponse, HeartRate)
+    previous = {model: [] for model in evidence}
+    for index, body in enumerate((a, b, b, a)):
+        await garmin_records.store_page(
+            sessions, "heart-rate", [body], NOW + timedelta(minutes=index)
         )
-    pull = GarminPull(
-        Settings(_env_file=None, garmin_enabled=True, garmin_api_key_file=key),
-        sessions,
-        clock=lambda: NOW,
+        async with sessions.begin() as session:
+            stats = await normalize_window(session, DAY, DAY)
+            if index == 0 and quarantined:
+                await session.execute(
+                    update(HeartRate)
+                    .where(HeartRate.bpm == 60)
+                    .values(is_quarantined=True, quarantine_reason="Synthetic exclusion")
+                )
+        async with sessions() as session:
+            expected = [(start, 60.0)] if replacement != "empty" and collection == "valid" else []
+            if index in (0, 3):
+                expected = [(start, 60.0), (start + timedelta(minutes=1), 70.0)]
+            expected = [(moment, bpm) for moment, bpm in expected if not quarantined or bpm != 60]
+            assert await garmin_readers.heart_rate_samples(session, start, stop) == expected
+            rows = (await session.scalars(select(HeartRate))).all()
+            assert len(rows) == 2 and sum(row.is_quarantined for row in rows) == int(quarantined)
+            assert {row.quarantine_reason for row in rows} == (
+                {None, "Synthetic exclusion"} if quarantined else {None}
+            )
+            assert (await session.scalars(select(RestingHeartRate.bpm))).one() == HEART_INPUT[
+                "restingHeartRate"
+            ]
+            for model in evidence:
+                saved = (await session.execute(select(model.__table__))).all()
+                assert saved[: len(previous[model])] == previous[model]
+                previous[model] = saved
+            assert len(previous[GarminHeartSet]) == (1, 2, 2, 3)[index]
+        if index == 2:
+            assert stats.inserted == stats.updated == 0
+    assert len(previous[GarminRawRecord]) == 2
+    assert len(previous[GarminRecordObservation]) == 4
+
+
+@pytest.mark.parametrize("collection", [[[MS, 72], [MS, 80]], 123, True, "text", {}])
+async def test_heart_membership_and_changed_values_roll_back_together(sessions, collection):
+    start = datetime.combine(DAY, datetime.min.time(), UTC)
+    stop = start + timedelta(days=1)
+    await garmin_records.store_page(
+        sessions, "heart-rate", [garmin_heart(DAY, [(0, 60), (1, 70)])], NOW
     )
-    report = await pull.backfill(DAY - timedelta(days=60), DAY)
-    assert all(entry["requests"] == 0 and entry["complete"] for entry in report["kinds"].values())
-    assert report["normalized"]["tables"]["exercise_sessions"]["inserted"] == 2
-    assert report["normalized"]["tables"]["steps"]["inserted"] == 1
-    assert await count(sessions, ExerciseSession, provider=GARMIN) == 2
-    again = await pull.backfill(DAY - timedelta(days=60), DAY)
-    assert again["normalized"]["inserted"] == 0 and again["normalized"]["updated"] == 0
-    # The periodic pull still reads only the activities it archived itself.
-    stats = await pull.normalize(DAY, DAY, seen_since=NOW)
-    assert stats.tables.get("exercise_sessions") is None and stats.unchanged >= 1
+    async with sessions.begin() as session:
+        await normalize_window(session, DAY, DAY)
+    await garmin_records.store_page(
+        sessions,
+        "heart-rate",
+        [{**heart_rate(DAY), "heartRateValues": collection}],
+        NOW + timedelta(minutes=1),
+    )
+    # Archiving B alone cannot publish a partly normalized view.
+    async with sessions() as session:
+        assert [
+            bpm for _, bpm in await garmin_readers.heart_rate_samples(session, start, stop)
+        ] == [60, 70]
+    with pytest.raises(RuntimeError, match="synthetic rollback"):
+        async with sessions.begin() as session:
+            await normalize_window(session, DAY, DAY)
+            assert [
+                bpm for _, bpm in await garmin_readers.heart_rate_samples(session, start, stop)
+            ] == ([72] if isinstance(collection, list) else [])
+            raise RuntimeError("synthetic rollback")
+    async with sessions() as session:
+        assert [
+            bpm for _, bpm in await garmin_readers.heart_rate_samples(session, start, stop)
+        ] == [60, 70]
+        assert await session.scalar(select(func.count()).select_from(GarminHeartSet)) == 1
+    async with sessions.begin() as session:
+        await normalize_window(session, DAY, DAY)
+    async with sessions() as session:
+        assert [
+            bpm for _, bpm in await garmin_readers.heart_rate_samples(session, start, stop)
+        ] == ([72] if isinstance(collection, list) else [])

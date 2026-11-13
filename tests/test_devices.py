@@ -17,10 +17,8 @@ from app.db.session import get_session
 from app.google_health.client import GoogleHealthError
 from app.google_health.oauth import OAuthError
 from app.parsers.identity import source_fingerprint, source_label, stable_class
-from app.services import codex_health
-from app.services import source_chain_repository as repository
-from app.services.codex_health import ArchiveQuery, read_health
-from app.services.devices import (
+from app.services.dashboard_views import devices as devices_service
+from app.services.dashboard_views.devices import (
     CONNECTED,
     DELAYED,
     DISCONNECTED,
@@ -29,8 +27,12 @@ from app.services.devices import (
     build_devices,
     device_report,
 )
-from app.services.source_chain_evidence import Span
-from app.services.source_chain_model import Chains
+from app.services.identities import source_chain_repository as repository
+from app.services.identities.identity_options import ChainEvidence
+from app.services.identities.source_chain_evidence import Span
+from app.services.identities.source_chain_model import Chains
+from app.services.umay import codex_health
+from app.services.umay.codex_health import ArchiveQuery, read_health
 
 NOW = datetime(2026, 11, 7, 12, 0, tzinfo=UTC)
 OLD = fitbit("Google Fitbit Air")
@@ -50,7 +52,7 @@ def span(source: dict, first: datetime, last: datetime, newest: datetime | None)
 def chains(*spans: tuple[dict, Span], links: list[tuple[dict, dict]] = ()) -> Chains:
     found = Chains()
     for source, value in spans:
-        found.spans[source_fingerprint(source)] = value
+        found.set_span(source_fingerprint(source), value)
     for old, new in links:
         found.add(source_fingerprint(old), source_fingerprint(new))
     return found
@@ -215,8 +217,7 @@ async def archive(sessions: async_sessionmaker) -> None:
             loaded,
             source_fingerprint(OLD),
             source_fingerprint(NEW),
-            decided_by="reconciler",
-            now=NOW,
+            evidence_record=ChainEvidence(decided_by="reconciler", now=NOW),
         )
         await session.commit()
 
@@ -286,6 +287,15 @@ async def test_get_api_devices(sessions, monkeypatch):
     )
     app = main.create_app()
 
+    # The report's clock stands still at the archive's NOW: with the wall clock every device
+    # read as disconnected 48 hours after that date.
+    class Frozen(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return NOW.astimezone(tz)
+
+    monkeypatch.setattr(devices_service, "datetime", Frozen)
+
     async def session():
         async with sessions() as session:
             yield session
@@ -316,11 +326,10 @@ async def test_get_api_devices(sessions, monkeypatch):
 
 async def test_umay_devices_action_needs_no_dates_and_reads_the_same_service(sessions, monkeypatch):
     await archive(sessions)
-    monkeypatch.setattr(codex_health, "SessionLocal", sessions)
     assert ArchiveQuery(action="devices").start_date is None
     with pytest.raises(ValueError):
         ArchiveQuery(action="daily")
-    card = await read_health({"action": "devices"})
+    card = await read_health(sessions, {"action": "devices"})
     assert card["google"] == "not_queried"
     assert [d["name"] for d in card["devices"]] == [
         "Fitbit Air",

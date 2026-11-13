@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-import asyncio
-from collections.abc import Sequence
-
 import httpx
+
+from app.core.response_close import close_response as bounded_close
 
 # Independent of HTTPX's socket timeouts: a stream's aclose() can wait without I/O.
 # Tests shorten this budget without changing the retry count or request policy.
@@ -26,32 +25,6 @@ async def close_response(response: httpx.Response) -> None:
     signals and keeps it in the request's cleanup list. Timeout is a transport error,
     using the existing retry limit; cancellation by request cleanup stays cancellation.
     """
-    try:
-        async with asyncio.timeout(RESPONSE_CLOSE_SECONDS):
-            await response.aclose()
-    except TimeoutError as exc:
-        raise ResponseCloseTimeout() from exc
-
-
-async def cancel_closes(closing: Sequence[asyncio.Future]) -> None:
-    """Cancel and join closes that outlasted the request's cancellation budget.
-
-    Repeated stop signals cannot abandon a close between cancel() and its finally
-    blocks. Also retrieve failures from already finished closes: no task exception
-    should be left unobserved when the original cancellation propagates.
-    This never starts a second aclose(), which HTTPX would treat as already closed.
-    """
-    if not closing:
-        return
-    for close in closing:
-        if not close.done():
-            close.cancel()
-    settled = asyncio.gather(*closing, return_exceptions=True)
-    while not settled.done():
-        try:
-            await asyncio.shield(settled)
-        except asyncio.CancelledError:
-            # The caller already has the cancellation to re-raise. Joining these
-            # tasks must finish before it releases sync/backfill ownership.
-            continue
-    settled.result()
+    await bounded_close(
+        response, seconds=RESPONSE_CLOSE_SECONDS, timeout_error=ResponseCloseTimeout
+    )

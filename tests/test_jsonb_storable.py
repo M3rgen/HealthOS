@@ -5,7 +5,8 @@ import json
 import pytest
 
 from app.google_health import jsonb
-from app.services import webhook_metadata, webhook_processing
+from app.services.synchronization import webhook_metadata
+from app.sync import webhook_processing
 
 
 def test_webhook_modules_share_the_one_check_and_sentinel():

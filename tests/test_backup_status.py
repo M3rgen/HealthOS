@@ -6,9 +6,9 @@ from pathlib import Path
 
 import httpx
 import pytest
-from test_auth import BASE, TOKEN, build
+from support.auth import BASE, TOKEN, build
 
-from app.services.backup_status import read_backup_status
+from app.services.operations.backup_status import read_backup_status
 from scripts import write_backup_status as writer
 
 FIRST = "2026-10-24T01:02:03Z"

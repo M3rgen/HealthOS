@@ -7,9 +7,9 @@ from sqlalchemy import select
 from app.google_health.data_types import REGISTRY
 from app.models.derived import DerivedDay
 from app.models.manual import ManualMeasurement
-from app.services.canonical_daily import METHOD
-from app.services.derived import derived_range
-from app.services.storage import store_records
+from app.services.archive.storage import store_records
+from app.services.interpretation.canonical_daily import METHOD
+from app.services.interpretation.derived import derived_range
 
 DAY = date(2026, 9, 29)
 T0 = datetime(2026, 9, 29, tzinfo=UTC)
@@ -135,7 +135,7 @@ async def snapshot(session, newer=()):
 
 
 async def fail_derived_range(sessions, monkeypatch, first=DAY, last=DAY, timezone="UTC"):
-    from app.services import derived
+    from app.services.interpretation import derived
 
     async def broken(*args):
         raise ValueError("synthetic-private-value 998877")
@@ -149,7 +149,7 @@ async def raw_mutation(sessions, kind, operation):
     """Isolate a raw/identity trigger from normalized-table writes; synthetic archive only."""
     from sqlalchemy import insert, update
 
-    from app.models.identity import RawHealthDataSupersession, RawSourceDevice
+    from app.models.identity_tables import RawHealthDataSupersession, RawSourceDevice
     from app.models.state import RawHealthData
     from app.parsers.common import payload_hash
 

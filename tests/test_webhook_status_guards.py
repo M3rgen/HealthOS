@@ -5,11 +5,12 @@ from datetime import UTC, datetime
 import pytest
 from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError
+from support.sqlite_guards import SQLITE_TRIGGER_SQL
 
 from app.core.config import Settings
-from app.models.webhook_status import SQLITE_TRIGGER_SQL, TABLE
-from app.services.raw_history import verify_guards
-from app.services.webhook_status import WebhookStatusService
+from app.models.webhook_status import TABLE
+from app.services.archive.raw_history_verification import verify_guards
+from app.services.synchronization.webhook_status import WebhookStatusService
 
 
 async def test_metadata_guards_allow_service_inserts_and_refuse_all_changes(sessions):

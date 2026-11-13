@@ -18,8 +18,8 @@ from app.google_health.client import Page
 from app.models.health import SleepSession
 from app.models.raw_versions import RawHealthDataVersion
 from app.models.state import RawHealthData
-from app.services import codex_health
-from app.services.canonical_daily import bounds
+from app.services.interpretation.canonical_daily import bounds
+from app.services.umay import codex_health
 
 DATES = [(DAY + timedelta(days=i)).isoformat() for i in range(3)]
 QUERY = {"start_date": DATES[0], "end_date": DATES[-1], "timezone": "UTC"}
@@ -33,7 +33,6 @@ async def api(sessions, monkeypatch):
             return (T0 + timedelta(days=3)).astimezone(tz)
 
     monkeypatch.setattr(dashboard, "datetime", Now)
-    monkeypatch.setattr(codex_health, "SessionLocal", sessions)
     app = FastAPI()
     app.state.settings = Settings(_env_file=None)
     app.include_router(dashboard.router)
@@ -67,7 +66,7 @@ async def outputs(api, sessions, expected):
     assert [
         float(row["sleep_seconds"]) if row["sleep_seconds"] else None for row in reversed(rows)
     ] == expected
-    daily = await codex_health.read_health({"action": "daily", **QUERY})
+    daily = await codex_health.read_health(sessions, {"action": "daily", **QUERY})
     assert [row["sleep_seconds"] for row in reversed(daily["days"])] == expected
     # Rebuild the already registered derived days after each write. The canonical
     # reader already excludes undated corrections; its behavior must stay aligned.
@@ -76,7 +75,9 @@ async def outputs(api, sessions, expected):
         assert sorted(row["value"] for row in derived) == (
             [0, 1800] if i == 2 else [] if value is None else [value]
         )
-    card = await codex_health.read_health({"action": "coverage", "data_type": "sleep", **QUERY})
+    card = await codex_health.read_health(
+        sessions, {"action": "coverage", "data_type": "sleep", **QUERY}
+    )
     [metric] = card["metrics"]
     present = sum(value is not None for value in expected)
     assert metric["value_days"] == present
@@ -188,7 +189,7 @@ async def test_skipped_normalization_uses_current_sleep_interval(
     if not initial:
         await store(sessions, "sleep", original)
     query = dict(QUERY, start_date=str(DAY - timedelta(days=1)), timezone=timezone)
-    await codex_health.read_health({"action": "daily", **query})
+    await codex_health.read_health(sessions, {"action": "daily", **query})
     async with sessions() as session:
         retained = (await snapshot(session))["sleep_sessions"]
         assert bool(retained) is not initial
@@ -210,7 +211,7 @@ async def test_skipped_normalization_uses_current_sleep_interval(
             [] if initial else [original]
         )
         assert await session.scalar(select(RawHealthData.raw_json)) == corrected
-    daily = await codex_health.read_health({"action": "daily", **query})
+    daily = await codex_health.read_health(sessions, {"action": "daily", **query})
     for day in daily["derived"]["days"]:
         rows = streams({"days": [day]}, "sleep_seconds")
         first, stop = bounds(datetime.fromisoformat(day["date"]).date(), timezone)
@@ -234,7 +235,7 @@ async def test_skipped_normalization_uses_current_sleep_interval(
         assert "from_normalized_columns" not in row["uncertainties"]
     for action in ("baseline", "analyze"):
         result = await codex_health.read_health(
-            {"action": action, "metric": "sleep_seconds", **query}
+            sessions, {"action": action, "metric": "sleep_seconds", **query}
         )
         assert [row["value"] for row in result["summaries"]] == [asleep * 60]
     async with sessions() as session:

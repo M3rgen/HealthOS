@@ -9,10 +9,11 @@ from unittest.mock import AsyncMock
 
 import httpx
 import pytest
-from fastapi import Request
+from fastapi import APIRouter, Depends, Request
 from sqlalchemy import select
 
 import app.main as main
+from app.api.deps import ManualWriteRoute
 from app.core.config import Settings
 from app.core.request_limits import WriteLimits
 from app.db.session import get_session
@@ -68,7 +69,7 @@ async def application(sessions, monkeypatch):
     return app
 
 
-async def post(application, path, chunks, headers=(), address=("localhost", 123)):
+async def post(application, path, chunks, headers=(), address=("127.0.0.1", 123)):
     read = []
 
     async def stream():
@@ -77,7 +78,9 @@ async def post(application, path, chunks, headers=(), address=("localhost", 123)
             yield chunk
 
     async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=application, client=address), base_url="http://localhost"
+        # Tokenless mode admits loopback clients only; the rate-limit tests vary them in 127/8.
+        transport=httpx.ASGITransport(app=application, client=address),
+        base_url="http://127.0.0.1",
     ) as client:
         response = await client.post(
             path,
@@ -151,6 +154,29 @@ async def test_normal_validation_remains_422(application, target, body):
     assert response.status_code == 422
 
 
+async def test_bounded_body_is_reusable_in_dependencies_and_handler(application):
+    router = APIRouter(route_class=ManualWriteRoute)
+    payload = {"value": "synthetic"}
+    body = json.dumps(payload).encode()
+
+    async def dependency(request: Request):
+        request.state.seen_body = await request.body()
+        return await request.json()
+
+    @router.post("/bounded/{identifier}")
+    async def endpoint(request: Request, parsed=Depends(dependency)):
+        assert parsed == payload
+        assert request.state.seen_body == await request.body() == body
+        assert request.path_params == {"identifier": "synthetic"}
+        assert request.app is application
+        return await request.json()
+
+    application.include_router(router)
+    response, reads = await post(application, "/bounded/synthetic", [body[:5], body[5:]])
+    assert response.status_code == 200 and response.json() == payload
+    assert len(reads) == 2
+
+
 async def test_manual_budget_shared_by_all_routes_and_refills(application, sessions, monkeypatch):
     application.state.write_limits.manual.capacity = 4
     for target, payload in zip(TARGETS, PAYLOADS, strict=True):
@@ -170,7 +196,7 @@ async def test_manual_budget_shared_by_all_routes_and_refills(application, sessi
                 ("Forwarded", f"for={index}"),
                 ("X-Request-ID", str(uuid.uuid4())),
             ],
-            address=(f"client-{index}", index),
+            address=(f"127.0.0.{index + 1}", index),
         )
         assert response.status_code == 429
         assert int(response.headers["Retry-After"]) == 60

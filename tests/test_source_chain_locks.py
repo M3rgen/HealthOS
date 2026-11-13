@@ -1,15 +1,15 @@
 """Lock protocol checks with synthetic sessions; PostgreSQL concurrency stays in integration."""
 
+import asyncio
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock, call
 
 import pytest
 from sqlalchemy.exc import DBAPIError
 
-from app.services import source_chain_locks as locks
-from app.services import source_chains
+from app.services.identities import source_chain_locks as locks
 
 DATA_TYPE = "heart-rate"
 DATA_KEY = {"namespace": 0x48454931, "key": -2018325127}
@@ -55,17 +55,19 @@ class Session:
 
 
 class Connection:
-    def __init__(self, *, results=(True,), holder=None, fail_at=None):
+    def __init__(self, *, results=(True,), holder=None, fail_at=None, error=None):
         self.results = iter(results)
         self.holder = holder
         self.fail_at = fail_at
+        self.error = error or RuntimeError("connection failed")
         self.calls = []
+        self.invalidate = AsyncMock()
         self.close = AsyncMock()
 
     def record(self, action, arguments):
         self.calls.append((action, arguments))
         if action == self.fail_at:
-            raise RuntimeError("connection failed")
+            raise self.error
 
     async def execution_options(self, **options):
         self.record("options", options)
@@ -109,29 +111,15 @@ def timer(monkeypatch):
     return clock
 
 
-def test_legacy_exports_and_production_consumers_share_the_implementation():
-    from app.services import identity, identity_backfill, identity_decisions, identity_reconciler
-    from app.sync import deletions
+def test_production_consumers_share_the_lock_implementation():
+    from app.services.archive import source_deletions as deletions
+    from app.services.identities import (
+        identity,
+        identity_backfill,
+        identity_decisions,
+        identity_reconciler,
+    )
 
-    for name in (
-        "BACKFILL_LOCK",
-        "DATA_TYPE_LOCK",
-        "DEFERRAL_LOCK",
-        "LOCK_TIMEOUT",
-        "QUEUE_TIMEOUT",
-        "ROW_LOCK_TIMEOUT",
-        "LOCK_PURPOSES",
-        "BackfillRunning",
-        "LockBusy",
-        "_key",
-        "seconds",
-        "try_lock_deferrals",
-        "lock_data_type",
-        "_queue_for_lock",
-        "_lock_holder",
-        "backfill_lock",
-    ):
-        assert getattr(source_chains, name) is getattr(locks, name)
     assert identity.lock_data_type is deletions.lock_data_type is locks.lock_data_type
     assert identity_backfill.lock_data_type is locks.lock_data_type
     assert deletions.try_lock_deferrals is locks.try_lock_deferrals
@@ -190,17 +178,16 @@ async def test_exclusive_polling_succeeds_without_queueing(timer):
     assert session.calls == [(TRY_XACT, DATA_KEY)] * 3 + [("SET LOCAL lock_timeout = '2s'", None)]
 
 
-async def test_row_lock_timeout_replaced_on_the_legacy_module_is_in_force(monkeypatch):
-    # PostgreSQL reconciler tests shorten the wait through ``source_chains``, as before the split.
-    monkeypatch.setattr(source_chains, "ROW_LOCK_TIMEOUT", "300ms")
+async def test_row_lock_timeout_is_read_from_the_lock_module(monkeypatch):
+    monkeypatch.setattr(locks, "ROW_LOCK_TIMEOUT", "300ms")
     session = Session()
     await locks.lock_data_type(session, DATA_TYPE, exclusive=True)
     assert session.calls == [(XACT, DATA_KEY), ("SET LOCAL lock_timeout = '300ms'", None)]
 
 
-async def test_queue_timeout_replaced_on_the_legacy_module_is_in_force(monkeypatch, timer):
-    monkeypatch.setattr(source_chains, "QUEUE_TIMEOUT", "250ms")
-    monkeypatch.setattr(source_chains, "ROW_LOCK_TIMEOUT", "300ms")
+async def test_queue_timeout_is_read_from_the_lock_module(monkeypatch, timer):
+    monkeypatch.setattr(locks, "QUEUE_TIMEOUT", "250ms")
+    monkeypatch.setattr(locks, "ROW_LOCK_TIMEOUT", "300ms")
     session = Session(results=[False])
     await locks.lock_data_type(session, DATA_TYPE, exclusive=True, wait="0ms")
     assert session.calls == [
@@ -273,7 +260,7 @@ async def test_single_run_bypass_opens_no_connection(mode):
     engine = sessions.kw["bind"]
     if mode == "unbound":
         sessions.kw.clear()
-    async with locks.backfill_lock(sessions, dry_run=mode == "dry-run"):
+    async with locks.backfill_lock(sessions, dry_run=mode != "sqlite"):
         engine.connect.assert_not_awaited()
     engine.connect.assert_not_awaited()
     assert connection.calls == []
@@ -374,3 +361,30 @@ async def test_single_run_disappearing_holder_still_refuses_and_closes():
             pytest.fail("busy lock must not enter body")
     assert (UNLOCK, RUN_KEY) not in connection.calls
     connection.close.assert_awaited_once()
+
+
+@pytest.mark.parametrize("outcome", ["success", "unlock-cancelled", "busy"])
+async def test_single_run_discards_physical_connection(outcome):
+    cancelled = outcome == "unlock-cancelled"
+    connection = Connection(
+        results=[outcome != "busy"],
+        fail_at=UNLOCK if cancelled else None,
+        error=asyncio.CancelledError() if cancelled else None,
+    )
+    cleanup = Mock()
+    cleanup.attach_mock(connection.invalidate, "invalidate")
+    cleanup.attach_mock(connection.close, "close")
+
+    async def run():
+        async with locks.backfill_lock(factory(connection)):
+            assert outcome != "busy"
+            connection.invalidate.assert_not_awaited()
+
+    if outcome == "success":
+        await run()
+    else:
+        with pytest.raises(asyncio.CancelledError if cancelled else locks.BackfillRunning):
+            await run()
+    connection.invalidate.assert_awaited_once()
+    connection.close.assert_awaited_once()
+    assert cleanup.mock_calls == [call.invalidate(), call.close()]

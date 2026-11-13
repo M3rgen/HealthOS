@@ -5,12 +5,12 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 from interpretation_records import call, resting
-from interpretation_records import production_reader as production_reader
 from pydantic import ValidationError
 
-from app.services import codex_health
-from app.services.codex_health import read_health
-from app.services.interpretation_types import ACTIONS, Interpretation, Refusal
+from app.services.interpretation import archive_query
+from app.services.interpretation.interpretation_types import ACTIONS, Interpretation, Refusal
+from app.services.umay import codex_health
+from app.services.umay.codex_health import read_health
 
 
 @pytest.fixture
@@ -21,6 +21,7 @@ def last_day_clock(monkeypatch):
             return cls(9999, 12, 31, tzinfo=tz)
 
     monkeypatch.setattr(codex_health, "datetime", LastDay)
+    monkeypatch.setattr(archive_query, "datetime", LastDay)
 
 
 @pytest.mark.parametrize(
@@ -36,16 +37,17 @@ async def test_overflow_keeps_archive_validation_contract(
     monkeypatch, last_day_clock, action, day, zone
 ):
     sessions, build = Mock(), AsyncMock()
-    monkeypatch.setattr(codex_health, "SessionLocal", sessions)
     monkeypatch.setattr(codex_health, "build_range", build)
     arguments = dict(action=action, start_date=day, end_date=day, timezone=zone)
     if action in ACTIONS:
         arguments.update(metric="steps", other_metric="resting_bpm")
-        assert Refusal.model_validate(await read_health(arguments)).code == "invalid_query"
+        assert (
+            Refusal.model_validate(await read_health(sessions, arguments)).code == "invalid_query"
+        )
     else:
         arguments["data_type"] = "steps"
         with pytest.raises(ValidationError, match="okuma penceresi"):
-            await read_health(arguments)
+            await read_health(sessions, arguments)
     sessions.assert_not_called()
     build.assert_not_called()
 
@@ -63,9 +65,14 @@ async def test_representable_neighbors_reach_real_archive(
     if action in ACTIONS:
         await resting(sessions, [0], start=date.fromisoformat(day))
         result = await call(
-            action, **arguments, metric="resting_bpm", other_metric="resting_bpm", lags=[-14, 0, 14]
+            sessions,
+            action,
+            **arguments,
+            metric="resting_bpm",
+            other_metric="resting_bpm",
+            lags=[-14, 0, 14],
         )
         assert Interpretation.model_validate(result).action == action
     else:
-        result = await read_health(dict(action=action, data_type="steps", **arguments))
+        result = await read_health(sessions, dict(action=action, data_type="steps", **arguments))
         assert result["start_date"] == day and result["end_date"] == day

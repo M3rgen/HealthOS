@@ -112,7 +112,7 @@ function ConvertTo-UtcIso {
 }
 
 function Read-PreviousSuccess {
-    # Mirrors app.services.backup_status.read_backup_status(): returns @{ State; Success }.
+    # Mirrors app.services.operations.backup_status.read_backup_status(): returns @{ State; Success }.
     param([string]$Path)
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return @{ State = 'missing'; Success = $null } }
     try {

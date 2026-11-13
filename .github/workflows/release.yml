@@ -1,0 +1,183 @@
+name: release
+
+"on":
+  push:
+    # These filters cannot reject leading zeros or N = 0; the first job's
+    # release_gate.py preflight enforces those restrictions.
+    tags: ['v[0-9]+.[0-9]+.[0-9]+', 'v[0-9]+.[0-9]+.[0-9]+.[0-9]+']
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+# No job inherits a token permission; each job below asks for exactly what it needs.
+permissions: {}
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  gate:
+    runs-on: ubuntu-24.04
+    # Waits for the commit's CI on main to finish, so this is longer than ci.yml's job limits.
+    timeout-minutes: 120
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      ci_run_id: ${{ steps.ci.outputs.run_id }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Tag format, project version and main ancestry
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_SHA: ${{ github.sha }}
+        run: python3 scripts/release_gate.py preflight --tag "$RELEASE_TAG" --commit "$RELEASE_SHA"
+      - name: Require successful CI for this commit on main
+        id: ci
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_SHA: ${{ github.sha }}
+        run: python3 scripts/release_gate.py ci --commit "$RELEASE_SHA"
+
+  build:
+    needs: gate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    permissions:
+      contents: read
+      actions: read
+    env:
+      # Use a commit-derived Docker tag; arbitrary Git tag names are not Docker tags.
+      IMAGE: healthos:${{ github.sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build release image
+        run: docker build --build-arg SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)" --tag "$IMAGE" .
+      - name: Refuse an image that differs from the one CI smoke-tested
+        # The smoke job of this commit's CI run recorded the file tree of the image it tested.
+        # Timestamps aside, a release image with any other content was not the tested one.
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          CI_RUN_ID: ${{ needs.gate.outputs.ci_run_id }}
+        run: |
+          gh run download "$CI_RUN_ID" --name smoke-image-manifest --dir "$RUNNER_TEMP/smoked"
+          python3 .github/scripts/compare_images.py --against-manifest "$RUNNER_TEMP/smoked/smoke-image-manifest.json" "$IMAGE"
+      - name: Container vulnerability gate
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ env.IMAGE }}
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+          scanners: vuln
+      - name: Generate SBOM with Syft
+        uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+        with:
+          image: docker:${{ env.IMAGE }}
+          syft-version: v1.57.0
+          format: spdx-json
+          output-file: healthos.spdx.json
+          upload-artifact: false
+          upload-release-assets: false
+      - name: Export scanned image
+        run: docker save "$IMAGE" | gzip > healthos-image.tar.gz
+      - name: Keep release assets for the attestation and publish jobs
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-assets
+          path: |
+            healthos-image.tar.gz
+            healthos.spdx.json
+          if-no-files-found: error
+          retention-days: 1
+
+  attest:
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-assets
+      - name: Record build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            healthos-image.tar.gz
+            healthos.spdx.json
+
+  verify-provenance:
+    # The same check a consumer runs (.github/rulesets/README.md): a release is not published until
+    # its image archive and SBOM verify against the attestation this workflow just signed.
+    needs: attest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      attestations: read
+    env:
+      RELEASE_TAG: ${{ github.ref_name }}
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-assets
+      - name: Verify provenance of the release assets
+        run: |
+          for asset in healthos-image.tar.gz healthos.spdx.json; do
+            gh attestation verify "$asset" --repo "$GH_REPO" \
+              --signer-workflow "$GH_REPO/.github/workflows/release.yml" \
+              --source-ref "refs/tags/$RELEASE_TAG" \
+              --deny-self-hosted-runners
+          done
+
+  publish:
+    needs: verify-provenance
+    runs-on: ubuntu-24.04
+    # Before enabling releases, create this environment with an independent required reviewer,
+    # prevent self-review and disable admin bypass (.github/rulesets/README.md).
+    environment: release
+    timeout-minutes: 15
+    permissions:
+      # The only write scope in this workflow, on a job that runs no third-party Action.
+      contents: write
+    env:
+      RELEASE_TAG: ${{ github.ref_name }}
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-assets
+      - name: Attach image and SBOM to GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          if ! gh release view -- "$RELEASE_TAG" > /dev/null 2>&1; then
+            gh release create --verify-tag --generate-notes -- "$RELEASE_TAG"
+          fi
+          gh release upload -- "$RELEASE_TAG" healthos-image.tar.gz healthos.spdx.json
+      - name: Release summary
+        run: |
+          {
+            echo '| Çıktı | Sonuç |'
+            echo '| --- | --- |'
+            echo '| Kapı | Etiket biçimi, sürüm, main soyu ve başarılı CI doğrulandı |'
+            echo '| İmaj | Derlendi ve Trivy kapısından geçti |'
+            echo '| SBOM | Syft / SPDX JSON; Release eki |'
+            echo '| Köken | Build provenance attestation; gh attestation verify geçti |'
+            echo '| Dağıtım | Docker imaj arşivi; Release eki |'
+          } >> "$GITHUB_STEP_SUMMARY"

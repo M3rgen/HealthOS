@@ -4,31 +4,23 @@ import hashlib
 import json
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from unittest.mock import Mock
 
-import httpx
 import pytest
 from sqlalchemy import select
-from sync_ownership_records import service
-from test_client import Tokens
-from test_webhook_route import notification
-from test_webhook_status_http import receiver as receiver
+from support.webhooks import bounded, notification
+from support.webhooks import fetching_receiver as fetching_receiver
+from support.webhooks import receiver as receiver
 
-from app.core.config import Settings
-from app.google_health.client import GoogleHealthClient
-from app.google_health.data_types import REGISTRY, QueryWindowError, query_iso
+from app.google_health.data_types import REGISTRY, DataTypeSpec, QueryWindowError, query_iso
 from app.models.retrieval import RetrievalReceipt
 from app.models.state import WebhookBatchItem, WebhookEvent, WebhookNotification
 from app.parsers.common import payload_hash
-from app.services.webhook_metadata import notification_windows
-
-
-def bounded(kind, start, end):
-    item = notification(kind)
-    item["data"]["intervals"][0]["physicalTimeInterval"] = {
-        "startTime": start,
-        "endTime": end,
-    }
-    return item
+from app.services.synchronization import webhook_metadata
+from app.services.synchronization.webhook_metadata import (
+    NotificationWindowError,
+    notification_windows,
+)
 
 
 def enable(r):
@@ -39,31 +31,7 @@ def enable(r):
     r.processor.supported_data_types = set(r.incremental.specs)
 
 
-@pytest.fixture
-async def fetching_receiver(receiver, sessions):
-    """Exercise real incremental, receipts, Google filters and deletion scopes."""
-    async with httpx.AsyncClient(
-        transport=httpx.MockTransport(
-            lambda request: httpx.Response(200, json={"dataPoints": [], "rollupDataPoints": []})
-        )
-    ) as http:
-        client = GoogleHealthClient(
-            Settings(_env_file=None, google_api_min_request_interval_seconds=0), Tokens(), http
-        )
-        incremental = service(sessions, client)
-        incremental.calls = []
-        original = client.list_data_points
-
-        async def record(spec, start, end, page_token=None):
-            incremental.calls.append((spec.name, start, end))
-            return await original(spec, start, end, page_token)
-
-        client.list_data_points = record
-        receiver.incremental = receiver.processor.incremental = incremental
-        yield receiver
-
-
-@pytest.mark.parametrize("state", ["fresh", "legacy", "pending", "failed"])
+@pytest.mark.parametrize("state", ["fresh", "legacy", "body-only", "pending", "failed"])
 @pytest.mark.parametrize(
     "kind,intervals,error",
     [
@@ -79,6 +47,20 @@ async def fetching_receiver(receiver, sessions):
             ("weight", "9999-12-31T23:59:59Z", "9999-12-31T23:59:59.000001Z"),
             ("daily-resting-heart-rate", "9999-12-28T12:00:00Z", "9999-12-31T12:00:00Z"),
             ("calories-in-heart-rate-zone", "9999-12-01T00:00:00Z", "9999-12-31T23:59:59Z"),
+        ]
+    ]
+    + [
+        (
+            "calories-in-heart-rate-zone",
+            bounded("calories-in-heart-rate-zone", start, end)["data"]["intervals"],
+            "notification query window budget exceeded",
+        )
+        for start, end in [
+            ("0002-01-01T00:00:00Z", "9998-01-01T00:00:00Z"),
+            *(
+                ("2020-01-01T00:00:00Z", (datetime(2020, 1, 1, tzinfo=UTC) + delta).isoformat())
+                for delta in [timedelta(days=14 * 257), timedelta(days=14 * 256, microseconds=1)]
+            ),
         ]
     ]
     + [
@@ -133,7 +115,7 @@ async def test_invalid_windows_are_terminal_rejections(
                 WebhookEvent(
                     payload_hash=digest,
                     raw_body=raw,
-                    raw_json=payload,
+                    raw_json=None if state == "body-only" else payload,
                     signature_verified_at=r.current.now,
                 )
             )
@@ -172,7 +154,8 @@ async def test_invalid_windows_are_terminal_rejections(
         batch = await session.get(WebhookEvent, digest)
         rejected = await session.get(WebhookNotification, payload_hash(bad))
         completed = await session.get(WebhookNotification, payload_hash(good))
-        assert batch.raw_body == raw and batch.raw_json == payload
+        assert batch.raw_body == raw
+        assert batch.raw_json == (None if state == "body-only" else payload)
         assert batch.signature_verified_at.replace(tzinfo=UTC) == r.current.now
         assert batch.processed_at is not None and batch.failure_count == 1
         assert rejected.status == "rejected" and not rejected.is_valid
@@ -207,7 +190,8 @@ async def test_invalid_windows_are_terminal_rejections(
         good_row = await session.get(WebhookNotification, payload_hash(good))
         assert (bad_row.attempt_count, good_row.attempt_count) == attempts
         batch = await session.get(WebhookEvent, digest)
-        assert batch.raw_body == raw and batch.raw_json == payload
+        assert batch.raw_body == raw
+        assert batch.raw_json == (None if state == "body-only" else payload)
         assert bad_row.raw_json == bad and good_row.raw_json == good
         receipts = (await session.scalars(select(RetrievalReceipt))).all()
         assert (len(receipts), bad_row.status) == (0 if prepared else 1, "rejected")
@@ -326,3 +310,38 @@ def test_valid_physical_intervals_keep_covering_range():
     assert notification_windows(REGISTRY["steps"], intervals) == [
         (datetime(2026, 8, 17, 10, tzinfo=UTC), datetime(2026, 8, 17, 10, 4, tzinfo=UTC))
     ]
+
+
+@pytest.mark.parametrize("last_piece", [timedelta(days=14), timedelta(microseconds=1)])
+def test_window_budget_accepts_256_complete_or_partial_pieces(last_piece):
+    spec = REGISTRY["calories-in-heart-rate-zone"]
+    start = datetime(2020, 1, 1, tzinfo=UTC)
+    end = start + timedelta(days=14 * 255) + last_piece
+    windows = notification_windows(
+        spec, bounded(spec.name, start.isoformat(), end.isoformat())["data"]["intervals"]
+    )
+    assert len(windows) == 256
+    assert windows[0][0] == start and windows[-1][1] == end
+    assert all(left[1] == right[0] for left, right in zip(windows, windows[1:], strict=False))
+
+
+@pytest.mark.parametrize("kind", ["calories-in-heart-rate-zone", "weight", "exercise", "sleep"])
+def test_budget_rejection_precedes_every_piece_validation(monkeypatch, kind):
+    spec = REGISTRY[kind]
+    if kind != "calories-in-heart-rate-zone":
+        spec = replace(spec, max_window_days=14)
+    start = datetime(2020, 1, 1, tzinfo=UTC)
+    # Sessions cross the budget only after covering_window widens 256 pieces.
+    end = start + timedelta(days=14 * 256)
+    if kind in {"calories-in-heart-rate-zone", "weight"}:
+        start, end = datetime(2, 1, 1, tzinfo=UTC), datetime(9998, 1, 1, tzinfo=UTC)
+    validate = Mock(side_effect=AssertionError("must reject before iterating"))
+    monkeypatch.setattr(webhook_metadata, "minute_aligned_range", validate)
+    monkeypatch.setattr(DataTypeSpec, "filter_for", validate)
+    with pytest.raises(
+        NotificationWindowError, match="^notification query window budget exceeded$"
+    ):
+        notification_windows(
+            spec, bounded(kind, start.isoformat(), end.isoformat())["data"]["intervals"]
+        )
+    assert validate.call_count == 0

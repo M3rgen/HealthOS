@@ -19,19 +19,21 @@ from sqlalchemy import create_engine, func, insert, select, text
 from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
+from support import sqlite_guards
+from support.sqlite_guards import SQLITE_TRIGGER_SQL
 from typer.testing import CliRunner
 
 from app.cli import main as cli
 from app.core.config import get_settings
+from app.db.guards import definitions
 from app.db.session import get_session
 from app.main import create_app
 from app.models import manual_flags as flag_models
 from app.models.manual import ManualMeasurement
 from app.models.manual_flags import ManualMeasurementFlagEvent
-from app.services import codex_health
-from app.services.codex_health import read_health
-from app.services.manual_flags import excluded_measurement_ids, flag_schema_errors
-from app.services.raw_history import PROTECTIVE_TRIGGERS, SQLITE_TRIGGER_SQL, verify_guards
+from app.services.archive.manual_flags import excluded_measurement_ids, flag_schema_errors
+from app.services.archive.raw_history_verification import verify_guards
+from app.services.umay.codex_health import read_health
 
 EARLIER = datetime(2026, 9, 20, 7, 30, tzinfo=UTC)
 LATER = datetime(2026, 9, 28, 7, 30, tzinfo=UTC)
@@ -104,9 +106,8 @@ async def profile_weight(client) -> float:
 
 
 async def umay_weight(sessions, monkeypatch) -> float:
-    monkeypatch.setattr(codex_health, "SessionLocal", sessions)
     result = await read_health(
-        {"action": "daily", "start_date": "2026-09-23", "end_date": END_DATE}
+        sessions, {"action": "daily", "start_date": "2026-09-23", "end_date": END_DATE}
     )
     return result["profile"]["weight"]["value"]
 
@@ -261,7 +262,7 @@ async def test_verify_checks_the_flag_guards(sessions) -> None:
     names = {f"{TABLE}_no_update", f"{TABLE}_no_delete"}
     assert names <= set(SQLITE_TRIGGER_SQL)
     assert {(TABLE, f"{TABLE}_append_only"), (TABLE, f"{TABLE}_no_truncate")} <= {
-        (table, trigger) for table, trigger, _ in PROTECTIVE_TRIGGERS
+        (table, trigger) for table, trigger, _ in definitions()[2]
     }
     async with sessions() as session:
         assert await verify_guards(session) == []
@@ -284,9 +285,9 @@ def test_model_and_migration_ddl_are_the_same() -> None:
         return [re.sub(r"\s+", " ", statement).strip() for statement in statements]
 
     assert normalize(migration.POSTGRESQL_DDL) == normalize(flag_models.POSTGRESQL_DDL)
-    assert normalize(migration.SQLITE_DDL) == normalize(flag_models.SQLITE_DDL)
+    assert normalize(migration.SQLITE_DDL) == normalize(sqlite_guards.ddl(flag_models))
     assert migration.FLAG_TABLES == flag_models.FLAG_TABLES
-    assert migration.PG_TRIGGER_SQL == flag_models.PG_TRIGGER_SQL
+    assert migration.PG_TRIGGER_SQL == definitions(flag_models.GUARDS)[0]
     assert migration.revision == "20261024_0014"
 
 
@@ -307,7 +308,7 @@ def test_the_migration_installs_the_guards_and_its_downgrade_keeps_flags(
                     text("SELECT name, sql FROM sqlite_master WHERE type = 'trigger'")
                 ).tuples()
             }
-            for name, (_, sql) in flag_models.SQLITE_TRIGGER_SQL.items():
+            for name, (_, sql) in sqlite_guards.definitions(flag_models.GUARDS).items():
                 assert " ".join(stored[name].split()) == " ".join(sql.split())
             connection.execute(
                 text(
@@ -357,6 +358,8 @@ def test_verify_on_a_database_before_0014_names_the_revision(tmp_path, monkeypat
         result = CliRunner().invoke(cli.app, ["verify"])
     finally:
         asyncio.run(engine.dispose())
+        # The CLI caches settings from this test's SQLite URL; the next test must not inherit it.
+        get_settings.cache_clear()
     assert result.exit_code == 1
     assert result.exception is None or isinstance(result.exception, SystemExit)
     assert expected in result.output

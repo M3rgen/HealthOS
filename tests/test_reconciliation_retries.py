@@ -9,9 +9,10 @@ from reconciliation_records import END, Client, Frozen, point, report, service
 from app.core.timeutil import as_utc
 from app.google_health.client import GoogleHealthError, Page, RetryDeferredError
 from app.google_health.data_types import REGISTRY
+from app.google_health.errors import GoogleHealthErrorCode
 from app.google_health.oauth import OAuthError
 from app.models.state import JobStatus, SyncState
-from app.services.reconciliation_reports import recovery_errors
+from app.services.synchronization.reconciliation_reports import recovery_errors
 from app.sync import reconciliation
 
 
@@ -67,12 +68,17 @@ async def test_final_pass_recovers_first_type_and_preserves_checkpoints(
     "failure,transient",
     [
         (OAuthError("HTTP 401"), False),
-        (GoogleHealthError("HTTP 403"), False),
+        (GoogleHealthError("HTTP 403", http_status=403), False),
         (RuntimeError("synthetic"), False),
         (OAuthError("connection failed", transient=True), True),
-        (GoogleHealthError("connection failed after retries"), True),
-        (GoogleHealthError("request failed after retries (HTTP 503)"), True),
-        (GoogleHealthError("request failed after retries (HTTP 429)"), True),
+        (
+            GoogleHealthError(
+                "connection failed after retries", code=GoogleHealthErrorCode.CONNECTION
+            ),
+            True,
+        ),
+        (GoogleHealthError("request failed after retries (HTTP 503)", http_status=503), True),
+        (GoogleHealthError("request failed after retries (HTTP 429)", http_status=429), True),
     ],
 )
 async def test_only_transient_types_get_one_final_attempt(sessions, caplog, failure, transient):

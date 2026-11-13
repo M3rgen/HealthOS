@@ -1,4 +1,4 @@
-"""health-mirror apple-token, apple-import, apple-status and apple-normalize (synthetic)."""
+"""healthos apple-token, apple-import, apple-status and apple-normalize (synthetic)."""
 
 from __future__ import annotations
 

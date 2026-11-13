@@ -1,0 +1,312 @@
+body.metric-history-open {
+  overflow: hidden;
+}
+#metric-history-dialog {
+  width: min(1080px, calc(100vw - 48px));
+  height: min(760px, calc(100dvh - 64px));
+  max-width: none;
+  max-height: none;
+  padding: 24px;
+  border: 1px solid var(--edge-strong);
+  color: var(--text);
+  --metric-accent: var(--step-chart);
+  background: var(--surface-sheen), var(--surface-2);
+  border-radius: 20px;
+}
+#metric-history-dialog[open] {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.metric-history-heading {
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr) 40px;
+  align-items: start;
+  gap: 12px;
+}
+.metric-history-heading > div {
+  grid-column: 2;
+  text-align: center;
+}
+.metric-history-heading h2 {
+  font-size: 1.625rem;
+  font-weight: 650;
+}
+.metric-history-heading p {
+  font-size: 0.8125rem;
+  color: var(--muted);
+  margin-top: 5px;
+  min-height: 18px;
+}
+.metric-history-heading > button {
+  grid-column: 3;
+}
+.metric-history-tabs {
+  display: flex;
+  justify-content: center;
+  align-self: center;
+  gap: 2px;
+  padding: 3px;
+  border-radius: 12px;
+  background: var(--page);
+  border: 1px solid var(--edge);
+}
+.metric-history-tabs button {
+  color: var(--muted);
+  font-size: 0.8125rem;
+  min-height: 32px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  padding: 5px 16px;
+  font-weight: 550;
+  transition:
+    background var(--dur-fast),
+    color var(--dur-fast);
+}
+#metric-history-pages button {
+  min-height: 36px;
+  border: 1px solid var(--control-border);
+  padding: 6px 14px;
+  color: var(--muted);
+  font-size: 0.8125rem;
+  min-width: 36px;
+  border-radius: 9px;
+  background: transparent;
+  font-weight: 550;
+  transition:
+    background var(--dur-fast),
+    color var(--dur-fast),
+    border-color var(--dur-fast);
+}
+.metric-history-tabs button[aria-pressed="true"] {
+  border-color: var(--metric-accent);
+  background: var(--surface-2);
+  color: var(--text);
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--metric-accent) 45%, transparent),
+    0 1px 3px rgb(0 0 0 / 0.4);
+}
+#metric-history-content {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 0 2px;
+  scrollbar-width: thin;
+}
+.metric-history-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+.metric-history-summary span {
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+.metric-history-summary strong {
+  display: block;
+  font-size: 1.75rem;
+  color: var(--metric-accent);
+  margin-top: 4px;
+  font-weight: 660;
+  letter-spacing: -0.03em;
+}
+.metric-history-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  text-align: right;
+}
+#metric-history-chart {
+  flex: 1;
+  min-height: 150px;
+  max-height: 250px;
+  padding: 4px 0;
+}
+#metric-history-chart svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+#metric-history-chart text {
+  font-family: inherit;
+  font-size: 0.75rem;
+  fill: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.history-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: var(--muted);
+  font-size: 0.875rem;
+  flex-direction: column;
+  gap: 12px;
+  --art: url(/assets/empty/empty-no-data.svg);
+}
+#metric-history-days {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  grid-template-columns: repeat(10, minmax(0, 1fr));
+  gap: 6px;
+}
+#metric-history-days li {
+  border: 1px solid var(--edge);
+  padding: 7px;
+  text-align: center;
+  min-width: 0;
+  background: color-mix(in srgb, var(--page) 55%, var(--inset));
+  border-radius: 9px;
+  transition:
+    border-color var(--dur-fast),
+    background var(--dur-fast);
+}
+#metric-history-days span {
+  display: block;
+  font-size: 0.75rem;
+  color: var(--muted);
+  margin-bottom: 5px;
+}
+/* Keep the complete numeric value, with tabular digits for easy comparison.
+   The unit can wrap at its space; the phone grid below reserves room for the
+   number itself, since wrapping the unit alone cannot fit a five-digit value. */
+#metric-history-days strong {
+  display: block;
+  font-size: 0.75rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+#metric-history-days .missing-day strong {
+  color: var(--muted);
+}
+#metric-history-days .partial-day {
+  border-color: var(--metric-accent);
+  background: color-mix(in srgb, var(--metric-accent) 7%, var(--inset));
+}
+.metric-history-footer {
+  border-top: 1px solid var(--line-soft);
+  padding-top: 12px;
+  text-align: center;
+  flex-shrink: 0;
+}
+#metric-history-pages {
+  display: flex;
+  justify-content: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+#metric-history-pages button[aria-current="page"] {
+  background: var(--amber);
+  color: var(--button-ink);
+  border-color: var(--amber);
+  box-shadow: 0 6px 16px -8px var(--amber-glow);
+}
+#metric-history-pages span {
+  color: var(--muted);
+}
+#metric-history-page-note {
+  font-size: 0.75rem;
+  color: var(--muted);
+  margin-top: 8px;
+}
+#metric-history-status {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  color: var(--muted);
+  text-align: center;
+}
+.metric-history-tabs button:hover {
+  color: var(--text);
+}
+.metric-history-meta span {
+  font-variant-numeric: tabular-nums;
+}
+#metric-history-days li:hover {
+  border-color: color-mix(in srgb, var(--metric-accent) 45%, transparent);
+}
+#metric-history-pages button:hover:not(:disabled):not([aria-current="page"]) {
+  background: rgb(255 255 255 / 0.05);
+  color: var(--text);
+}
+#metric-history-pages button:disabled {
+  cursor: default;
+}
+.history-empty:before {
+  content: "";
+  display: block;
+  flex: none;
+  background: currentColor;
+  -webkit-mask: var(--art) center/contain no-repeat;
+  mask: var(--art) center/contain no-repeat;
+  width: clamp(96px, 18dvh, 150px);
+  aspect-ratio: 4/3;
+  color: color-mix(in srgb, var(--metric-accent) 70%, var(--muted));
+}
+@media (max-width: bp(w900)) {
+  #metric-history-days {
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+  }
+}
+@media (max-width: bp(w540)) {
+  #metric-history-dialog {
+    width: calc(100vw - 24px);
+    height: calc(100dvh - 40px);
+    padding: 16px;
+  }
+  #metric-history-dialog[open] {
+    gap: 12px;
+  }
+  .metric-history-heading h2 {
+    font-size: 1.25rem;
+  }
+  .metric-history-heading p {
+    font-size: 0.75rem;
+  }
+  #metric-history-days {
+    /* Five fixed columns leave only 40 px of text space on a 320 px phone.
+       Reserve 56 px per day, including its border and horizontal padding:
+       the full grouped number fits and its unit can use the following line.
+       The available content width then determines the number of columns.
+       The inner minimum also keeps the grid inside a still narrower panel.
+       Longer history remains reachable through the content panel's scroll. */
+    grid-template-columns: repeat(
+      auto-fit,
+      minmax(min(100%, 56px), 1fr)
+    );
+    gap: 4px;
+  }
+  #metric-history-days li {
+    padding: 6px 3px;
+  }
+  #metric-history-days strong {
+    font-size: 0.75rem;
+  }
+  .metric-history-summary strong {
+    font-size: 1.375rem;
+  }
+  .metric-history-summary span {
+    font-size: 0.75rem;
+  }
+  .metric-history-meta {
+    max-width: 45%;
+  }
+  #metric-history-pages {
+    gap: 4px;
+  }
+  #metric-history-pages button {
+    padding: 5px 8px;
+    font-size: 0.75rem;
+  }
+}

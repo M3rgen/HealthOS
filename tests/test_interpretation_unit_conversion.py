@@ -6,13 +6,12 @@ from copy import deepcopy
 import pytest
 from derived_records import PHONE, T0, point, snapshot, store
 from interpretation_records import call, exercise
-from interpretation_records import production_reader as production_reader
 from sqlalchemy import select
 
 from app.google_health.data_types import REGISTRY
 from app.models.health import Distance, ExerciseSession, ScalarMetric, Weight
 from app.models.raw_versions import RawHealthDataVersion
-from app.services.interpretation_types import Interpretation
+from app.services.interpretation.interpretation_types import Interpretation
 
 NUMERIC = "numeric_overflow:unit_conversion"
 MISSING = "unsupported_or_missing_value"
@@ -67,7 +66,7 @@ async def test_reader_scales_current_raw_values_without_mutating_archive(
     arguments = {} if action == "sessions" else {"data_type": kind}
     if corrected:
         await store(sessions, kind, seed, neighbor)
-        cursor = (await call(action, limit=1, **arguments))["next_cursor"]
+        cursor = (await call(sessions, action, limit=1, **arguments))["next_cursor"]
     written = await store(sessions, kind, current, neighbor)
     async with sessions() as session:
         before = await snapshot(session)
@@ -85,8 +84,10 @@ async def test_reader_scales_current_raw_values_without_mutating_archive(
                     72000 if kind == "height" else 72
                 )
         if corrected:
-            assert (await call(action, cursor=cursor, **arguments))["code"] == "stale_cursor"
-    result = await call(action, **arguments)
+            assert (await call(sessions, action, cursor=cursor, **arguments))[
+                "code"
+            ] == "stale_cursor"
+    result = await call(sessions, action, **arguments)
     Interpretation.model_validate(result)
     json.dumps(result, allow_nan=False)
     assert result["total_summaries"] == 2
@@ -112,10 +113,12 @@ async def test_reader_scales_current_raw_values_without_mutating_archive(
         assert row["statistics"]["count"] == int(reason is None)
         assert row["statistics"]["median"] == actual
         assert row["state"] == ("unsupported" if reason else "available")
-    filtered = await call(action, source=row["source"], definition=row["definition"], **arguments)
+    filtered = await call(
+        sessions, action, source=row["source"], definition=row["definition"], **arguments
+    )
     assert filtered["summaries"] == [row]
-    page = await call(action, limit=1, **arguments)
-    rest = await call(action, cursor=page["next_cursor"], **arguments)
+    page = await call(sessions, action, limit=1, **arguments)
+    rest = await call(sessions, action, cursor=page["next_cursor"], **arguments)
     assert page["summaries"] + rest["summaries"] == result["summaries"]
     async with sessions() as session:
         assert await snapshot(session) == before
@@ -135,6 +138,6 @@ async def test_unscaled_and_scaled_fields_share_numeric_reasons(sessions, value,
         record = point(kind, kind, {"sampleTime": {"physicalTime": T0.isoformat()}, field: value})
         await store(sessions, kind, record)
     for kind in ("body-fat", "weight"):
-        row = (await call("longitudinal", data_type=kind))["summaries"][0]
+        row = (await call(sessions, "longitudinal", data_type=kind))["summaries"][0]
         assert row["evidence"][0]["reason_codes"] == [reason], kind
         assert row["evidence"][0]["value"] is None and reason in row["reason_codes"]

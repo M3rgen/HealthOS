@@ -11,9 +11,15 @@ import pytest
 from cli_records import cli_database as cli_database
 from typer.testing import CliRunner
 
+import app.services.archive.raw_history_import as raw_history_import
+import app.services.archive.raw_history_source as raw_history_source
+import app.services.archive.raw_history_types as raw_history_types
+import app.services.archive.raw_history_verification as raw_history_verification
+import app.services.identities.identity_schema as identity_schema
+import app.services.identities.identity_verification as identity_verification
 from app.cli import main as cli
 from app.models.raw_versions import RawApiResponse
-from app.services import identity, manual_flags, raw_history
+from app.services.archive import manual_flags, raw_history
 
 RUNNER = CliRunner()
 
@@ -123,14 +129,14 @@ def test_verify_schema_gates_stop_before_guard_and_record_queries(
     cli_database, monkeypatch, missing_identity
 ):
     monkeypatch.setattr(
-        identity, "identity_tables_missing", AsyncMock(return_value=missing_identity)
+        identity_schema, "identity_tables_missing", AsyncMock(return_value=missing_identity)
     )
     identities = AsyncMock(return_value=(0, ["identity schema needs upgrade"], ["older archive"]))
     flags = AsyncMock(return_value=["flag schema needs upgrade"])
     guards = AsyncMock(side_effect=AssertionError("must stop before guards"))
-    monkeypatch.setattr(identity, "verify_identities", identities)
+    monkeypatch.setattr(identity_verification, "verify_identities", identities)
     monkeypatch.setattr(manual_flags, "flag_schema_errors", flags)
-    monkeypatch.setattr(raw_history, "verify_guards", guards)
+    monkeypatch.setattr(raw_history_verification, "verify_guards", guards)
     result = RUNNER.invoke(cli.app, ["verify"])
     assert result.exit_code == 1
     assert result.stdout.startswith("Verified 0 raw records, 0 earlier versions, ")
@@ -154,18 +160,20 @@ def test_import_failure_reports_and_disposes_every_source(
     sources = [SimpleNamespace(dispose=AsyncMock()), SimpleNamespace(dispose=AsyncMock())]
     create = Mock(side_effect=sources)
     monkeypatch.setattr(db, "create_async_engine", create)
-    monkeypatch.setattr(raw_history, "source_database_url", lambda value, _: f"sqlite:///{value}")
+    monkeypatch.setattr(
+        raw_history_source, "source_database_url", lambda value, _: f"sqlite:///{value}"
+    )
     newest = AsyncMock(side_effect=[None, datetime(2026, 1, 1, tzinfo=UTC)])
     operation = AsyncMock(
-        return_value=raw_history.ImportStats(source_hash_mismatches=["steps/test"])
+        return_value=raw_history_types.ImportStats(source_hash_mismatches=["steps/test"])
     )
     failure_error = ValueError("synthetic source failure")
     if failure == "exception":
         operation.side_effect = failure_error
     elif failure == "sighting":
         newest.side_effect = failure_error
-    monkeypatch.setattr(raw_history, "newest_sighting", newest)
-    monkeypatch.setattr(raw_history, "import_versions", operation)
+    monkeypatch.setattr(raw_history_source, "newest_sighting", newest)
+    monkeypatch.setattr(raw_history_import, "import_versions", operation)
     args = ["import-versions", "--from-db", "older", "--from-db", "newer", "--batch-size", "1"]
     if dry_run:
         args.append("--dry-run")
@@ -181,8 +189,8 @@ def test_import_failure_reports_and_disposes_every_source(
             "some dump rows were not imported (listed above); keep those dump files\n"
         )
     else:
-        assert result.exception is failure_error
-        assert result.stdout == result.stderr == ""
+        assert result.stdout == ""
+        assert result.stderr == "Komut tamamlanamadı. Hata türü: ValueError\n"
     if failure != "sighting":
         operation.assert_any_await(cli_database, sources[1], batch_size=1, dry_run=dry_run)
     else:

@@ -4,54 +4,20 @@ import asyncio
 from datetime import UTC, datetime, timedelta
 
 import pytest
-import pytest_asyncio
 from retrieval_records import END, START, Client, point
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from support.ownership import contention as contention
+from support.ownership import independent as independent
+from support.ownership import sessions as sessions
 from sync_ownership_records import PausedClient, service, snapshot
 
 from app.core.timeutil import as_utc
-from app.db.base import Base
 from app.google_health.client import InvalidPageTokenError, Page
 from app.models.retrieval import RetrievalCheckpoint, RetrievalEvent, RetrievalReceipt
 from app.models.state import JobStatus, SyncState
-from app.services.retrieval import token_hash
+from app.services.synchronization.retrieval import token_hash
 from app.sync import ownership
 from app.sync.incremental import STALE_RUNNING_AFTER
-
-
-@pytest_asyncio.fixture
-async def sessions(tmp_path):
-    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'ownership.db'}")
-    async with engine.begin() as connection:
-        await connection.run_sync(Base.metadata.create_all)
-    try:
-        yield async_sessionmaker(engine, expire_on_commit=False)
-    finally:
-        await engine.dispose()
-
-
-@pytest_asyncio.fixture
-async def independent(sessions):
-    engine = create_async_engine(sessions.kw["bind"].url)
-    try:
-        yield async_sessionmaker(engine, expire_on_commit=False)
-    finally:
-        await engine.dispose()
-
-
-@pytest.fixture
-def contention(monkeypatch):
-    blocked, retry = asyncio.Event(), asyncio.Event()
-
-    async def pause():
-        # Hold only the first waiter; later contenders queue behind it as in production.
-        if not blocked.is_set():
-            blocked.set()
-            await retry.wait()
-
-    monkeypatch.setattr(ownership, "_contended", pause)
-    return blocked, retry
 
 
 @pytest.mark.parametrize("outcome", ["completed", "failed", "cancelled", "reset"])
@@ -71,14 +37,14 @@ async def test_waiter_preserves_checkpoint_then_fetches_its_own_range(
     task = asyncio.create_task(first.run("heart-rate", START, END))
     waiter = None
     try:
-        await asyncio.wait_for(first_client.entered.wait(), 5)
+        await asyncio.wait_for(first_client.entered.wait(), 30)
         # Slow Google request: heartbeat is old but the run still owns this type.
         async with sessions.begin() as session:
             state = await session.get(SyncState, "heart-rate")
             state.updated_at = datetime.now(UTC) - STALE_RUNNING_AFTER - timedelta(minutes=1)
         before = await snapshot(sessions)
         waiter = asyncio.create_task(second.run("heart-rate", END, END + timedelta(days=1)))
-        await asyncio.wait_for(blocked.wait(), 5)
+        await asyncio.wait_for(blocked.wait(), 30)
         assert second_client.tokens == [] and second.last_runs == {}
         assert await second.recover_interrupted() == 0
         assert await snapshot(sessions) == before
@@ -151,22 +117,22 @@ async def test_different_type_progresses_and_cancelled_waiter_changes_nothing(
     task = asyncio.create_task(first.run("heart-rate", START, END))
     waiter = None
     try:
-        await asyncio.wait_for(first_client.entered.wait(), 5)
+        await asyncio.wait_for(first_client.entered.wait(), 30)
         other = service(independent, Client(Page([], None)))
-        await asyncio.wait_for(other.run("steps", START, END), 5)
+        await asyncio.wait_for(other.run("steps", START, END), 30)
         before = await snapshot(sessions)
         second = service(independent, Client())
         waiter = asyncio.create_task(second.run("heart-rate", END, END + timedelta(days=1)))
-        await asyncio.wait_for(contention[0].wait(), 5)
+        await asyncio.wait_for(contention[0].wait(), 30)
         waiter.cancel()
         with pytest.raises(asyncio.CancelledError):
             await waiter
         assert await snapshot(sessions) == before
-        assert second.last_runs == {} and second.client.tokens == []
+        assert second.last_runs == {} and second.source.client.tokens == []
         first_client.release.set()
-        await asyncio.wait_for(task, 5)
-        await asyncio.wait_for(second.run("heart-rate", END, END + timedelta(days=1)), 5)
-        assert second.client.tokens == [None]
+        await asyncio.wait_for(task, 30)
+        await asyncio.wait_for(second.run("heart-rate", END, END + timedelta(days=1)), 30)
+        assert second.source.client.tokens == [None]
     finally:
         task.cancel()
         if waiter is not None:
@@ -206,7 +172,7 @@ async def test_owner_loss_never_falls_back_to_unprotected_state_writes(
 
     task = asyncio.create_task(runner.run("heart-rate", START, END, check_owner=check_owner))
     try:
-        await asyncio.wait_for(client.entered.wait(), 5)
+        await asyncio.wait_for(client.entered.wait(), 30)
         before = await snapshot(sessions)
         lost = True
         client.release.set()

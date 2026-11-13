@@ -8,55 +8,17 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import typer
-from sqlalchemy import select
 
 from app.cli._context import context
-from app.models.state import RawHealthData, SyncState
+from app.services.archive.archive_verification import verify_archive
 
 
 def verify() -> None:
     """Check archive guards, payload and body hashes, version history, and sync errors."""
 
     async def command():
-        from app.parsers.common import payload_hash
-        from app.services.identity import identity_tables_missing, verify_identities
-        from app.services.manual_flags import flag_schema_errors
-        from app.services.raw_history import verify_guards, verify_versions
-        from app.services.responses import verify_responses
-
-        errors = []
-        count = 0
         async with context.sessions() as session:
-            if await identity_tables_missing(session):
-                # An older schema: say so instead of failing on the first missing table.
-                _, identity_errors, notes = await verify_identities(session)
-                return 0, 0, 0, 0, identity_errors, notes, []
-            if old_schema := await flag_schema_errors(session):  # not at 20261024_0014 yet
-                return 0, 0, 0, 0, old_schema, [], []
-            # First: a missing or disabled guard means deletes could go through unnoticed.
-            errors.extend(await verify_guards(session))
-            rows = await session.stream(
-                select(
-                    RawHealthData.data_type,
-                    RawHealthData.google_data_point_id,
-                    RawHealthData.raw_json,
-                    RawHealthData.payload_hash,
-                ).execution_options(yield_per=1_000)
-            )
-            async for data_type, google_data_point_id, raw_json, expected_hash in rows:
-                count += 1
-                if payload_hash(raw_json) != expected_hash:
-                    errors.append(f"payload hash mismatch: {data_type}/{google_data_point_id}")
-            versions, version_errors = await verify_versions(session)
-            errors.extend(version_errors)
-            responses, response_errors = await verify_responses(session)
-            errors.extend(response_errors)
-            aliases, identity_errors, notes = await verify_identities(session)
-            errors.extend(identity_errors)
-            failed = (
-                await session.scalars(select(SyncState).where(SyncState.last_error.is_not(None)))
-            ).all()
-        return count, versions, responses, aliases, errors, notes, failed
+            return await verify_archive(session)
 
     count, versions, responses, aliases, errors, notes, failed = context.run(command())
     typer.echo(
@@ -68,7 +30,7 @@ def verify() -> None:
     for error in errors:
         typer.echo(error, err=True)
     for state in failed:
-        typer.echo(f"sync error: {state.data_type}: {state.last_error}", err=True)
+        typer.echo(f"sync error: {state['data_type']}: {state['last_error']}", err=True)
     if errors or failed:
         raise typer.Exit(1)
 
@@ -91,7 +53,7 @@ def history(
     payload: bool = typer.Option(True, "--payload/--no-payload", help="Include raw payloads."),
 ) -> None:
     """List every stored version of raw records (oldest first) as JSON."""
-    from app.services.raw_history import record_history
+    from app.services.archive.raw_history import record_history
 
     async def command():
         async with context.sessions() as session:
@@ -130,8 +92,8 @@ def import_versions(
     from sqlalchemy.engine import make_url
     from sqlalchemy.ext.asyncio import create_async_engine
 
-    from app.services.raw_history import import_versions as run_import
-    from app.services.raw_history import newest_sighting, source_database_url
+    from app.services.archive.raw_history_import import import_versions as run_import
+    from app.services.archive.raw_history_source import newest_sighting, source_database_url
 
     urls = [source_database_url(item, context.settings().database_url) for item in from_db]
 
@@ -187,7 +149,7 @@ def responses(
     limit: int = typer.Option(20, min=1, max=10_000),
 ) -> None:
     """List stored Google responses (newest first, metadata only) as JSON."""
-    from app.services.responses import list_responses
+    from app.services.archive.responses import list_responses
 
     async def command():
         async with context.sessions() as session:
@@ -209,7 +171,7 @@ def export_response(
     """Write one stored Google response body byte for byte (metadata goes to stderr)."""
     import hashlib
 
-    from app.services.responses import describe, load_response
+    from app.services.archive.responses import describe, load_response
 
     async def command():
         async with context.sessions() as session:

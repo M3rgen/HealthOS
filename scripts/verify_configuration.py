@@ -4,17 +4,18 @@ from __future__ import annotations
 
 import argparse
 import re
+import shlex
 import subprocess
 from pathlib import Path
 
 import yaml
 
+from app.core.sources import readable_garmin_key, safe_database_url, selected_sources
+
 ROOT = Path(__file__).resolve().parents[1]
 PLACEHOLDERS = {"change_me", "changeme", "todo", "replace_me", "example-secret"}
-REQUIRED_PRODUCTION = {
-    "APP_UI_TOKEN",
-    "POSTGRES_PASSWORD",
-    "DATABASE_URL",
+REQUIRED_PRODUCTION = {"APP_UI_TOKEN", "POSTGRES_PASSWORD", "DATABASE_URL"}
+GOOGLE_REQUIRED = {
     "GOOGLE_CLIENT_ID",
     "GOOGLE_CLIENT_SECRET",
     "GOOGLE_TOKEN_ENCRYPTION_KEY",
@@ -37,7 +38,16 @@ def parse_env(path: Path) -> dict[str, str]:
 def check_environment(path: Path) -> list[str]:
     values = parse_env(path)
     errors: list[str] = []
-    for name in sorted(REQUIRED_PRODUCTION):
+    try:
+        sources = selected_sources(
+            values.get("HEALTHOS_SOURCES", "google"),
+            legacy_garmin="HEALTHOS_SOURCES" not in values
+            and values.get("GARMIN_ENABLED", "false").lower() in {"true", "1", "yes", "on"},
+        )
+    except ValueError as exc:
+        return [str(exc)]
+    required = REQUIRED_PRODUCTION | (GOOGLE_REQUIRED if "google" in sources else set())
+    for name in sorted(required):
         value = values.get(name, "").strip()
         if not value:
             errors.append(f"{name}: missing or empty")
@@ -45,21 +55,37 @@ def check_environment(path: Path) -> list[str]:
             errors.append(f"{name}: placeholder value")
     if values.get("POSTGRES_PASSWORD") in {"health", "postgres", "password"}:
         errors.append("POSTGRES_PASSWORD: known insecure default")
+    app_user, app_password = (
+        values.get("POSTGRES_APP_USER", ""),
+        values.get("POSTGRES_APP_PASSWORD", ""),
+    )
+    if app_user or app_password:
+        if not (app_user and app_password):
+            errors.append("POSTGRES_APP_USER/POSTGRES_APP_PASSWORD: set both, or neither")
+        elif not re.fullmatch(r"[A-Za-z0-9_.~-]{24,512}", app_password):
+            errors.append("POSTGRES_APP_PASSWORD: must be 24-512 URL-safe characters")
     endpoint = values.get("GOOGLE_HEALTH_WEBHOOK_ENDPOINT_URI", "")
-    if endpoint and not endpoint.startswith("https://"):
+    if "google" in sources and endpoint and not endpoint.startswith("https://"):
         errors.append("GOOGLE_HEALTH_WEBHOOK_ENDPOINT_URI: must use HTTPS")
+    if values.get("DATABASE_URL") and not safe_database_url(values["DATABASE_URL"]):
+        errors.append("DATABASE_URL: password missing or known insecure default")
+    if "garmin" in sources and not readable_garmin_key(
+        Path(values.get("GARMIN_API_KEY_FILE", "~/.config/garmin/connect-personal-api-key"))
+    ):
+        errors.append("GARMIN_API_KEY_FILE: missing, empty or unreadable")
     return errors
 
 
 def source_head() -> str:
-    revisions: dict[str, str | None] = {}
+    revisions: dict[str, set[str]] = {}
     for path in (ROOT / "migrations" / "versions").glob("*.py"):
         text = path.read_text(encoding="utf-8")
         revision = re.search(r'^revision = "([^"]+)"', text, re.MULTILINE)
-        parent = re.search(r'^down_revision = (?:"([^"]+)"|None)', text, re.MULTILINE)
+        # A merge revision names a tuple of parents, possibly over several lines.
+        parent = re.search(r'^down_revision = (\([^)]*\)|"[^"]+"|None)', text, re.MULTILINE)
         if revision and parent:
-            revisions[revision.group(1)] = parent.group(1)
-    parents = {parent for parent in revisions.values() if parent}
+            revisions[revision.group(1)] = set(re.findall(r'"([^"]+)"', parent.group(1)))
+    parents = {parent for found in revisions.values() for parent in found}
     heads = sorted(set(revisions) - parents)
     if len(heads) != 1:
         raise RuntimeError(f"expected one Alembic head; found {heads}")
@@ -143,6 +169,8 @@ def check_service_hardening(name: str, service: dict) -> list[str]:
         errors.append(f"{name} service must enable no-new-privileges")
     if "ALL" not in (service.get("cap_drop") or []):
         errors.append(f"{name} service must drop all Linux capabilities (cap_drop: [ALL])")
+    if not service.get("mem_limit") or not service.get("pids_limit"):
+        errors.append(f"{name} service must set a memory limit and a PID limit")
     mounts = compose_mounts(service)
     temporary = ["/tmp", "/var/run/postgresql"] if name == "postgres" else ["/tmp"]
     for target in temporary:
@@ -171,7 +199,11 @@ def check_service_hardening(name: str, service: dict) -> list[str]:
             and not (data[0].get("volume") or {}).get("subpath")
         ):
             errors.append(f"postgres service requires writable postgres_data at {data_target}")
-    allowed = {*temporary, *([data_target] if name == "postgres" else [])}
+    allowed = {
+        *temporary,
+        *([data_target] if name == "postgres" else []),
+        *(["/data", "/config"] if name == "caddy" else []),
+    }
     for mount in mounts:
         target = str(mount.get("target", ""))
         if target not in allowed and (
@@ -187,9 +219,74 @@ def check_compose_runtime(compose_doc: object, dev_doc: object) -> list[str]:
     app = compose_service(compose_doc, "app")
     if service_environment(app).get("APP_ENV") != "production":
         errors.append("docker-compose.yml app service must set APP_ENV: production")
-    for name in ("postgres", "app"):
+    errors.extend(check_compose_services(compose_doc))
+    dev_app = compose_service(dev_doc, "app")
+    if service_environment(dev_app).get("APP_ENV") != "development":
+        errors.append("docker-compose.dev.yml must override APP_ENV with development")
+    migrate = compose_service(compose_doc, "migrate")
+    if not migrate:
+        errors.append("docker-compose.yml must define a migrate service")
+    elif service_environment(migrate).get("APP_ENV") != "production":
+        errors.append("migrate service must set APP_ENV: production")
+    # A missing base service is a production error, not a broken dev override.
+    if (
+        migrate
+        and service_environment(compose_service(dev_doc, "migrate")).get("APP_ENV") != "development"
+    ):
+        errors.append("docker-compose.dev.yml migrate must override APP_ENV with development")
+    if (app.get("depends_on") or {}).get("migrate") != {
+        "condition": "service_completed_successfully"
+    }:
+        errors.append("app must depend on successful migrate completion")
+    if (migrate.get("depends_on") or {}).get("postgres") != {"condition": "service_healthy"}:
+        errors.append("migrate must wait for healthy postgres")
+    if migrate.get("command") != ["alembic", "upgrade", "head"]:
+        errors.append("migrate must run alembic upgrade head")
+    # The container always listens on 8000; .env's APP_PORT only picks the published host port.
+    if service_environment(app).get("APP_PORT") != "8000":
+        errors.append('app must pin APP_PORT: "8000" inside the container')
+    if not re.search(r"://health:", str(service_environment(migrate).get("DATABASE_URL", ""))):
+        errors.append("migrate must connect as the schema owner")
+    provision = compose_service(compose_doc, "provision-app-role")
+    if (provision.get("depends_on") or {}).get("migrate") != {
+        "condition": "service_completed_successfully"
+    } or (app.get("depends_on") or {}).get("provision-app-role") != {
+        "condition": "service_completed_successfully"
+    }:
+        errors.append("the application role must be provisioned after migrations, before the app")
+    if migrate.get("restart") != "no" or migrate.get("healthcheck") != {"disable": True}:
+        errors.append("migrate must be one-shot with its HTTP healthcheck disabled")
+    errors.extend(check_compose_build(compose_doc))
+    if migrate.get("env_file") != app.get("env_file"):
+        errors.append("migrate must share the app env_file")
+    for name, service in (("app", app), ("migrate", migrate)):
+        if service_environment(service).get("HEALTHOS_MIGRATE_ON_START") != "0":
+            errors.append(f"{name} entrypoint migration must be disabled in Compose")
+    return errors
+
+
+def check_compose_build(compose_doc: object) -> list[str]:
+    errors: list[str] = []
+    services = compose_doc.get("services", {}) if isinstance(compose_doc, dict) else {}
+    if [name for name, service in services.items() if "build" in service] != ["app"]:
+        errors.append("only app must build the shared application image")
+    if compose_service(compose_doc, "app").get("build") != ".":
+        errors.append("app must build from the repository Dockerfile")
+    for name in ("app", "migrate", "provision-app-role"):
+        if compose_service(compose_doc, name).get("image") != (
+            "${COMPOSE_PROJECT_NAME:-healthos}-app:latest"
+        ):
+            errors.append(f"{name} must use the project-scoped shared application image")
+    return errors
+
+
+def check_compose_services(compose_doc: object) -> list[str]:
+    errors: list[str] = []
+    for name in ("postgres", "app", "migrate", "provision-app-role", "caddy"):
         service = compose_service(compose_doc, name)
         errors.extend(check_service_hardening(name, service))
+    for name in ("postgres", "app", "migrate"):
+        service = compose_service(compose_doc, name)
         logging = service.get("logging") or {}
         options = logging.get("options") or {}
         if (
@@ -198,9 +295,6 @@ def check_compose_runtime(compose_doc: object, dev_doc: object) -> list[str]:
             or not options.get("max-file")
         ):
             errors.append(f"{name} service lacks json-file log rotation (max-size, max-file)")
-    dev_app = compose_service(dev_doc, "app")
-    if service_environment(dev_app).get("APP_ENV") != "development":
-        errors.append("docker-compose.dev.yml must override APP_ENV with development")
     return errors
 
 
@@ -248,7 +342,7 @@ def check_backup_automation(compose_doc: object, verifier: str) -> list[str]:
         "source": "${BACKUP_STATUS_HOST_DIR:-./backup-status}",
         "target": "/run/healthos-backup",
         "read_only": True,
-        # An existing VM updated before creating the directory must still start.
+        # An existing server updated before creating the directory must still start.
         "bind": {"create_host_path": True},
     }
     mounts = compose_mounts(app)
@@ -373,6 +467,63 @@ def check_documentation_links(root: Path = ROOT) -> list[str]:
     return errors
 
 
+def check_caddy_routes(text: str) -> list[str]:
+    """Fail closed unless every proxy uses an exact webhook-only path matcher.
+
+    Parse the deployment's supported Caddy directive subset, including scope and
+    matcher references. Unknown routing constructs need an explicit review here.
+    """
+    error = ["Caddy must proxy only /webhooks/google-health and deny unmatched routes"]
+    scope: list[str] = []
+    matchers: dict[str, list[str]] = {}
+    proxies: list[str] = []
+    sites, deny = 0, False
+    try:
+        for line in text.splitlines():
+            words = shlex.split(line, comments=True)
+            if not words:
+                continue
+            if words[-1] == "{":
+                if not scope and len(words) == 2:
+                    sites += 1
+                    scope.append("site")
+                elif scope == ["site"] and words[0] == "handle" and len(words) in {2, 3}:
+                    scope.append(words[1] if len(words) == 3 else "")
+                else:
+                    return error
+            elif words == ["}"] and scope:
+                scope.pop()
+            elif (
+                scope == ["site"]
+                and len(words) >= 3
+                and words[0].startswith("@")
+                and words[1] == "path"
+                and words[0] not in matchers
+            ):
+                matchers[words[0]] = words[2:]
+            elif len(scope) == 2 and words[0] == "reverse_proxy" and len(words) == 2:
+                proxies.append(scope[-1])
+            elif scope == ["site", ""] and words == ["respond", "404"]:
+                deny = True
+            else:
+                return error
+    except ValueError:
+        return error
+    if scope or sites != 1 or not deny or not proxies:
+        return error
+    if any(set(matchers.get(guard, [])) != {"/webhooks/google-health"} for guard in proxies):
+        return error
+    return []
+
+
+def check_compose_placeholders() -> list[str]:
+    return [
+        f"{path.name} is a Compose file containing only services: {{}}"
+        for path in sorted(ROOT.glob("docker-compose*.yml"))
+        if yaml.safe_load(path.read_text(encoding="utf-8")) == {"services": {}}
+    ]
+
+
 def check_repository() -> list[str]:
     errors: list[str] = []
     compose = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
@@ -384,9 +535,15 @@ def check_repository() -> list[str]:
     for value in forbidden:
         if value in compose or value in dockerfile:
             errors.append(f"insecure fallback remains: {value}")
-    image_lines = re.findall(r"^\s*image:\s*(\S+)", compose, re.MULTILINE)
+    # The three local services use the one app build, checked by check_compose_build.
+    # Only pulled images have an upstream digest and an IMAGE_UPDATES entry.
+    image_lines = [
+        service["image"]
+        for name, service in compose_doc["services"].items()
+        if name not in {"app", "migrate", "provision-app-role"} and "image" in service
+    ]
     if not image_lines or any("@sha256:" not in image for image in image_lines):
-        errors.append("every Compose image must have a digest")
+        errors.append("every external Compose image must have a digest")
     from_lines = re.findall(r"^FROM\s+(\S+)", dockerfile, re.MULTILINE)
     if any("@sha256:" not in image for image in from_lines):
         errors.append("every Dockerfile base image must have a digest")
@@ -395,10 +552,7 @@ def check_repository() -> list[str]:
     postgres_block = compose.split("  app:", 1)[0]
     if "ports:" in postgres_block:
         errors.append("PostgreSQL unexpectedly has a base Compose port mapping")
-    for override in ("docker-compose.windows.yml", "docker-compose.linux.example.yml"):
-        override_text = (ROOT / override).read_text(encoding="utf-8")
-        if "postgres_data" in override_text or "postgres:" in override_text:
-            errors.append(f"{override} must not redefine PostgreSQL persistence")
+    errors.extend(check_compose_placeholders())
     expected = source_head()
     verifier = (ROOT / "scripts" / "verify_compose.py").read_text(encoding="utf-8")
     if f'EXPECTED_REVISION = "{expected}"' not in verifier:
@@ -412,14 +566,17 @@ def check_repository() -> list[str]:
     if "http_status:404" not in cloudflare:
         errors.append("Cloudflare example lacks a deny-by-default final rule")
     caddy = (ROOT / "Caddyfile").read_text(encoding="utf-8")
-    if "@google_health_webhook" not in caddy or "respond 404" not in caddy:
-        errors.append("Caddy must expose only the webhook path and deny unmatched routes")
+    errors.extend(check_caddy_routes(caddy))
     image_docs = (ROOT / "docs" / "IMAGE_UPDATES.md").read_text(encoding="utf-8")
     for image in (*image_lines, *from_lines):
         if image not in image_docs:
             errors.append(f"pinned image is missing from update documentation: {image}")
     template = parse_env(ROOT / ".env.example")
-    for name in REQUIRED_PRODUCTION:
+    for name in (
+        REQUIRED_PRODUCTION
+        | GOOGLE_REQUIRED
+        | {"HEALTHOS_SOURCES", "GOOGLE_TOKEN_ENCRYPTION_KEYS_OLD"}
+    ):
         if name not in template:
             errors.append(f".env.example omits {name}")
     if any(value.casefold() in PLACEHOLDERS for value in template.values()):

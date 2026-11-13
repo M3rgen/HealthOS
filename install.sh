@@ -2,11 +2,15 @@
 # HealthOS installer for Linux servers (default), Raspberry Pi, NAS, cloud VPS and macOS.
 # Windows: use install.ps1. English / Türkçe. Run `bash install.sh --help` for every option.
 #
-#   curl -fsSL https://raw.githubusercontent.com/M3rgen/HealthOS/main/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/M3rgen/HealthOS/v0.2.2.1/install.sh | bash
+#   (a release: clones its own tag, v$HEALTHOS_INSTALLER_VERSION; the development version is
+#   .../main/install.sh | bash -s -- --ref main)
 #   bash install.sh                       # inside a checkout: guided setup
 #   bash install.sh --dry-run             # show every step, write only <dir>/.env.dry-run
 #
-# Safety: an existing .env is first copied to .env.bak-<UTC stamp>; secrets and other values
+# Safety: an existing .env is first copied to ~/.local/state/healthos/env-backups/ (mode 700,
+# files 600; older .env.bak-* copies next to .env are copied there too, never moved or deleted);
+# secrets and other values
 # are never rotated or changed, only missing or empty keys are filled. The exceptions are the
 # selections themselves: COMPOSE_FILE follows the chosen mode and sources (a source still
 # switched on in .env keeps its key mount), a chosen source is switched on (never off; that is
@@ -16,7 +20,7 @@
 #
 # Runs on bash 3.2 (macOS) and newer with POSIX tools, curl or wget, git (to clone), and
 # openssl or /dev/urandom for secrets. No Python is needed for the installer itself.
-HEALTHOS_INSTALLER_VERSION="0.2.2"
+HEALTHOS_INSTALLER_VERSION="0.2.2.1"
 
 set -u
 set -o pipefail
@@ -39,18 +43,20 @@ REPO_URL="${HEALTHOS_REPO_URL:-https://github.com/M3rgen/HealthOS.git}"
 RAW_URL="https://raw.githubusercontent.com/M3rgen/HealthOS"
 APP_UID=10001
 # Python for the Umay bridge's .venv: the newest Python a host offers (Homebrew already ships
-# 3.15) can be newer than every wheel in uv.lock (psycopg-binary, websockets: cp312-cp314), so
-# uv sync picks or downloads one in this range. Keep in step with install.ps1,
+# 3.15) can be newer than pyproject.toml's requires-python (>=3.12,<3.14) and every wheel in
+# uv.lock, so uv sync picks or downloads one in this range. Keep in step with install.ps1,
 # deploy/windows/start-umay-bridge.ps1 and the installer job in .github/workflows/ci.yml.
-BRIDGE_PYTHON='>=3.12,<3.15'
+BRIDGE_PYTHON='>=3.12,<3.14'
 
 # ---- options (shared contract with install.ps1) -------------------------------------
 LANG_SEL=""
 PLATFORM=""
 MODE=""
 SOURCES=""
+SOURCES_SETTING=""
 DIR=""
-REF="main"
+# The release this installer belongs to is cloned by default (IP-8/1); main only with --ref main.
+REF="v$HEALTHOS_INSTALLER_VERSION"
 GARMIN_KEY_FILE=""
 GOOGLE_CLIENT_ID_IN=""
 GOOGLE_CLIENT_SECRET_IN=""
@@ -155,19 +161,25 @@ Usage / Kullanım:  bash install.sh [options / seçenekler]
 
   --lang en|tr                 language / dil (interactive default: ask, English preselected)
   --platform P                 linux (default) | raspberrypi | nas | macos | windows | vps
-  --mode trial|full            trial (default): local look, no Google needed / yerel deneme
-                               full: production; needs Google + webhook / üretim; Google gerekli
-  --sources LIST               google,garmin,apple or none / veri kaynakları (virgüllü)
+  --mode full|trial            full (default): keeps your data, daily backups; Google only if
+                               chosen as a source / verilerinizi saklar, günlük yedek; Google
+                               yalnız kaynak seçilirse gerekir
+                               trial: only to look around and leave; do not keep data in it,
+                               no backups / yalnız bakıp çıkmak için; veri saklamayın, yedek yok
+  --sources LIST               google,garmin,apple or none (default none); written to .env as
+                               HEALTHOS_SOURCES / veri kaynakları (virgüllü, varsayılan none)
   --dir PATH                   checkout directory / kurulum dizini (default: current checkout,
                                else /opt/healthos as root or ~/healthos;
                                an existing ~/healtos checkout is reused)
-  --ref REF                    git ref to clone / klonlanacak sürüm (default main)
+  --ref REF                    git ref to clone (default: this installer's own release tag,
+                               v<version>; main only with --ref main) / klonlanacak sürüm
+                               (varsayılan: kurulum aracının sürüm etiketi)
   --garmin-key-file PATH       Garmin Connect Personal API key file / Garmin anahtar dosyası
   --google-client-id ID        Google OAuth client id
   --google-client-secret S     Google OAuth client secret
   --apple-receiver yes|no      Health Auto Export receiver / alıcı (default no)
   --backups yes|no             daily encrypted backup / günlük şifreli yedek
-                               (default yes in full, no in trial)
+                               (default yes in full, no in trial / tam kipte açık)
   --autostart yes|no           start after reboot / yeniden başlatmada aç (default yes)
   --umay yes|no                Umay bridge service / Umay köprü servisi (default no)
   --yes, --non-interactive     never prompt; flags and defaults only / soru sormadan
@@ -180,9 +192,9 @@ Exit codes / Çıkış kodları: 0 ok, 1 a step failed / bir adım başarısız,
   2 bad arguments or unsupported environment / hatalı argüman veya desteklenmeyen ortam.
 
 Secrets in an existing .env are never changed; COMPOSE_FILE follows the chosen mode and sources.
-A .env.bak-<stamp> copy is made before any change. / Var olan .env'deki gizli değerler asla
-değiştirilmez; COMPOSE_FILE seçilen kip ve kaynaklara uyar. Her değişiklikten önce .env.bak-<damga>
-kopyası alınır.
+Before any change .env is copied to ~/.local/state/healthos/env-backups/ (kept forever). /
+Var olan .env'deki gizli değerler asla değiştirilmez; COMPOSE_FILE seçilen kip ve kaynaklara uyar.
+Her değişiklikten önce .env, ~/.local/state/healthos/env-backups/ altına kopyalanır (silinmez).
 EOF
 }
 
@@ -303,6 +315,48 @@ normalize_sources() {
 }
 
 has_source() { case ",$SOURCES," in *",$1,"*) return 0 ;; esac; return 1; }
+
+existing_sources() {
+  # The sources an existing .env has on (comma list, may be empty). HEALTHOS_SOURCES when set;
+  # before that key existed the app always ran Google, so Google counts as on when it is
+  # configured or the install runs in full mode; Garmin and the Apple receiver count when
+  # still switched on with their key file set.
+  local current out=""
+  [ -f "$DIR/.env" ] || return 0
+  current="$(env_get "$DIR/.env" HEALTHOS_SOURCES)"
+  if [ -n "$current" ]; then
+    normalize_sources "$current" 2>/dev/null | sed 's/^none$//'
+    return 0
+  fi
+  if [ -n "$(env_get "$DIR/.env" GOOGLE_CLIENT_ID)" ] || [ "$(default_mode)" = full ]; then out="google"; fi
+  still_on GARMIN_ENABLED GARMIN_API_KEY_HOST_FILE && out="$out,garmin"
+  still_on APPLE_RECEIVER_ENABLED APPLE_RECEIVER_TOKEN_HOST_FILE && out="$out,apple"
+  printf '%s' "${out#,}"
+}
+
+sources_setting() {
+  # HEALTHOS_SOURCES for .env (IP-2): the chosen sources plus every source the existing .env
+  # still has on. A source is never switched off silently;
+  # note_dropped_sources says how to remove one by hand.
+  local chosen="$SOURCES" kept
+  [ "$chosen" != none ] || chosen=""
+  kept="$(existing_sources)"
+  normalize_sources "$chosen,$kept"
+}
+
+uses_source() { case ",$SOURCES_SETTING," in *",$1,"*) return 0 ;; esac; return 1; }
+
+note_dropped_sources() {
+  # A source left on in .env although it was not chosen this time: kept, and said so.
+  local item kept
+  [ "$ENV_FRESH" = 0 ] || return 0
+  kept="$(existing_sources)"
+  for item in $(printf '%s' "$kept" | tr ',' ' '); do
+    has_source "$item" && continue
+    note "$item was not selected but stays in HEALTHOS_SOURCES (nothing is switched off silently). To stop it, remove it from HEALTHOS_SOURCES in .env by hand." \
+      "$item seçilmedi ama HEALTHOS_SOURCES içinde kalıyor (hiçbir kaynak sessizce kapatılmaz). Durdurmak için .env içindeki HEALTHOS_SOURCES değerinden elle çıkarın."
+  done
+}
 
 # ---- prompts (from /dev/tty, so `curl ... | bash` works) -----------------------------
 ask() {
@@ -576,14 +630,14 @@ lower() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]'; }
 
 want() {
   # A non-secret selection (COMPOSE_FILE): follows the current choices. A changed existing
-  # value is reported; the previous .env is kept as .env.bak-<stamp>.
+  # value is reported; the previous .env is kept in the env-backups directory.
   local key="$1" value="$2" current
   current="$(env_get "$ENV_SRC" "$key")"
   [ "$current" != "$value" ] || return 0
   fill "$key" "$value"
   if [ "$ENV_FRESH" = 0 ] && [ -n "$current" ]; then
-    note "$key changed from '$current' to '$value' (previous .env kept as .env.bak-<stamp>)." \
-      "$key '$current' değerinden '$value' değerine değişti (önceki .env, .env.bak-<damga> olarak duruyor)."
+    note "$key changed from '$current' to '$value' (the previous .env is kept in $(env_backup_dir))." \
+      "$key '$current' değerinden '$value' değerine değişti (önceki .env $(env_backup_dir) içinde duruyor)."
   fi
 }
 
@@ -599,6 +653,27 @@ want_on() {
   # Turning one off is never done silently.
   is_off "$(env_get "$ENV_SRC" "$1")" && fill "$1" true
   return 0
+}
+
+garmin_kept() {
+  # Garmin stays on from the existing .env (its HEALTHOS_SOURCES, or for an .env older than that key
+  # the older GARMIN_ENABLED switch) and its key path is set: the key mount stays with it.
+  case ",$(existing_sources)," in *,garmin,*) ;; *) return 1 ;; esac
+  [ -n "$(env_get "$DIR/.env" GARMIN_API_KEY_HOST_FILE)" ]
+}
+
+note_garmin_unmounted() {
+  # Garmin not chosen this time and left without a key path in the existing .env: say so.
+  [ "$ENV_FRESH" = 0 ] || return 0
+  [ -z "$(env_get "$ENV_SRC" GARMIN_API_KEY_HOST_FILE)" ] || return 0
+  if [ -n "$(env_get "$ENV_SRC" HEALTHOS_SOURCES)" ]; then
+    case ",$(existing_sources)," in *,garmin,*) ;; *) return 0 ;; esac
+    note "garmin stays in HEALTHOS_SOURCES but GARMIN_API_KEY_HOST_FILE is empty, so no key is mounted. Remove garmin from HEALTHOS_SOURCES in .env, or re-run with garmin selected." \
+      "garmin HEALTHOS_SOURCES içinde kalıyor ama GARMIN_API_KEY_HOST_FILE boş, bu yüzden anahtar bağlanmıyor. garmin'i .env içindeki HEALTHOS_SOURCES değerinden çıkarın ya da garmin seçerek yeniden çalıştırın."
+  elif ! is_off "$(env_get "$ENV_SRC" GARMIN_ENABLED)"; then
+    note "The older GARMIN_ENABLED is on in .env but GARMIN_API_KEY_HOST_FILE is empty, so garmin is not added to HEALTHOS_SOURCES (which the app reads from now on). Re-run with garmin selected." \
+      ".env içindeki eski GARMIN_ENABLED açık ama GARMIN_API_KEY_HOST_FILE boş, bu yüzden garmin HEALTHOS_SOURCES değerine (uygulama artık bunu okur) eklenmiyor. garmin seçerek yeniden çalıştırın."
+  fi
 }
 
 still_on() {
@@ -664,9 +739,12 @@ compose_entries() {
 }
 
 is_managed_compose() {
+  # docker-compose.windows.yml and docker-compose.linux.example.yml are no longer in the
+  # repository; an older COMPOSE_FILE naming them loses the entry (kept as a user file, Compose
+  # would stop on the missing file).
   case "${1#./}" in
     docker-compose.yml | docker-compose.dev.yml | docker-compose.garmin.yml | docker-compose.apple.yml | \
-      docker-compose.windows.yml) return 0 ;;
+      docker-compose.windows.yml | docker-compose.linux.example.yml) return 0 ;;
   esac
   return 1
 }
@@ -678,7 +756,7 @@ compose_files() {
   local files="docker-compose.yml" entry user
   [ "$MODE" = full ] || files="$files:docker-compose.dev.yml"
   # A source left switched on in .env keeps its mount: never enabled with no key mounted.
-  if has_source garmin || still_on GARMIN_ENABLED GARMIN_API_KEY_HOST_FILE; then
+  if has_source garmin || garmin_kept; then
     files="$files:docker-compose.garmin.yml"
   fi
   if [ "$APPLE_RECEIVER" = yes ] || still_on APPLE_RECEIVER_ENABLED APPLE_RECEIVER_TOKEN_HOST_FILE; then
@@ -700,10 +778,11 @@ EOF_ENTRIES
 }
 
 default_mode() {
-  # Re-run default: an existing COMPOSE_FILE without the development override means full.
+  # full for a new install (IP-2). Re-run default: the mode of the existing .env (its
+  # COMPOSE_FILE with the development override means trial).
   local entries
   entries="$(compose_entries)"
-  [ -n "$entries" ] || { printf trial; return 0; }
+  [ -n "$entries" ] || { printf full; return 0; }
   case "
 $entries
 " in
@@ -723,11 +802,25 @@ file_gid() { ls -ldn "$1" 2>/dev/null | awk '{ print $4 }'; }
 file_owner() { ls -ldn "$1" 2>/dev/null | awk '{ print $3 ":" $4 }'; }
 
 secret_file_gid() {
-  # Group that lets the app container (uid 10001) read a host secret file. As root on Linux
-  # the file is given to the app's own group (chgrp 10001, mode 640; see share_with_app).
+  # secret_file_gid FILE GID_KEY: the group that lets the app container (uid 10001) read a
+  # host secret file (Compose group_add). As root on Linux it is the group the file is given
+  # to (root_secret_gid; share_with_app); otherwise the file's own group.
   local gid
+  if [ "$IS_ROOT" = 1 ] && [ "$HOST_OS" = Linux ]; then
+    root_secret_gid "$2"
+    return 0
+  fi
   gid="$(file_gid "$1")"
-  if [ "$IS_ROOT" = 1 ] && { [ "$HOST_OS" = Linux ] || [ "$gid" = 0 ]; }; then gid="$APP_UID"; fi
+  if [ "$IS_ROOT" = 1 ] && [ "$gid" = 0 ]; then gid="$APP_UID"; fi
+  printf '%s' "${gid:-$APP_UID}"
+}
+
+root_secret_gid() {
+  # root_secret_gid GID_KEY: as root on Linux a secret file is given to the group set in .env
+  # (an operator's own private group), else to the container's numeric group 10001. Neither
+  # is trusted as is: secret_blocked checks that no other host account can be in it (S3).
+  local gid
+  gid="$(env_get "$DIR/.env" "$1")"
   printf '%s' "${gid:-$APP_UID}"
 }
 
@@ -754,10 +847,21 @@ gid_is_shared() {
 
 BLOCK_GID=""
 secret_blocked() {
-  # Linux, not root: the app container could read FILE only if it were made readable by a
-  # group other accounts share. Then nothing is widened and the source stays off (D8).
+  # secret_blocked FILE GID_KEY (Linux): the app container could read FILE only if it were
+  # made readable by a group other accounts share. Then nothing is widened and the source
+  # stays off (D8, S3).
+  # - Root: the group FILE would be given to (root_secret_gid). A host group with the
+  #   container's number 10001 is not trusted because the container uses it: its listed
+  #   members and every account with it as primary group are checked like any other group.
+  # - Not root: the file's own group (the primary group for a new file), unless the file is
+  #   already group-readable (then nothing would change).
   local f="$1"
-  [ "$HOST_OS" = Linux ] && [ "$IS_ROOT" = 0 ] || return 1
+  [ "$HOST_OS" = Linux ] || return 1
+  if [ "$IS_ROOT" = 1 ]; then
+    BLOCK_GID="$(root_secret_gid "$2")"
+    gid_is_shared "$BLOCK_GID"
+    return
+  fi
   if [ -e "$f" ]; then
     [ -z "$(find "$f" -prune -perm -040 2>/dev/null)" ] || return 1
     BLOCK_GID="$(file_gid "$f")"
@@ -768,11 +872,18 @@ secret_blocked() {
 }
 
 block_note() {
-  # block_note NAME_EN NAME_TR FILE RERUN_FLAGS
+  # block_note NAME_EN NAME_TR FILE RERUN_FLAGS GID_KEY
+  if [ "$IS_ROOT" = 1 ]; then
+    warn "$1 stays off: group $BLOCK_GID (the app container's group) has other accounts on this host, so $3 was not made readable by it." \
+      "$2 kapalı kalıyor: $BLOCK_GID grubunda (uygulama konteynerinin grubu) bu bilgisayardaki başka hesaplar da var; $3 bu gruba okunur yapılmadı."
+    note "$1 is off: $3 keeps its permissions; group $BLOCK_GID also has other accounts (see: getent group $BLOCK_GID; getent passwd). Give the container a group of its own: create one no account belongs to (e.g. sudo groupadd --gid 20001 healthos-secrets), set $5=<its number> in .env, then re-run the installer with $4 (and your other choices)." \
+      "$2 kapalı: $3 izinleri değişmedi; $BLOCK_GID grubunda başka hesaplar da var (bakınız: getent group $BLOCK_GID; getent passwd). Konteynere kendine ait bir grup verin: hiçbir hesabın üye olmadığı bir grup oluşturun (örn. sudo groupadd --gid 20001 healthos-secrets), .env içinde $5=<numarası> yazın, sonra kurulumu $4 (ve diğer seçimlerinizle) yeniden çalıştırın."
+    return 0
+  fi
   warn "$1 stays off: $3 would have to be readable by group $BLOCK_GID, which other accounts share." \
     "$2 kapalı kalıyor: $3 dosyasının $BLOCK_GID grubunca okunabilmesi gerekirdi; bu grubu başka hesaplar da kullanıyor."
-  note "$1 is off: $3 was not made readable by the shared group $BLOCK_GID. Give it to the app container's group, then re-run the installer with $4 (and your other choices): sudo chgrp $APP_UID $3 && sudo chmod 640 $3" \
-    "$2 kapalı: $3 ortak $BLOCK_GID grubuna okunur yapılmadı. Dosyayı uygulama konteynerinin grubuna verin, sonra kurulumu $4 (ve diğer seçimlerinizle) yeniden çalıştırın: sudo chgrp $APP_UID $3 && sudo chmod 640 $3"
+  note "$1 is off: $3 was not made readable by the shared group $BLOCK_GID. Give it to the app container's group, then re-run the installer with $4 (and your other choices): sudo chgrp $APP_UID $3 && sudo chmod 640 $3 (first check that no other account uses group $APP_UID: getent group $APP_UID; getent passwd)" \
+    "$2 kapalı: $3 ortak $BLOCK_GID grubuna okunur yapılmadı. Dosyayı uygulama konteynerinin grubuna verin, sonra kurulumu $4 (ve diğer seçimlerinizle) yeniden çalıştırın: sudo chgrp $APP_UID $3 && sudo chmod 640 $3 (önce $APP_UID grubunu başka hesabın kullanmadığını denetleyin: getent group $APP_UID; getent passwd)"
 }
 
 plan_env() {
@@ -786,34 +897,43 @@ plan_env() {
     ENV_FRESH=1
   fi
   want_secret POSTGRES_PASSWORD hex64
+  # The app's non-superuser role (provision-app-role stops without its password). An older .env
+  # without POSTGRES_APP_USER keeps connecting as the owner: it gets no password it cannot use.
+  if [ "$ENV_FRESH" = 1 ] || [ -n "$(env_get "$ENV_SRC" POSTGRES_APP_USER)" ]; then
+    want_secret POSTGRES_APP_PASSWORD hex64
+  fi
   want_secret APP_UI_TOKEN token
   want COMPOSE_FILE "$(compose_files)"
   want COMPOSE_PATH_SEPARATOR ":"
-  if has_source google || [ "$MODE" = full ]; then
+  SOURCES_SETTING="$(sources_setting)"
+  want HEALTHOS_SOURCES "$SOURCES_SETTING"
+  note_dropped_sources
+  if uses_source google; then
     want_secret GOOGLE_TOKEN_ENCRYPTION_KEY fernet
     want_given GOOGLE_CLIENT_ID "$GOOGLE_CLIENT_ID_IN"
     want_given GOOGLE_CLIENT_SECRET "$GOOGLE_CLIENT_SECRET_IN"
   fi
-  if [ "$MODE" = full ]; then
+  if [ "$MODE" = full ] && uses_source google; then
     want_secret GOOGLE_HEALTH_WEBHOOK_AUTHORIZATION bearer
     [ -z "$WEBHOOK_HOST_IN" ] || want_given GOOGLE_HEALTH_WEBHOOK_ENDPOINT_URI "https://$WEBHOOK_HOST_IN/webhooks/google-health"
   fi
   if has_source garmin; then
     garmin="$(abs_path "$GARMIN_KEY_FILE")"
-    want_on GARMIN_ENABLED
+    # Garmin runs through HEALTHOS_SOURCES alone; the older GARMIN_ENABLED is never written (an
+    # existing line stays as it is: with HEALTHOS_SOURCES present the app ignores it).
     want_path GARMIN_API_KEY_HOST_FILE "$garmin" "$GARMIN_KEY_EXPLICIT"
-    want_path GARMIN_API_KEY_HOST_GID "$(secret_file_gid "$garmin")" "$GARMIN_KEY_EXPLICIT"
+    want_path GARMIN_API_KEY_HOST_GID "$(secret_file_gid "$garmin" GARMIN_API_KEY_HOST_GID)" "$GARMIN_KEY_EXPLICIT"
   fi
-  has_source garmin || note_if_on GARMIN_ENABLED GARMIN_API_KEY_HOST_FILE Garmin
+  has_source garmin || note_garmin_unmounted
   [ "$APPLE_RECEIVER" = yes ] || note_if_on APPLE_RECEIVER_ENABLED APPLE_RECEIVER_TOKEN_HOST_FILE "Apple receiver"
   if [ "$APPLE_RECEIVER" = yes ]; then
     apple_file="$(apple_token_path)"
     want_on APPLE_RECEIVER_ENABLED
     want_path APPLE_RECEIVER_TOKEN_HOST_FILE "$apple_file" 0
     if [ -f "$apple_file" ]; then
-      want_path APPLE_RECEIVER_TOKEN_HOST_GID "$(secret_file_gid "$apple_file")" 0
+      want_path APPLE_RECEIVER_TOKEN_HOST_GID "$(secret_file_gid "$apple_file" APPLE_RECEIVER_TOKEN_HOST_GID)" 0
     else
-      want_path APPLE_RECEIVER_TOKEN_HOST_GID "$(new_secret_gid)" 0
+      want_path APPLE_RECEIVER_TOKEN_HOST_GID "$(new_secret_gid APPLE_RECEIVER_TOKEN_HOST_GID)" 0
     fi
     want_given APPLE_RECEIVER_ENDPOINT_URI "$APPLE_ENDPOINT_IN"
   fi
@@ -823,7 +943,14 @@ plan_env() {
 }
 
 new_secret_gid() {
-  if [ "$IS_ROOT" = 1 ]; then printf '%s' "$APP_UID"; else id -g; fi
+  # new_secret_gid GID_KEY: the group for a secret file that does not exist yet.
+  if [ "$IS_ROOT" = 1 ] && [ "$HOST_OS" = Linux ]; then
+    root_secret_gid "$1"
+  elif [ "$IS_ROOT" = 1 ]; then
+    printf '%s' "$APP_UID"
+  else
+    id -g
+  fi
 }
 
 apple_token_path() {
@@ -836,7 +963,7 @@ render_env() {
   # render_env SOURCE DEST new|update|preview: SOURCE with FILL applied (last assignment of a
   # key replaced, `export KEY=` kept as such; missing keys appended). awk reads values from
   # the environment: no escape processing. new: DEST must not exist (never clobbered);
-  # update: the real .env, already copied to .env.bak-*; preview: an earlier preview only.
+  # update: the real .env, already copied by backup_env; preview: an earlier preview only.
   local src="$1" dest="$2" kind="$3" tmp header first=""
   header="# Added by install.sh $(date -u +%Y-%m-%dT%H:%M:%SZ)"
   [ "$kind" != preview ] || first="$PREVIEW_MARKER"
@@ -904,24 +1031,100 @@ render_env() {
   esac
 }
 
-backup_env() {
-  local stamp bak n=1
-  stamp="$(date -u +%Y%m%dT%H%M%SZ)"
-  bak="$DIR/.env.bak-$stamp"
-  while [ -e "$bak" ]; do
+# ---- .env backups (IP-8/5) -------------------------------------------------------------
+# Copies of .env live outside the checkout, in one private directory for every checkout on
+# this machine: <dir>/<checkout path with / as _>.env.bak-<UTC stamp>. Nothing there or next
+# to .env is ever deleted or overwritten.
+ENV_BACKUP_COUNT=0
+
+env_backup_dir() { printf '%s/.local/state/healthos/env-backups' "$HOME"; }
+
+env_backup_prefix() {
+  local slug="${DIR#/}"
+  slug="$(printf '%s' "$slug" | tr '/' '_')"
+  printf '%s' "${slug:-root}"
+}
+
+prepare_env_backup_dir() {
+  # Created private (umask 077: mode 700, and so are missing parents). An existing directory
+  # keeps its mode (never changed silently); a group- or world-accessible one is reported.
+  local d
+  d="$(env_backup_dir)"
+  if [ ! -d "$d" ]; then
+    (umask 077 && mkdir -p "$d") \
+      || die 1 "Could not create $d for the .env backups; nothing was changed." \
+        ".env yedekleri için $d oluşturulamadı; hiçbir şey değiştirilmedi."
+  elif [ -n "$(find "$d" -prune -perm -001 2>/dev/null)$(find "$d" -prune -perm -010 2>/dev/null)" ]; then
+    warn "$d is open to other accounts; the .env copies in it are mode 600. Make it private (mode 700) yourself." \
+      "$d başka hesaplara açık; içindeki .env kopyaları 600 izinli. Gizli yapın (izin 700)."
+  fi
+}
+
+free_backup_name() {
+  # free_backup_name PATH: PATH, or PATH-2, PATH-3 ... if it exists.
+  local name="$1" n=1
+  while [ -e "$name" ] || [ -L "$name" ]; do
     n=$((n + 1))
-    bak="$DIR/.env.bak-$stamp-$n"
+    name="$1-$n"
   done
-  cp -p "$DIR/.env" "$bak" || die 1 "Could not copy .env to $bak; nothing was changed." \
+  printf '%s' "$name"
+}
+
+copy_private() {
+  # copy_private SRC DEST: a copy readable only by the owner (cp -p keeps the time).
+  (umask 077 && cp -p "$1" "$2") && chmod 600 "$2"
+}
+
+backup_env() {
+  local bak
+  prepare_env_backup_dir
+  bak="$(free_backup_name "$(env_backup_dir)/$(env_backup_prefix).env.bak-$(date -u +%Y%m%dT%H%M%SZ)")"
+  copy_private "$DIR/.env" "$bak" || die 1 "Could not copy .env to $bak; nothing was changed." \
     ".env, $bak dosyasına kopyalanamadı; hiçbir şey değiştirilmedi."
-  chmod 600 "$bak"
   ok "Copied the existing .env to $bak (kept forever)." "Var olan .env $bak olarak kopyalandı (silinmez)."
+}
+
+collect_env_backups() {
+  # Older .env.bak-* copies next to .env are copied (never moved) into the backup directory,
+  # once: a file there with the same name and bytes counts as done.
+  local old name dest prefix dir copied=0
+  dir="$(env_backup_dir)"
+  prefix="$(env_backup_prefix)"
+  for old in "$DIR"/.env.bak-*; do
+    [ -f "$old" ] && [ ! -L "$old" ] || continue
+    name="$prefix${old##*/}"
+    dest="$dir/$name"
+    if [ -f "$dest" ] && cmp -s "$old" "$dest"; then continue; fi
+    if [ "$DRY_RUN" = 1 ]; then
+      say "  [dry-run] would copy $old to $dir/ (the original stays)" \
+        "  [dry-run] $old, $dir/ altına kopyalanırdı (asıl dosya kalır)"
+      continue
+    fi
+    [ "$copied" = 1 ] || prepare_env_backup_dir
+    dest="$(free_backup_name "$dest")"
+    copy_private "$old" "$dest" || die 1 "Could not copy $old to $dest; nothing was deleted." \
+      "$old, $dest konumuna kopyalanamadı; hiçbir şey silinmedi."
+    copied=1
+  done
+  if [ "$copied" = 1 ]; then
+    ok "Copied the older .env.bak-* files to $dir; the originals next to .env are kept." \
+      "Eski .env.bak-* dosyaları $dir altına kopyalandı; .env yanındaki asılları duruyor."
+  fi
+}
+
+count_env_backups() {
+  local f n=0
+  for f in "$(env_backup_dir)/$(env_backup_prefix)".env.bak-*; do
+    [ -f "$f" ] && n=$((n + 1))
+  done
+  ENV_BACKUP_COUNT="$n"
 }
 
 write_env() {
   local target="$DIR/.env" owner
   step "Configuration (.env)" "Yapılandırma (.env)"
   plan_env
+  collect_env_backups
   if [ "$DRY_RUN" = 1 ]; then
     resolve_env_out
     render_env "$ENV_SRC" "$ENV_OUT" preview
@@ -929,8 +1132,8 @@ write_env() {
     if [ "$ENV_FRESH" = 1 ]; then
       say "  [dry-run] would create $target from .env.example (mode 600)" "  [dry-run] .env.example'dan $target oluşturulurdu (izin 600)"
     elif [ -n "$FILL" ]; then
-      say "  [dry-run] would copy .env to .env.bak-<UTC stamp>, then fill missing keys and update the selections" \
-        "  [dry-run] .env, .env.bak-<UTC damga> olarak kopyalanır, sonra eksik anahtarlar doldurulup seçimler güncellenirdi"
+      say "  [dry-run] would copy .env to $(env_backup_dir)/$(env_backup_prefix).env.bak-<UTC stamp>, then fill missing keys and update the selections" \
+        "  [dry-run] .env, $(env_backup_dir)/$(env_backup_prefix).env.bak-<UTC damga> olarak kopyalanır, sonra eksik anahtarlar doldurulup seçimler güncellenirdi"
     fi
     ok "Preview written to $ENV_OUT (the real .env is untouched)." "Önizleme $ENV_OUT dosyasına yazıldı (gerçek .env'e dokunulmadı)."
   elif [ "$ENV_FRESH" = 1 ]; then
@@ -956,6 +1159,7 @@ write_env() {
   if [ -n "$FILL" ]; then
     printf '  %s %s\n' "$(t 'Keys set:' 'Ayarlanan anahtarlar:')" "$(printf '%s' "$FILL" | cut -f1 | tr '\n' ' ')"
   fi
+  count_env_backups
 }
 
 # ---- preflight -----------------------------------------------------------------------
@@ -1235,7 +1439,7 @@ choose_platform() {
   fi
   if [ "$PLATFORM" = windows ]; then
     say "Windows uses the PowerShell installer. In PowerShell:" "Windows'ta PowerShell kurulum betiği kullanılır. PowerShell'de:"
-    printf '  irm %s/main/install.ps1 | iex\n' "$RAW_URL"
+    printf '  irm %s/%s/install.ps1 | iex\n' "$RAW_URL" "v$HEALTHOS_INSTALLER_VERSION"
     say "Inside WSL 2 you can instead run this script with --platform linux." "WSL 2 içinde bu betiği --platform linux ile de çalıştırabilirsiniz."
     exit 2
   fi
@@ -1255,19 +1459,29 @@ choose_platform() {
 
 choose_mode() {
   local idx def
-  [ -z "$MODE" ] || return 0
+  if [ -n "$MODE" ]; then
+    trial_warning
+    return 0
+  fi
   # An explicit --mode wins; otherwise a re-run keeps the mode of the existing .env.
   def="$(default_mode)"
   if [ "$INTERACTIVE" = 1 ]; then
-    menu idx "$([ "$def" = full ] && echo 2 || echo 1)" "Mode" "Kip" \
-      "Trial - look around locally; development override; no Google account needed" \
-      "Deneme - yerelde göz atın; geliştirme ayarı; Google hesabı gerekmez" \
-      "Full - production mode; needs Google OAuth and webhook values; daily backups" \
-      "Tam - üretim kipi; Google OAuth ve webhook değerleri gerekir; günlük yedek"
-    if [ "$idx" = 2 ]; then MODE=full; else MODE=trial; fi
+    menu idx "$([ "$def" = trial ] && echo 2 || echo 1)" "Mode" "Kip" \
+      "Full - keep your data: production settings, daily encrypted backups; Google only if you choose it as a source" \
+      "Tam - verilerinizi saklayın: üretim ayarları, günlük şifreli yedek; Google yalnız kaynak olarak seçerseniz" \
+      "Trial - only to look around and leave: do not keep data in it, there are no backups" \
+      "Deneme - yalnız bakıp çıkmak için: veri saklamayın, yedek yok"
+    if [ "$idx" = 2 ]; then MODE=trial; else MODE=full; fi
   else
     MODE="$def"
   fi
+  trial_warning
+}
+
+trial_warning() {
+  [ "$MODE" = trial ] || return 0
+  warn "Trial mode is only for looking around: do not keep data in it, there are no backups (development settings; the database listens on 127.0.0.1:5432). For real use re-run with --mode full." \
+    "Deneme kipi yalnız bakıp çıkmak içindir: veri saklamayın, yedek yok (geliştirme ayarları; veritabanı 127.0.0.1:5432'de dinler). Gerçek kullanım için --mode full ile yeniden çalıştırın."
 }
 
 choose_sources() {
@@ -1276,9 +1490,9 @@ choose_sources() {
   elif [ -n "$GARMIN_KEY_FILE" ] || [ -n "$GOOGLE_CLIENT_ID_IN" ] || [ "$APPLE_RECEIVER" = yes ]; then
     SOURCES="none"
   elif [ "$INTERACTIVE" = 1 ]; then
-    if [ "$MODE" = full ]; then def=1; else def=4; fi
-    printf '\n%s%s%s\n' "$C_B" "$(t 'Data sources (wearables) - pick one or more, e.g. 1,3' 'Veri kaynakları (giyilebilirler) - bir ya da daha fazla seçin, örn. 1,3')" "$C_0"
-    printf '  1) %s\n' "$(t 'Google Health API v4 (Fitbit, Pixel Watch, Google Health app) - OAuth client; required in full mode' 'Google Health API v4 (Fitbit, Pixel Watch, Google Health uygulaması) - OAuth istemcisi; tam kipte şart')"
+    def=4
+    printf '\n%s%s%s\n' "$C_B" "$(t 'Data sources (wearables) - pick one or more, e.g. 2,3' 'Veri kaynakları (giyilebilirler) - bir ya da daha fazla seçin, örn. 2,3')" "$C_0"
+    printf '  1) %s\n' "$(t 'Google Health API v4 (Fitbit, Pixel Watch, Google Health app) - needs an approved Google OAuth project and a public webhook' 'Google Health API v4 (Fitbit, Pixel Watch, Google Health uygulaması) - onaylı bir Google OAuth projesi ve herkese açık webhook gerekir')"
     printf '  2) %s\n' "$(t 'Garmin Connect Personal API - read-only pull; needs your Personal API key file' 'Garmin Connect Personal API - salt okunur çekme; Personal API anahtar dosyanız gerekir')"
     printf '  3) %s\n' "$(t 'Apple Watch / Apple Health - export.zip upload works as is; optional Health Auto Export receiver' 'Apple Watch / Apple Sağlık - export.zip yükleme hazır; isteğe bağlı Health Auto Export alıcısı')"
     printf '  4) %s\n' "$(t 'None for now - manual entries, empty dashboard' 'Şimdilik hiçbiri - elle girişler, boş panel')"
@@ -1297,9 +1511,9 @@ choose_sources() {
       if [ "$bad" = 0 ] && SOURCES="$(normalize_sources "${out#,}")"; then break; fi
       say "Enter numbers 1-4 separated by commas (4 alone for none)." "1-4 arası numaraları virgülle girin (hiçbiri için yalnız 4)."
     done
-  elif [ "$MODE" = full ]; then
-    SOURCES=google
   else
+    # Unattended: no source unless asked for (Google is never assumed; a source the existing
+    # .env has on stays on through HEALTHOS_SOURCES).
     SOURCES=none
   fi
   # Flags imply their source.
@@ -1340,9 +1554,9 @@ source_details() {
     if has_source garmin && [ ! -f "$GARMIN_KEY_FILE" ] && [ "$GARMIN_PASTED" = 0 ]; then
       drop_garmin
     fi
-    if has_source garmin && secret_blocked "$GARMIN_KEY_FILE"; then
+    if has_source garmin && secret_blocked "$GARMIN_KEY_FILE" GARMIN_API_KEY_HOST_GID; then
       remove_source garmin
-      block_note Garmin Garmin "$GARMIN_KEY_FILE" "--sources garmin"
+      block_note Garmin Garmin "$GARMIN_KEY_FILE" "--sources garmin" GARMIN_API_KEY_HOST_GID
     fi
   fi
   if has_source apple && [ -z "$APPLE_RECEIVER" ]; then
@@ -1360,17 +1574,17 @@ source_details() {
   [ -n "$APPLE_RECEIVER" ] || APPLE_RECEIVER=no
   if [ "$APPLE_RECEIVER" = yes ]; then
     APPLE_TOKEN_FILE="$(apple_token_path)"
-    if secret_blocked "$APPLE_TOKEN_FILE"; then
+    if secret_blocked "$APPLE_TOKEN_FILE" APPLE_RECEIVER_TOKEN_HOST_GID; then
       APPLE_RECEIVER=no
       APPLE_BLOCKED=1
-      block_note "The Apple receiver" "Apple alıcısı" "$APPLE_TOKEN_FILE" "--apple-receiver yes"
+      block_note "The Apple receiver" "Apple alıcısı" "$APPLE_TOKEN_FILE" "--apple-receiver yes" APPLE_RECEIVER_TOKEN_HOST_GID
     fi
   fi
   if [ "$APPLE_RECEIVER" = yes ] && [ "$INTERACTIVE" = 1 ] && [ -z "$(env_get "$DIR/.env" APPLE_RECEIVER_ENDPOINT_URI)" ]; then
     ask APPLE_ENDPOINT_IN "" "Receiver https URL ending in /webhooks/apple-health (empty: later)" \
       "Alıcının /webhooks/apple-health ile biten https adresi (boş: sonra)"
   fi
-  if [ "$MODE" = full ] && [ "$INTERACTIVE" = 1 ] && [ -z "$(env_get "$DIR/.env" GOOGLE_HEALTH_WEBHOOK_ENDPOINT_URI)" ]; then
+  if [ "$MODE" = full ] && has_source google && [ "$INTERACTIVE" = 1 ] && [ -z "$(env_get "$DIR/.env" GOOGLE_HEALTH_WEBHOOK_ENDPOINT_URI)" ]; then
     ask WEBHOOK_HOST_IN "" "Public webhook host name, e.g. webhook.example.com (empty: later)" \
       "Herkese açık webhook ana makine adı, örn. webhook.example.com (boş: sonra)"
     WEBHOOK_HOST_IN="${WEBHOOK_HOST_IN#https://}"
@@ -1441,7 +1655,7 @@ choose_host_jobs() {
 confirm_plan() {
   step "Plan" "Plan"
   printf '  %s %s\n' "$(t 'Platform:' 'Platform:')" "$PLATFORM"
-  printf '  %s %s\n' "$(t 'Mode:' 'Kip:')" "$MODE"
+  printf '  %s %s%s\n' "$(t 'Mode:' 'Kip:')" "$MODE" "$([ "$MODE" != trial ] || t ' (look around only: no backups, do not keep data)' ' (yalnız göz atmak için: yedek yok, veri saklamayın)')"
   printf '  %s %s\n' "$(t 'Data sources:' 'Veri kaynakları:')" "$SOURCES"
   [ "$APPLE_RECEIVER" != yes ] || printf '  %s %s\n' "$(t 'Apple receiver:' 'Apple alıcısı:')" yes
   printf '  %s %s\n' "$(t 'Directory:' 'Dizin:')" "$DIR"
@@ -1483,14 +1697,19 @@ clone_repo() {
 
 # ---- secret files for the app container ----------------------------------------------
 share_with_app() {
-  # Make a host secret file readable by the app container (uid 10001) through its group:
-  # as root it is given to group 10001 with mode 640; otherwise the file's own group gets
-  # read access (a shared group never does: secret_blocked turned that source off).
-  local f="$1"
+  # share_with_app FILE GID_KEY: make a host secret file readable by the app container
+  # (uid 10001) through a group: as root it is given to the group in .env's GID_KEY (10001 by
+  # default) with mode 640; otherwise the file's own group gets read access. A shared group
+  # never does (secret_blocked turned that source off). The mode changes only after the
+  # group did, and a failed change stops the installer: no "done" for a file the container
+  # cannot read, and never mode 640 for the file's previous group.
+  local f="$1" gid=""
+  [ "$IS_ROOT" = 0 ] || gid="$(env_get "$ENV_RESULT" "$2")"
+  gid="${gid:-$APP_UID}"
   if [ "$DRY_RUN" = 1 ]; then
     if [ "$IS_ROOT" = 1 ]; then
-      say "  [dry-run] would give $f to group $APP_UID with mode 640 for the app container" \
-        "  [dry-run] $f uygulama konteyneri için $APP_UID grubuna verilip izni 640 yapılırdı"
+      say "  [dry-run] would give $f to group $gid (no other account is in it) with mode 640 for the app container" \
+        "  [dry-run] $f uygulama konteyneri için $gid grubuna (başka hesap üye değil) verilip izni 640 yapılırdı"
     else
       say "  [dry-run] would make $f group-readable (mode 640) for the app container" \
         "  [dry-run] $f uygulama konteyneri için grupça okunur yapılırdı (izin 640)"
@@ -1499,10 +1718,18 @@ share_with_app() {
   fi
   [ "$HOST_OS" = Linux ] || return 0
   if [ "$IS_ROOT" = 1 ]; then
-    run chgrp "$APP_UID" "$f" || true
-    run chmod 640 "$f" || true
+    # Checked again right before the change: .env may name a different group by now.
+    if gid_is_shared "$gid"; then
+      die 1 "$f was not shared: group $gid has other accounts on this host. Set $2 in .env to a group of its own and re-run; the file is unchanged." \
+        "$f paylaşılmadı: $gid grubunda bu bilgisayardaki başka hesaplar da var. .env içinde $2 değerini yalnız konteynere ait bir grup yapıp yeniden çalıştırın; dosya değişmedi."
+    fi
+    { run chgrp "$gid" "$f" && run chmod 640 "$f"; } \
+      || die 1 "Could not give $f to group $gid with mode 640 (see the error above), so the app container cannot read it. It was not made readable by any other group. Fix the owner/group by hand, then re-run the installer." \
+        "$f, $gid grubuna 640 izniyle verilemedi (yukarıdaki hataya bakın); uygulama konteyneri dosyayı okuyamaz. Dosya başka bir gruba okunur yapılmadı. Sahibini/grubunu elle düzeltip kurulumu yeniden çalıştırın."
   elif [ -n "$(find "$f" -prune ! -perm -040 2>/dev/null)" ]; then
-    run chmod g+r "$f" || true
+    run chmod g+r "$f" \
+      || die 1 "Could not make $f group-readable (see the error above), so the app container cannot read it. Fix its permissions by hand, then re-run the installer." \
+        "$f grupça okunur yapılamadı (yukarıdaki hataya bakın); uygulama konteyneri dosyayı okuyamaz. İzinlerini elle düzeltip kurulumu yeniden çalıştırın."
   fi
 }
 
@@ -1519,19 +1746,19 @@ apple_token_setup() {
   [ -n "$f" ] || return 0
   if [ -f "$f" ]; then
     ok "Apple receiver token file exists; kept (never rotated): $f" "Apple alıcı belirteç dosyası var; korundu (yenilenmedi): $f"
-    [ "$APPLE_BLOCKED" = 1 ] || share_with_app "$f"
+    [ "$APPLE_BLOCKED" = 1 ] || share_with_app "$f" APPLE_RECEIVER_TOKEN_HOST_GID
     return 0
   fi
   if [ "$DRY_RUN" = 1 ]; then
-    say "  [dry-run] would create the receiver token $f (43 characters, like 'health-mirror apple-token')" \
-      "  [dry-run] alıcı belirteci $f oluşturulurdu (43 karakter, 'health-mirror apple-token' gibi)"
+    say "  [dry-run] would create the receiver token $f (43 characters, like 'healthos apple-token')" \
+      "  [dry-run] alıcı belirteci $f oluşturulurdu (43 karakter, 'healthos apple-token' gibi)"
     return 0
   fi
   APPLE_TOKEN_NEW="$(gen_secret token)"
   (umask 077 && mkdir -p "$(dirname "$f")" && printf '%s\n' "$APPLE_TOKEN_NEW" >"$f") \
     || die 1 "Could not write $f." "$f yazılamadı."
   ok "Created the Apple receiver token file $f." "Apple alıcı belirteç dosyası $f oluşturuldu."
-  [ "$APPLE_BLOCKED" = 1 ] || share_with_app "$f"
+  [ "$APPLE_BLOCKED" = 1 ] || share_with_app "$f" APPLE_RECEIVER_TOKEN_HOST_GID
 }
 
 garmin_share() {
@@ -1539,7 +1766,7 @@ garmin_share() {
   has_source garmin || return 0
   f="$(env_get "$ENV_RESULT" GARMIN_API_KEY_HOST_FILE)"
   [ -n "$f" ] && [ -f "$f" ] || return 0
-  share_with_app "$f"
+  share_with_app "$f" GARMIN_API_KEY_HOST_GID
 }
 
 # ---- start ---------------------------------------------------------------------------
@@ -1554,14 +1781,20 @@ check_ready_to_start() {
   case ":$files:" in
     *:docker-compose.dev.yml:*) ;;
     *)
-      # Production guard: the app refuses to start without these.
-      for value in APP_UI_TOKEN GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET GOOGLE_TOKEN_ENCRYPTION_KEY GOOGLE_HEALTH_WEBHOOK_AUTHORIZATION; do
-        [ -n "$(env_get "$ENV_RESULT" "$value")" ] || missing "$value is empty" "$value boş"
-      done
-      case "$(env_get "$ENV_RESULT" GOOGLE_HEALTH_WEBHOOK_ENDPOINT_URI)" in
-        https://*) ;;
-        *) missing "GOOGLE_HEALTH_WEBHOOK_ENDPOINT_URI must be https://<your webhook host>/webhooks/google-health" \
-          "GOOGLE_HEALTH_WEBHOOK_ENDPOINT_URI https://<webhook-adresiniz>/webhooks/google-health olmalı" ;;
+      # Production guard: the app refuses to start without these; the Google values only
+      # when Google is one of HEALTHOS_SOURCES (IP-2).
+      [ -n "$(env_get "$ENV_RESULT" APP_UI_TOKEN)" ] || missing "APP_UI_TOKEN is empty" "APP_UI_TOKEN boş"
+      case ",$(env_get "$ENV_RESULT" HEALTHOS_SOURCES)," in
+        *,google,*)
+          for value in GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET GOOGLE_TOKEN_ENCRYPTION_KEY GOOGLE_HEALTH_WEBHOOK_AUTHORIZATION; do
+            [ -n "$(env_get "$ENV_RESULT" "$value")" ] || missing "$value is empty" "$value boş"
+          done
+          case "$(env_get "$ENV_RESULT" GOOGLE_HEALTH_WEBHOOK_ENDPOINT_URI)" in
+            https://*) ;;
+            *) missing "GOOGLE_HEALTH_WEBHOOK_ENDPOINT_URI must be https://<your webhook host>/webhooks/google-health" \
+              "GOOGLE_HEALTH_WEBHOOK_ENDPOINT_URI https://<webhook-adresiniz>/webhooks/google-health olmalı" ;;
+          esac
+          ;;
       esac
       ;;
   esac
@@ -1956,6 +2189,8 @@ linux_no_systemd() {
       "  Docker'ın açılışta başlamasını init sisteminizle sağlayın (OpenRC: rc-update add docker default)."
   fi
   if [ "$UMAY" = yes ]; then
+    say "  Privacy: your questions and the records Umay requests are sent to OpenAI." \
+      "  Gizlilik: sorularınız ve Umay'ın istediği kayıtlar OpenAI'a gönderilir."
     say "  Umay without systemd: uv run --frozen --no-dev python scripts/start_codex_bridge.py (after each reboot)." \
       "  systemd olmadan Umay: uv run --frozen --no-dev python scripts/start_codex_bridge.py (her açılıştan sonra)."
   fi
@@ -2185,6 +2420,19 @@ host_jobs() {
 }
 
 # ---- summary -------------------------------------------------------------------------
+on_terminal() {
+  # Secrets (UI token, a new receiver token) are printed only to an interactive terminal; a
+  # pipe, a log file or a CI log gets where to read them instead (IP-11/4).
+  [ -t 1 ]
+}
+
+mask_in_ci() {
+  # GitHub Actions: hide a secret value in every later line of the job log. The workflow
+  # command itself is not shown in the log.
+  [ "${GITHUB_ACTIONS:-}" = true ] && [ -n "$1" ] || return 0
+  printf '::add-mask::%s\n' "$1"
+}
+
 summary() {
   local port token url redirect key_note endpoint
   port="$(env_get "$ENV_RESULT" APP_PORT)"
@@ -2211,7 +2459,13 @@ summary() {
       "    Sonra: cd $DIR && docker compose up -d --build   (ya da bu kurulumu yeniden çalıştırın)"
   fi
   printf '\n  URL: %s  (%s http://healthos.localhost:%s)\n' "$url" "$(t 'or' 'ya da')" "$port"
-  printf '  %s %s\n' "$(t 'UI token:' 'Arayüz anahtarı:')" "$token"
+  if on_terminal; then
+    printf '  %s %s\n' "$(t 'UI token:' 'Arayüz anahtarı:')" "$token"
+  else
+    printf '  %s %s\n' "$(t 'UI token:' 'Arayüz anahtarı:')" \
+      "$(t "not printed (no terminal); it is APP_UI_TOKEN in $ENV_RESULT: grep APP_UI_TOKEN $ENV_RESULT" \
+        "yazdırılmadı (terminal yok); $ENV_RESULT içindeki APP_UI_TOKEN: grep APP_UI_TOKEN $ENV_RESULT")"
+  fi
   say "  Keep the token private (password manager); it is the dashboard password." \
     "  Anahtarı gizli tutun (parola yöneticisi); panelin parolasıdır."
   case "$PLATFORM" in
@@ -2225,26 +2479,32 @@ summary() {
   say "  Next steps:" "  Sonraki adımlar:"
   say "  - Open the URL and sign in with the UI token. Manage: cd $DIR && docker compose ps | logs -f app" \
     "  - Adresi açıp arayüz anahtarıyla giriş yapın. Yönetim: cd $DIR && docker compose ps | logs -f app"
-  say "  - Update later: git pull && docker compose up -d --build. Add a source: re-run with --sources ..." \
-    "  - Güncelleme: git pull && docker compose up -d --build. Kaynak eklemek: --sources ... ile yeniden çalıştırın"
+  if have git && ! git -C "$DIR" symbolic-ref -q HEAD >/dev/null 2>&1 </dev/null; then
+    # A release tag is checked out (no branch): update by checking out the next tag.
+    say "  - Update later: git fetch --tags && git checkout <new release tag> && docker compose up -d --build. Add a source: re-run with --sources ..." \
+      "  - Güncelleme: git fetch --tags && git checkout <yeni sürüm etiketi> && docker compose up -d --build. Kaynak eklemek: --sources ... ile yeniden çalıştırın"
+  else
+    say "  - Update later: git pull && docker compose up -d --build. Add a source: re-run with --sources ..." \
+      "  - Güncelleme: git pull && docker compose up -d --build. Kaynak eklemek: --sources ... ile yeniden çalıştırın"
+  fi
   if has_source google; then
     redirect="$(env_get "$ENV_RESULT" GOOGLE_REDIRECT_URI)"
     say "  - Google: redirect URI in your OAuth client: ${redirect:-http://localhost:8000/auth/google/callback}" \
       "  - Google: OAuth istemcinizdeki yönlendirme URI'si: ${redirect:-http://localhost:8000/auth/google/callback}"
-    say "    Connect: $url/auth/google/start, then: docker compose exec app health-mirror backfill" \
-      "    Bağlan: $url/auth/google/start, sonra: docker compose exec app health-mirror backfill"
+    say "    Connect: $url/auth/google/start, then: docker compose exec app healthos backfill" \
+      "    Bağlan: $url/auth/google/start, sonra: docker compose exec app healthos backfill"
     say "    GOOGLE_TOKEN_ENCRYPTION_KEY in .env: store it in a password manager too (a restore needs it)." \
       "    .env içindeki GOOGLE_TOKEN_ENCRYPTION_KEY: parola yöneticisinde de saklayın (geri yükleme ister)."
   fi
   if has_source garmin; then
-    say "  - Garmin: status: docker compose exec app health-mirror garmin-status; history: health-mirror garmin-backfill" \
-      "  - Garmin: durum: docker compose exec app health-mirror garmin-status; geçmiş: health-mirror garmin-backfill"
+    say "  - Garmin: status: docker compose exec app healthos garmin-status; history: healthos garmin-backfill" \
+      "  - Garmin: durum: docker compose exec app healthos garmin-status; geçmiş: healthos garmin-backfill"
   fi
   if has_source apple; then
     say "  - Apple Health: iPhone Health app > profile > Export All Health Data; upload export.zip on the System page" \
       "  - Apple Sağlık: iPhone Sağlık > profil > Tüm Sağlık Verilerini Dışa Aktar; export.zip'i Sistem sayfasından yükleyin"
-    say "    (Sistem > Apple Sağlık içe aktar). Status: docker compose exec app health-mirror apple-status" \
-      "    (Sistem > Apple Sağlık içe aktar). Durum: docker compose exec app health-mirror apple-status"
+    say "    (Sistem > Apple Sağlık içe aktar). Status: docker compose exec app healthos apple-status" \
+      "    (Sistem > Apple Sağlık içe aktar). Durum: docker compose exec app healthos apple-status"
   fi
   if [ "$APPLE_RECEIVER" = yes ]; then
     endpoint="$(env_get "$ENV_RESULT" APPLE_RECEIVER_ENDPOINT_URI)"
@@ -2254,7 +2514,7 @@ summary() {
       say "    Receiver: set APPLE_RECEIVER_ENDPOINT_URI=https://<your host>/webhooks/apple-health in .env" \
         "    Alıcı: .env içinde APPLE_RECEIVER_ENDPOINT_URI=https://<adresiniz>/webhooks/apple-health ayarlayın"
     fi
-    if [ -n "$APPLE_TOKEN_NEW" ]; then
+    if [ -n "$APPLE_TOKEN_NEW" ] && on_terminal; then
       say "    Add this header to the Health Auto Export REST API automation (shown once):" \
         "    Bu başlığı Health Auto Export REST API otomasyonuna ekleyin (bir kez gösterilir):"
       printf '      Authorization: Bearer %s\n' "$APPLE_TOKEN_NEW"
@@ -2271,6 +2531,10 @@ summary() {
     [ -z "$BACKUP_PUBKEY" ] || printf '  %s %s\n' "$(t 'Public key:' 'Açık anahtar:')" "$BACKUP_PUBKEY"
     say "  Backups are kept forever in BACKUP_HOST_DIR (default ./backups); copy them off the machine as well." \
       "  Yedekler BACKUP_HOST_DIR içinde (varsayılan ./backups) sonsuza dek saklanır; onları da makine dışına kopyalayın."
+  fi
+  if [ "$ENV_BACKUP_COUNT" -gt 0 ]; then
+    say "  .env backups of this checkout: $ENV_BACKUP_COUNT in $(env_backup_dir) (kept forever; older .env.bak-* files next to .env stay too)." \
+      "  Bu kurulumun .env yedekleri: $ENV_BACKUP_COUNT adet, $(env_backup_dir) içinde (silinmez; .env yanındaki eski .env.bak-* dosyaları da durur)."
   fi
   if [ -n "$NOTES" ]; then
     say "" ""
@@ -2323,7 +2587,9 @@ main() {
     exit 0
   fi
   write_env
+  mask_in_ci "$(env_get "$ENV_RESULT" APP_UI_TOKEN)"
   apple_token_setup
+  mask_in_ci "$APPLE_TOKEN_NEW"
   garmin_share
   start_stack
   host_jobs

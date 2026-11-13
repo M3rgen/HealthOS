@@ -9,7 +9,9 @@ from app.db.session import get_session
 from app.main import create_app
 from app.models.health import SleepSession, Steps, Weight
 from app.models.state import RawHealthData
-from app.services.dashboard import dashboard_data, sleep_total
+from app.services.dashboard_views.dashboard import dashboard_data
+from app.services.interpretation.sleep_estimate import sleep_total
+from app.services.readers.dashboard_queries import DashboardQuery
 
 
 def instant(value):
@@ -90,7 +92,10 @@ async def test_dashboard_civil_days_daily_sources_and_quarantine(sessions):
             ]
         )
         await session.commit()
-        data = await dashboard_data(session, date(2026, 9, 29), 3, "Europe/Paris")
+        data = await dashboard_data(
+            session,
+            query=DashboardQuery(date(2026, 9, 29), 3, "Europe/Paris"),
+        )
     assert [row["steps"] for row in data["days"]] == [300, 300, None]
     assert data["charts"]["steps"][0] == 300
     assert data["days"][0]["sleep_seconds"] == 27000
@@ -125,7 +130,10 @@ async def test_dst_fallback_day_contains_both_repeated_hours(sessions):
         )
         session.add(raw_steps("dst", "2025-10-25T22:00:00", "2025-10-26T23:00:00", 2500))
         await session.commit()
-        data = await dashboard_data(session, date(2025, 10, 26), 1, "Europe/Paris")
+        data = await dashboard_data(
+            session,
+            query=DashboardQuery(date(2025, 10, 26), 1, "Europe/Paris"),
+        )
     assert data["days"][0]["steps"] == 2500
     assert data["charts"]["steps"][2] == 200
     assert sum(data["charts"]["steps"]) == 2500
@@ -143,7 +151,10 @@ async def test_fractional_offset_midnight_is_split_at_local_boundary(sessions):
         )
         session.add(raw_steps("fractional", "2026-09-28T18:00:00", "2026-09-28T19:00:00", 600))
         await session.commit()
-        data = await dashboard_data(session, date(2026, 9, 29), 2, "Asia/Kolkata")
+        data = await dashboard_data(
+            session,
+            query=DashboardQuery(date(2026, 9, 29), 2, "Asia/Kolkata"),
+        )
     assert [row["steps"] for row in data["days"]] == [300, 300]
     assert data["charts"]["steps"][0] == 300
 
@@ -200,10 +211,9 @@ async def test_weight_corrections_select_current_valid_profile(
 ):
     from derived_records import DAY, T0, manual, snapshot, store
 
-    from app.services import codex_health
-    from app.services.manual_flags import record_flag
+    from app.services.archive.manual_flags import record_flag
+    from app.services.umay import codex_health
 
-    monkeypatch.setattr(codex_health, "SessionLocal", sessions)
     await store(sessions, "weight", weight())
     if fallback != "none":
         await store(sessions, "weight", weight("other", 68000, T0 - timedelta(days=1)))
@@ -243,7 +253,7 @@ async def test_weight_corrections_select_current_valid_profile(
             assert response.status_code == 200, response.text
             profile = response.json()["profile"]
             daily = await codex_health.read_health(
-                {"action": "daily", "start_date": str(DAY), "end_date": str(DAY)}
+                sessions, {"action": "daily", "start_date": str(DAY), "end_date": str(DAY)}
             )
             for item in (daily["profile"], profile):
                 for measurement in item.values():
@@ -282,7 +292,7 @@ async def test_weight_corrections_select_current_valid_profile(
     ],
 )
 def test_current_weight_uses_finite_conversion_and_supported_times(grams, expected):
-    from app.services.current_weight import current_weight
+    from app.services.readers.current_weight import current_weight
 
     record = weight(grams=grams)
     for temporal in (
@@ -336,7 +346,7 @@ async def test_latest_weight_reads_past_more_invalid_corrections_than_one_batch(
     from derived_records import T0, store
 
     from app.models.eligibility import normalized_counted
-    from app.services.current_weight import latest_weight
+    from app.services.readers.current_weight import latest_weight
 
     # Newer invalid corrections keep their old Weight rows; no total cap may hide
     # the older valid measurement behind several batches of them.
@@ -362,7 +372,7 @@ def test_unrepresentable_window_is_a_domain_error_not_http(window):
 
     from fastapi import HTTPException
 
-    from app.services import dashboard_window
+    from app.services.readers import dashboard_window
 
     # The service layer knows nothing of HTTP; the API layer turns this into 422.
     with pytest.raises(dashboard_window.DateWindowError) as raised:

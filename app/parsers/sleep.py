@@ -5,7 +5,7 @@ from datetime import datetime
 from decimal import Context, Decimal, DecimalException, InvalidOperation, Underflow, localcontext
 from math import isfinite
 
-from app.parsers import numeric
+from app.core import normalization as numeric
 from app.parsers.common import parse_datetime
 
 SLEEP_NUMERIC_ERROR = "numeric_overflow:sleep_estimate"
@@ -29,7 +29,7 @@ def sleep_minutes_seconds(value: object) -> Decimal | None:
         return _finite_seconds(minutes * 60) if minutes is not None else None
 
 
-def _sleep_stages(payload: dict, *, strict: bool = False) -> dict[str, Decimal]:
+def sleep_stages(payload: dict, *, strict: bool = False) -> dict[str, Decimal]:
     """Keep invalid read totals as NaN evidence; writes reject them instead.
 
     Readers must validate the totals they use. This preserves independent sound
@@ -45,19 +45,7 @@ def _sleep_stages(payload: dict, *, strict: bool = False) -> dict[str, Decimal]:
         try:
             with localcontext(Context()) as context:
                 context.traps[Underflow] = True
-                if minutes:
-                    value = numeric.number(entry.get("minutes"))
-                    duration = value * 60 if value is not None else None
-                else:
-                    supplied = entry.get("duration")
-                    if supplied is None:
-                        supplied = entry.get("durationSeconds")
-                    duration = numeric.duration_seconds(supplied)
-                    if duration is None:
-                        start = parse_datetime(entry.get("startTime"))
-                        end = parse_datetime(entry.get("endTime"))
-                        if start and end:
-                            duration = Decimal(str((end - start).total_seconds()))
+                duration = _stage_duration(entry, minutes)
                 if duration is not None:
                     _finite_seconds(duration)
                     total = totals.get(name, Decimal(0)) + duration
@@ -82,6 +70,20 @@ def _sleep_stages(payload: dict, *, strict: bool = False) -> dict[str, Decimal]:
             if isinstance(entry, dict):
                 add(entry)
     return totals
+
+
+def _stage_duration(entry: dict, minutes: bool) -> Decimal | None:
+    if minutes:
+        return sleep_minutes_seconds(entry.get("minutes"))
+    supplied = entry.get("duration")
+    if supplied is None:
+        supplied = entry.get("durationSeconds")
+    duration = numeric.duration_seconds(supplied)
+    if duration is not None:
+        return duration
+    start = parse_datetime(entry.get("startTime"))
+    end = parse_datetime(entry.get("endTime"))
+    return Decimal(str((end - start).total_seconds())) if start and end else None
 
 
 def sleep_period_seconds(payload: dict, start: datetime, end: datetime) -> tuple[Decimal, bool]:
@@ -125,7 +127,7 @@ def sleep_asleep_seconds(payload: dict, start: datetime, end: datetime) -> Sleep
             if asleep is not None:
                 return SleepAsleep(asleep, period)
             assumptions = ("duration_from_payload",) if supplied else ()
-            stages = _sleep_stages(payload)
+            stages = sleep_stages(payload)
             if not stages:
                 return SleepAsleep(None, period, (*assumptions, "awake_unknown"))
             awake = stages["awake"] if "awake" in stages else stages.get("wake")

@@ -13,7 +13,7 @@ from identity_records import STEPS, fitbit, steps, store
 
 from app.core.providers import APPLE, GOOGLE
 from app.models.apple import AppleSource
-from app.services.devices import (
+from app.services.dashboard_views.devices import (
     CONNECTED,
     DELAYED,
     DISCONNECTED,
@@ -21,7 +21,7 @@ from app.services.devices import (
     attach_apple,
     device_report,
 )
-from app.services.source_precedence import Policy
+from app.services.identities.source_precedence import Policy
 
 NOW = datetime(2026, 11, 7, 12, 0, tzinfo=UTC)
 WATCH_SOURCE = {

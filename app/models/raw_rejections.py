@@ -8,7 +8,7 @@ refused, including replica sessions):
   (``response_id``, one row per HTTP exchange, never merged); ``element_json`` is the parsed
   record with ASCII escapes (U+0000, lone surrogates and NaN/Infinity survive as escapes,
   never sanitized), the only copy when a caller had no HTTP response.
-* ``raw_rejection_acks``: the maintainer's ``health-mirror rejections --ack <id>``: every
+* ``raw_rejection_acks``: the maintainer's ``healthos rejections --ack <id>``: every
   rejection up to that id has been looked at. Health is green again until a new record is
   rejected.
 * ``retrieval_event_rejections``: how many records of a retrieval page were rejected; kept
@@ -21,7 +21,6 @@ migration lock those tables. The ids are plain references.
 from datetime import datetime
 
 from sqlalchemy import (
-    DDL,
     BigInteger,
     CheckConstraint,
     DateTime,
@@ -30,23 +29,20 @@ from sqlalchemy import (
     LargeBinary,
     String,
     UniqueConstraint,
-    event,
     func,
     text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
-
-# Register the shared refusal function before this module's trigger listeners.
-import app.models.raw_versions  # noqa: E402, F401  isort: skip
+from app.db.guards import GuardSet
 
 REJECTIONS = "raw_health_data_rejections"
 ACKS = "raw_rejection_acks"
 EVENT_COUNTS = "retrieval_event_rejections"
 TABLES = (REJECTIONS, ACKS, EVENT_COUNTS)
 REASON = "jsonb_unrepresentable"
-_ID = BigInteger().with_variant(Integer(), "sqlite")
+_ID = BigInteger()
 
 
 class RawHealthDataRejection(Base):
@@ -62,7 +58,6 @@ class RawHealthDataRejection(Base):
             "ordinal",
             "element_sha256",
             unique=True,
-            sqlite_where=text("response_id IS NULL"),
             postgresql_where=text("response_id IS NULL"),
         ),
         Index("ix_raw_health_data_rejections_element", "data_type", "element_sha256"),
@@ -104,38 +99,9 @@ class RetrievalEventRejection(Base):
     rejected_count: Mapped[int] = mapped_column(Integer)
 
 
-PG_TRIGGER_SQL = {}
-PROTECTIVE_TRIGGERS = []
-SQLITE_TRIGGER_SQL = {}
+GUARDS = GuardSet()
 for _table in TABLES:
-    for _suffix, _events, _level in (
-        ("append_only", "UPDATE OR DELETE", "ROW"),
-        ("no_truncate", "TRUNCATE", "STATEMENT"),
-    ):
-        _name = f"{_table}_{_suffix}"
-        PG_TRIGGER_SQL[_name] = (
-            _table,
-            f"CREATE TRIGGER {_name}\nBEFORE {_events} ON {_table} FOR EACH {_level}\n"
-            "EXECUTE FUNCTION healthos_refuse_change()",
-        )
-        PROTECTIVE_TRIGGERS.append((_table, _name, "healthos_refuse_change"))
-    for _operation in ("UPDATE", "DELETE"):
-        _name = f"{_table}_no_{_operation.lower()}"
-        SQLITE_TRIGGER_SQL[_name] = (
-            _table,
-            f"CREATE TRIGGER {_name}\nBEFORE {_operation} ON {_table}\nBEGIN\n"
-            f"    SELECT RAISE(ABORT, '{_table} keeps every record: {_operation} refused');\nEND",
-        )
-# healthos_refuse_change() belongs to 0011 and is verified with its other guards.
-FUNCTION_BODIES: dict[str, str] = {}
-POSTGRESQL_DDL = (
-    *(sql for _, sql in PG_TRIGGER_SQL.values()),
-    *(
-        f"ALTER TABLE {table} ENABLE ALWAYS TRIGGER {name}"
-        for table, name, _ in PROTECTIVE_TRIGGERS
-    ),
-)
-SQLITE_DDL = tuple(sql for _, sql in SQLITE_TRIGGER_SQL.values())
-for _dialect, _statements in (("postgresql", POSTGRESQL_DDL), ("sqlite", SQLITE_DDL)):
-    for _statement in _statements:
-        event.listen(Base.metadata, "after_create", DDL(_statement).execute_if(dialect=_dialect))
+    GUARDS.append_only(_table)
+
+FUNCTION_BODIES = GUARDS.functions
+POSTGRESQL_DDL = GUARDS.postgresql_ddl

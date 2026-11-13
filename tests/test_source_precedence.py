@@ -11,8 +11,8 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from app.core.config import Settings
-from app.services import source_precedence as sp
-from app.services.source_precedence import (
+from app.services.identities import source_precedence as sp
+from app.services.identities.source_precedence import (
     ACTIVITY,
     HEALTH,
     MANUAL,
@@ -22,7 +22,6 @@ from app.services.source_precedence import (
     Observation,
     Policy,
     resolve,
-    resolve_daily,
     resolve_samples,
     resolve_sessions,
     sample_category,
@@ -76,23 +75,27 @@ def test_configuration_rejects_an_empty_or_malformed_precedence(value):
 
 
 def test_daily_conflict_selects_by_policy_and_keeps_the_other_value_unsummed():
-    both = {"FITBIT": 8000, "GARMIN": 7400}
-    health = resolve_daily("steps", both, DEFAULT)
+    both = [Observation("FITBIT", 8000), Observation("GARMIN", 7000, provider="GARMIN")]
+    health = resolve("steps", both, DEFAULT)
     assert health.value == 8000 and health.selected.source == "FITBIT"
-    assert [item.value for item in health.alternatives] == [7400]
+    assert [item.value for item in health.alternatives] == [7000]
     assert health.as_dict() == {
         "source": "FITBIT",
         "label": "Fitbit",
-        "alternatives": [{"source": "GARMIN", "label": "Garmin", "value": 7400}],
+        "alternatives": [{"source": "GARMIN", "label": "Garmin", "value": 7000}],
     }
     # Reversing the policy changes the selection, not the set of observations.
-    reversed_ = resolve_daily("steps", both, REVERSED)
-    assert reversed_.value == 7400 and [i.value for i in reversed_.alternatives] == [8000]
-    assert {health.value, *(i.value for i in health.alternatives)} == set(both.values())
+    reversed_ = resolve("steps", both, REVERSED)
+    assert reversed_.value == 7000 and [i.value for i in reversed_.alternatives] == [8000]
+    assert {health.value, *(i.value for i in health.alternatives)} == {item.value for item in both}
     # A source without a value is not an alternative; no value at all is no selection.
-    only_garmin = resolve_daily("steps", {"FITBIT": None, "GARMIN": 7400}, DEFAULT)
-    assert only_garmin.value == 7400 and only_garmin.alternatives == ()
-    assert resolve_daily("steps", {}, DEFAULT).as_dict()["source"] is None
+    only_garmin = resolve(
+        "steps",
+        [Observation("FITBIT", None), Observation("GARMIN", 7000, provider="GARMIN")],
+        DEFAULT,
+    )
+    assert only_garmin.value == 7000 and only_garmin.alternatives == ()
+    assert resolve("steps", [], DEFAULT).as_dict()["source"] is None
 
 
 def test_activity_metrics_take_the_activity_order():

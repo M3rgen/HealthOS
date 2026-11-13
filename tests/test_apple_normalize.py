@@ -46,8 +46,8 @@ from app.models.health import (
     Vo2Max,
     Weight,
 )
-from app.services import apple_archive
-from app.services.apple_normalize import normalize_archive, normalize_records, sleep_stage
+from app.services.providers import apple_archive
+from app.services.providers.apple_normalize import normalize_archive, normalize_records, sleep_stage
 
 T = datetime(2026, 11, 6, 7, 0, tzinfo=PLUS_ONE)
 

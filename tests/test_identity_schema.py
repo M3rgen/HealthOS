@@ -1,4 +1,4 @@
-"""Import compatibility for the extracted identity schema verification."""
+"""Schema verification belongs to its defining module, independent of orchestration."""
 
 import importlib
 import subprocess
@@ -12,10 +12,10 @@ def test_schema_import_does_not_load_identity_or_backfill() -> None:
         [
             sys.executable,
             "-c",
-            "from app.services import identity_schema; "
+            "from app.services.identities import identity_schema; "
             "import sys; "
-            "assert 'app.services.identity' not in sys.modules; "
-            "assert 'app.services.identity_backfill' not in sys.modules",
+            "assert 'app.services.identities.identity' not in sys.modules; "
+            "assert 'app.services.identities.identity_backfill' not in sys.modules",
         ],
         capture_output=True,
         text=True,
@@ -31,14 +31,13 @@ def test_schema_import_does_not_load_identity_or_backfill() -> None:
         "verify_identity_schema",
         "verify_views",
         "EXPECTED_CONSTRAINTS",
-        "_VIEWS_SQL",
     ],
 )
-def test_legacy_exports_are_the_extracted_implementations(name: str) -> None:
-    schema = importlib.import_module("app.services.identity_schema")
-    legacy = importlib.import_module("app.services.identity")
+def test_schema_exports_have_no_legacy_facade_copy(name: str) -> None:
+    schema = importlib.import_module("app.services.identities.identity_schema")
+    legacy = importlib.import_module("app.services.identities.identity")
     exported = getattr(schema, name)
 
-    assert getattr(legacy, name) is exported
+    assert not hasattr(legacy, name)
     if callable(exported):
         assert exported.__module__ == schema.__name__

@@ -29,7 +29,7 @@ const hooks = registerHooks({
 const body = await import(bodyURL);
 hooks.deregister();
 
-function environment(t, { unavailable = false } = {}) {
+function environment(t, { unavailable = false, clientHeight = 500 } = {}) {
   const events = () => ({
     listeners: new Map(),
     addEventListener(type, callback) { this.listeners.set(type, callback); },
@@ -38,10 +38,20 @@ function environment(t, { unavailable = false } = {}) {
   });
   const win = { ...events(), devicePixelRatio: 2 }, reduced = { ...events(), matches: false };
   const canvas = { getContext: () => ({ createRadialGradient: () => ({ addColorStop() {} }), fillRect() {} }) };
-  const doc = { hidden: false, createElement: () => canvas };
+  const node = name => ({
+    attributes: new Map(), children: [],
+    set className(value) { this.attributes.set('class', value); },
+    setAttribute(key, value) { this.attributes.set(key, value); },
+    append(child) { this.children.push(child); },
+    get outerHTML() {
+      const attributes = [...this.attributes].map(([key, value]) => ` ${key}="${value}"`).join('');
+      return `<${name}${attributes}>${this.children.map(child => child.outerHTML).join('')}</${name}>`;
+    },
+  });
+  const doc = { ...events(), hidden: false, createElement: name => name === 'canvas' ? canvas : node(name), createElementNS: (_, name) => node(name) };
   const renderer = {
-    domElement: { remove: t.mock.fn() }, shadowMap: {}, capabilities: { getMaxAnisotropy: () => 16 },
-    setPixelRatio: t.mock.fn(), setClearColor() {}, setSize: t.mock.fn(), dispose: t.mock.fn(),
+    domElement: { remove: t.mock.fn(), addEventListener() {}, removeEventListener() {} }, shadowMap: {}, capabilities: { getMaxAnisotropy: () => 16 },
+    setPixelRatio: t.mock.fn(), setClearColor() {}, setSize: t.mock.fn(), dispose: t.mock.fn(), forceContextLoss: t.mock.fn(),
     render: t.mock.fn(), setAnimationLoop(callback) { this.frame = callback; },
   };
   let resize, modelRequest;
@@ -66,7 +76,8 @@ function environment(t, { unavailable = false } = {}) {
     return texture;
   });
   t.mock.method(GLTFLoader.prototype, 'load', (url, complete, progress, fail) => { modelRequest = { url, complete, fail }; });
-  const container = { dataset: {}, clientWidth: 300, clientHeight: 500, append: t.mock.fn(), getClientRects: () => [{}] };
+  const container = { dataset: {}, clientWidth: 300, clientHeight, append: t.mock.fn(), getClientRects: () => [{}],
+    replaceChildren(...children) { this.innerHTML = children.map(child => child.outerHTML).join(''); } };
   const controller = body.createBody(container, true);
   t.after(() => controller.dispose());
   return { controller, container, renderer, textures, reduced, win, doc, observer, envDispose,
@@ -99,7 +110,8 @@ test('body.js retains exactly its public exports, including the original calcula
 });
 
 test('viewer applies pending metrics, metadata relief, material conversion, tween and motion controls', t => {
-  const env = environment(t), asset = model(t);
+  // Tall enough at creation that the skin detail is requested (see the threshold test below).
+  const env = environment(t, { clientHeight: 600 }), asset = model(t);
   const { controller, container, renderer, reduced } = env;
   assert.deepEqual(Object.keys(controller).sort(), ['dispose', 'setBodyMetrics', 'setMotion']);
   assert.equal(env.request.url, '/models/body.d736859b.glb');
@@ -107,6 +119,7 @@ test('viewer applies pending metrics, metadata relief, material conversion, twee
   assert.deepEqual([...env.textures.keys()], [
     '/assets/3d/pedestal-glow.webp', '/assets/skin/skin-detail-normal.webp', '/assets/skin/skin-detail-roughness.webp',
   ]);
+  container.clientHeight = 500;
   controller.setBodyMetrics({ bodyFatPct: 27.5, musclePct: 44, heightCm: 210 });
   env.request.complete({ scene: asset.scene });
   assert.equal(container.dataset.modelLoaded, 'true');
@@ -146,7 +159,7 @@ test('viewer applies pending metrics, metadata relief, material conversion, twee
   assert.equal(container.dataset.rotationDegrees, '0.0');
   controller.dispose(); controller.dispose();
   assert.equal(renderer.frame, null);
-  for (const fn of [renderer.dispose, renderer.domElement.remove, env.observer.disconnect, env.envDispose,
+  for (const fn of [renderer.forceContextLoss, renderer.dispose, renderer.domElement.remove, env.observer.disconnect, env.envDispose,
     asset.normalDispose, asset.geometryDispose, detail.dispose]) assert.equal(fn.mock.calls.length, 1);
   assert.equal(env.win.listeners.size + reduced.listeners.size, 0);
   const late = env.textures.get('/assets/skin/skin-detail-roughness.webp');
@@ -183,4 +196,55 @@ test('unavailable WebGL keeps all controller methods callable on the static silh
   env.controller.setMotion(false);
   env.controller.dispose(); env.controller.dispose();
   assert.equal(env.container.append.mock.calls.length, 0);
+});
+
+test('skin micro-detail is requested only for a figure drawn large enough to show it', t => {
+  const env = environment(t, { clientHeight: 400 });
+  // 400 CSS px at the 1.75 pixel-ratio cap: 700 device pixels, under the 1000 threshold.
+  assert.deepEqual([...env.textures.keys()], ['/assets/3d/pedestal-glow.webp']);
+  env.container.clientHeight = 600;
+  env.resize();
+  assert.deepEqual([...env.textures.keys()], [
+    '/assets/3d/pedestal-glow.webp', '/assets/skin/skin-detail-normal.webp', '/assets/skin/skin-detail-roughness.webp',
+  ]);
+  const requested = env.textures.size;
+  env.resize();
+  assert.equal(env.textures.size, requested, 'requested once');
+  env.controller.dispose();
+});
+
+test('still viewer releases its animation loop and wakes for a metric edit', t => {
+  const env = environment(t), asset = model(t);
+  env.request.complete({ scene: asset.scene });
+  env.controller.setMotion(false);
+  env.renderer.frame(1000);
+  assert.equal(env.renderer.frame, null, 'no rAF callback remains while still');
+  const draws = env.renderer.render.mock.calls.length;
+  for (let time = 1016; time <= 3016; time += 16) env.renderer.frame?.(time);
+  assert.equal(env.renderer.render.mock.calls.length - draws, 0, 'zero draws across two seconds');
+  env.controller.setBodyMetrics({ bodyFatPct: 35 });
+  assert.equal(typeof env.renderer.frame, 'function', 'an edit wakes the morph clock');
+  for (const time of [3100, 3400, 3700]) env.renderer.frame(time);
+  assert.equal(env.container.dataset.morphFat, '1.000');
+  assert.equal(env.renderer.frame, null, 'the completed morph releases the loop again');
+  env.controller.dispose();
+});
+
+test('hidden document stops rotation immediately and visible document resumes it', t => {
+  const env = environment(t);
+  env.request.complete({ scene: model(t).scene });
+  for (const time of [1000, 1100, 1200, 1300, 1400, 1500, 1600]) env.renderer.frame(time);
+  const rotation = env.container.dataset.rotationDegrees;
+  const draws = env.renderer.render.mock.calls.length;
+  env.doc.hidden = true; env.doc.emit('visibilitychange');
+  assert.equal(env.renderer.frame, null);
+  for (let time = 1116; time <= 3116; time += 16) env.renderer.frame?.(time);
+  assert.equal(env.renderer.render.mock.calls.length, draws);
+  env.doc.hidden = false; env.doc.emit('visibilitychange');
+  env.renderer.frame(4000);
+  assert.equal(env.container.dataset.rotationDegrees, rotation, 'background time is not rotated');
+  env.renderer.frame(4100); env.renderer.frame(4200);
+  assert.notEqual(env.container.dataset.rotationDegrees, rotation);
+  env.controller.dispose();
+  assert.equal(env.doc.listeners.size, 0);
 });

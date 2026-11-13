@@ -8,9 +8,10 @@ from fastapi.responses import Response
 from fastapi.routing import APIRoute
 
 from app.core.config import Settings
+from app.core.cookie_security import request_scheme
 from app.core.host_validation import hostname
 from app.core.request_limits import RequestBudget
-from app.services.runtime import Runtime
+from app.runtime import Runtime
 
 
 def runtime(request: Request) -> Runtime:
@@ -52,11 +53,21 @@ class ManualWriteRoute(APIRoute):
         async def bounded_handler(request: Request) -> Response:
             require_budget(request.app.state.write_limits.manual)
             # FastAPI's normal handler calls body()/json() before solving dependencies.
-            # Cache the bounded original bytes, retaining its schemas and 422 responses.
-            request._body = await bounded_body(
+            # Replay the bounded bytes through Request's public ASGI receive interface,
+            # retaining the scope, dependency state, schemas and 422 responses.
+            body = await bounded_body(
                 request, settings(request).manual_write_max_body_bytes, "İstek gövdesi çok büyük."
             )
-            return await handler(request)
+            delivered = False
+
+            async def receive():
+                nonlocal delivered
+                if not delivered:
+                    delivered = True
+                    return {"type": "http.request", "body": body, "more_body": False}
+                return await request.receive()
+
+            return await handler(Request(request.scope, receive=receive))
 
         return bounded_handler
 
@@ -82,7 +93,8 @@ def require_job_request(
     if len(origins) == 1:
         try:
             origin = urlsplit(origins[0])
-            target = urlsplit(f"{request.url.scheme}://{request.headers.get('host', '')}")
+            scheme = request_scheme(request, settings(request))
+            target = urlsplit(f"{scheme}://{request.headers.get('host', '')}")
             default_port = 443 if target.scheme == "https" else 80
             valid = (
                 origin.scheme in {"http", "https"}

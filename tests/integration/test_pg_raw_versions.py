@@ -14,6 +14,7 @@ from sqlalchemy import create_engine, func, select, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from support.waits import blocked_on_a_lock
 
 from app.core.config import Settings
 from app.google_health.client import Page
@@ -21,10 +22,13 @@ from app.google_health.data_types import REGISTRY
 from app.models.raw_versions import RawHealthDataVersion
 from app.models.state import OAuthToken, RawHealthData
 from app.parsers.common import payload_hash
-from app.services.raw_history import import_versions, record_history, verify_versions
-from app.services.storage import store_records
-from app.services.webhook_processing import WebhookBatchProcessor
+from app.services.archive.raw_history import record_history
+from app.services.archive.raw_history_import import import_versions
+from app.services.archive.raw_history_verification import verify_versions
+from app.services.archive.storage import store_records
+from app.services.providers.ingestion import GoogleSource
 from app.sync.incremental import IncrementalSync
+from app.sync.webhook_processing import WebhookBatchProcessor
 
 pytestmark = pytest.mark.integration
 
@@ -103,8 +107,8 @@ async def test_concurrent_writers_lose_no_payload(database_url, pg_sessions) -> 
             # Both writers read version 1 as the stored payload before either writes.
             await store_records(first, SPEC, [steps(2)])
             second = asyncio.create_task(store(other, steps(3)))
-            await asyncio.sleep(0.3)
-            assert not second.done()  # waiting for the row lock held by `first`
+            await blocked_on_a_lock(pg_sessions, second)  # the row lock held by `first`
+            assert not second.done()
         await second
         # Two brand-new records racing on the unique key: the loser becomes version 2.
         fresh = "users/me/dataTypes/steps/dataPoints/fresh"
@@ -131,7 +135,7 @@ async def test_sync_and_webhook_paths_are_versioned(pg_sessions) -> None:
 
     client = Client()
     incremental = IncrementalSync(
-        Settings(_env_file=None, app_env="test"), pg_sessions, client, {"steps": SPEC}
+        Settings(_env_file=None, app_env="test"), pg_sessions, GoogleSource(client), {"steps": SPEC}
     )
     client.pages = [Page([steps(10)], None)]
     await incremental.run("steps")

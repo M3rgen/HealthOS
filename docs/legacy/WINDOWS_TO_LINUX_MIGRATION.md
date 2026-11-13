@@ -1,9 +1,9 @@
 # Windows-to-Linux migration runbook (legacy)
 
-> **Legacy document.** The supported deployment is the Linux VM in [DEPLOYMENT.md](../DEPLOYMENT.md)
+> **Legacy document.** The supported deployment is the Linux server in [DEPLOYMENT.md](../DEPLOYMENT.md)
 > and day-to-day procedures are in [RUNBOOK.md](../RUNBOOK.md). This staged cutover plan is kept for
 > anyone moving an existing Windows/Docker Desktop installation; see also [WINDOWS.md](WINDOWS.md).
-> Backups are now taken with `scripts/backup.sh` (encrypted) and checked with `scripts/restore.sh`.
+> Backups are taken with `scripts/backup.sh` (encrypted) and checked with `scripts/restore.sh`.
 
 This is a planning document, not authorization to migrate. Replace every placeholder only after the
 target host is known. Preserve the existing database volume and public webhook URL throughout.

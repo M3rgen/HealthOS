@@ -6,8 +6,9 @@ import asyncio
 
 import httpx
 
+from app.core.response_close import cancel_closes
 from app.google_health import response_decode
-from app.google_health.response_close import cancel_closes, close_response
+from app.google_health.response_close import close_response
 
 MAX_TOKEN_WIRE_BYTES = 1024 * 1024
 MAX_TOKEN_DECODED_BYTES = 1024 * 1024
@@ -41,7 +42,8 @@ async def read_token_body(response: httpx.Response, deadline: float) -> bytes:
     try:
         # Iterate the raw stream directly: aiter_bytes inflates without a cap,
         # aiter_raw closes at EOF before we can bound that close separately.
-        assert isinstance(response.stream, httpx.AsyncByteStream)
+        if not isinstance(response.stream, httpx.AsyncByteStream):
+            raise RuntimeError("Expected an asynchronous response stream")
         async for chunk in response.stream:
             if len(chunk) > MAX_TOKEN_WIRE_BYTES - len(body):
                 # Do not retain the excess chunk or request the following one.

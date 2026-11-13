@@ -3,10 +3,17 @@ const assert = require('node:assert/strict');
 const fx = require('../../../frontend/preview/fixtures.cjs');
 const { STEP_TIMEOUT } = require('../lib.cjs');
 
+// The page is contained when neither the document, <main> nor the visible .page section scrolls.
 async function contained(page) {
-  const size = await page.evaluate(() => ({ width: innerWidth, height: innerHeight,
-    x: document.scrollingElement.scrollWidth, y: document.scrollingElement.scrollHeight }));
+  const size = await page.evaluate(() => {
+    const over = el => el ? { x: el.scrollWidth - el.clientWidth, y: el.scrollHeight - el.clientHeight } : { x: 0, y: 0 };
+    return { width: innerWidth, height: innerHeight,
+      x: document.scrollingElement.scrollWidth, y: document.scrollingElement.scrollHeight,
+      main: over(document.querySelector('main')), page: over(document.querySelector('.page:not([hidden])')) };
+  });
   assert(size.x <= size.width && size.y <= size.height, JSON.stringify(size));
+  assert(size.main.x <= 1 && size.main.y <= 1, JSON.stringify(size));
+  assert(size.page.x <= 1 && size.page.y <= 1, JSON.stringify(size));
 }
 
 async function visibleFocus(page) {
@@ -135,4 +142,15 @@ async function mock(page) {
   return state;
 }
 
-module.exports = { mock, tabTo, active, visibleFocus, contained, scrollKey };
+// ≤900 px the overview shows one card at a time (overview-tabs.js). Reaches the selected tab by
+// keyboard and moves to the card `key` (profile, connection, steps, sleep, heart) with the arrow
+// keys; a no-op where every card is shown.
+async function showCard(page, key, reverse = false) {
+  if (!(await page.locator('.overview-tabs').isVisible())) return;
+  await tabTo(page, '.overview-tab[aria-selected="true"]', reverse);
+  for (let i = 0; i < 5 && !(await active(page, `#overview-tab-${key}`)); i++) await page.keyboard.press('ArrowRight');
+  assert(await active(page, `#overview-tab-${key}`), `overview tab ${key} not reached`);
+  await visibleFocus(page);
+}
+
+module.exports = { mock, tabTo, active, visibleFocus, contained, scrollKey, showCard };

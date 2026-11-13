@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy.ext.asyncio import async_sessionmaker
@@ -11,9 +12,9 @@ from app.core.logging import event
 from app.core.provenance import provenance
 from app.google_health.client import RetryDeferredError
 from app.google_health.pagination import PaginationPaused
-from app.services import reconciliation_reports as reports
-from app.services.pipeline_health import update_reliability_state
-from app.services.storage import StoreStats
+from app.services.archive.storage import StoreStats
+from app.services.synchronization import reconciliation_reports as reports
+from app.services.synchronization.pipeline_health import update_reliability_state
 from app.sync.errors import is_transient
 from app.sync.incremental import IncrementalSync
 
@@ -27,7 +28,7 @@ class ReconciliationService:
         self,
         incremental: IncrementalSync,
         sessions: async_sessionmaker | None = None,
-        sleep=asyncio.sleep,
+        sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     ):
         self.incremental = incremental
         self.sleep = sleep
@@ -80,13 +81,15 @@ class ReconciliationService:
                     logger.warning("Reconciliation outcome was not persisted")
             raise
 
-    async def _fetch(self, days, start, end, run_id) -> dict:
+    async def _fetch(
+        self, days: int, start: datetime, end: datetime, run_id: uuid.UUID
+    ) -> dict[str, StoreStats | Exception]:
         if self.sessions:
             await update_reliability_state(self.sessions, last_reconciliation_started_at=end)
         event(logger, "RECONCILIATION_STARTED", days=days)
         # A shared credential failure must fail the run once, rather than repeating
         # the same refresh (and its backoff) for every configured data type.
-        await self.incremental.client.warm_up()
+        await self.incremental.source.warm_up()
         results = {}
         pending = list(self.incremental.specs)
         for final_pass in (False, True):
@@ -116,7 +119,9 @@ class ReconciliationService:
         )
         return results
 
-    async def _fetch_type(self, data_type, days, start, end, run_id):
+    async def _fetch_type(
+        self, data_type: str, days: int, start: datetime, end: datetime, run_id: uuid.UUID
+    ) -> StoreStats | Exception:
         spec = self.incremental.specs[data_type]
         if self.sessions:
             await reports.start_type(self.sessions, run_id, data_type)

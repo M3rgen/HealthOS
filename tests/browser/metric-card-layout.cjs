@@ -1,6 +1,6 @@
 // Synthetic fixtures; no live account records.
 const assert = require('node:assert/strict');
-const { BASE, launch, shot, run } = require('./lib.cjs');
+const { BASE, launch, shot, run, showCard } = require('./lib.cjs');
 
 run(async () => {
   const browser = await launch();
@@ -50,13 +50,18 @@ run(async () => {
         assert(size.scrollHeight <= size.height && size.scrollWidth <= size.width, JSON.stringify(size));
       }
       await assertNoPageScroll();
-      const cards = await page.locator('.metric-card').evaluateAll(elements => elements.map(card => {
-        const bounds = card.getBoundingClientRect();
-        const chart = card.querySelector('.chart').getBoundingClientRect();
-        const axis = card.querySelector('.chart-axis').getBoundingClientRect();
-        return { height: bounds.height, chartHeight: chart.height,
-          contained: chart.top >= bounds.top && chart.bottom <= bounds.bottom && axis.bottom <= bounds.bottom };
-      }));
+      // ≤900 px shows one card at a time (overview tabs): measure each card while it is shown.
+      const cards = [];
+      for (const key of ['steps', 'sleep', 'heart']) {
+        await showCard(page, key);
+        cards.push(await page.locator(`.${key}-card`).evaluate(card => {
+          const bounds = card.getBoundingClientRect();
+          const chart = card.querySelector('.chart').getBoundingClientRect();
+          const axis = card.querySelector('.chart-axis').getBoundingClientRect();
+          return { height: bounds.height, chartHeight: chart.height,
+            contained: chart.top >= bounds.top && chart.bottom <= bounds.bottom && axis.bottom <= bounds.bottom };
+        }));
+      }
       assert(cards.every(card => card.contained && card.chartHeight >= 24), JSON.stringify({ width, height, cards }));
       const toggle = page.locator('#history-toggle');
       assert.equal((await toggle.textContent()).trim(), '');

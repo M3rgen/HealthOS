@@ -8,15 +8,17 @@ from datetime import date
 import typer
 
 from app.cli._context import context
+from app.runtime import Runtime
+from app.services.providers.garmin_pull import GarminPull
 
 KINDS_OPTION = typer.Option(
     None,
     "--kind",
-    help="Yalnız bu türleri çek (tekrarlanabilir); boşsa hepsi.",
+    help="Pull only these kinds (repeatable); default: all kinds.",
 )
 
 
-def _garmin(runtime):
+def _garmin(runtime: Runtime) -> GarminPull:
     if runtime.garmin is None:
         typer.echo("Garmin entegrasyonu bu çalışma zamanında yok.", err=True)
         raise typer.Exit(2)
@@ -24,7 +26,7 @@ def _garmin(runtime):
 
 
 def garmin_status() -> None:
-    """Garmin Connect Personal API arşivinin çekme durumunu göster (değer ve sır içermez)."""
+    """Show Garmin Connect Personal API pull status without health values or secrets."""
     runtime = context.runtime()
 
     async def command():
@@ -37,7 +39,7 @@ def garmin_status() -> None:
 
 
 def garmin_pull(kind: list[str] | None = KINDS_OPTION) -> None:
-    """Garmin'den son GARMIN_LOOKBACK_DAYS günü bir kez çek (zamanlayıcının yaptığı iş)."""
+    """Pull the latest GARMIN_LOOKBACK_DAYS once, as the scheduler does."""
     runtime = context.runtime()
 
     async def command():
@@ -53,14 +55,14 @@ def garmin_pull(kind: list[str] | None = KINDS_OPTION) -> None:
 
 
 def garmin_backfill(
-    since: str = typer.Option(..., "--since", help="İlk gün, YYYY-AA-GG."),
-    until: str | None = typer.Option(None, "--until", help="Son gün (dahil), varsayılan bugün."),
+    since: str = typer.Option(..., "--since", help="First day, YYYY-MM-DD."),
+    until: str | None = typer.Option(None, "--until", help="Last day (inclusive); default: today."),
     kind: list[str] | None = KINDS_OPTION,
     dry_run: bool = typer.Option(
-        False, "--dry-run", help="Ağa çıkmadan ve yazmadan yalnız istek sayılarını göster."
+        False, "--dry-run", help="Count requests only; make no network requests or writes."
     ),
 ) -> None:
-    """Garmin geçmişini parça parça çek; kesilirse aynı sınırlarla kaldığı yerden sürer."""
+    """Backfill Garmin history in chunks; resume with the same bounds after interruption."""
     try:
         start = date.fromisoformat(since)
         stop = date.fromisoformat(until) if until else None

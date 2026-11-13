@@ -17,3 +17,27 @@ Type=oneshot
 ExecStart=/usr/bin/logger --priority user.crit --tag healthos-backup "HealthOS backup FAILED. See: journalctl -u healthos-backup.service -n 50 and last-backup-status.json in BACKUP_HOST_DIR. No backup was deleted."
 # Also on every logged-in terminal; ignored where wall is not installed.
 ExecStart=-/usr/bin/wall "HealthOS backup FAILED: journalctl -u healthos-backup.service -n 50"
+# wall must reach other users' terminals; no other capability, no network, no writes.
+User=root
+NoNewPrivileges=yes
+CapabilityBoundingSet=CAP_DAC_OVERRIDE
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateNetwork=yes
+RestrictAddressFamilies=AF_UNIX
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service

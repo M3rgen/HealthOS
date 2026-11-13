@@ -6,7 +6,6 @@ from numeric_records import BAD_NUMBERS, numeric_point
 from retrieval_records import BAD_TIMES, START, Client, Runner, point
 from sqlalchemy import func, select
 
-from app.api.sync import _serialize
 from app.core.config import Settings
 from app.google_health.client import Page
 from app.google_health.data_types import REGISTRY
@@ -19,9 +18,12 @@ from app.models.state import (
     SyncState,
     WebhookNotification,
 )
-from app.services.webhook_processing import WebhookBatchProcessor
+from app.services.providers import ingestion
+from app.services.providers.ingestion import GoogleSource
+from app.services.synchronization.sync_status import _serialize
 from app.sync.backfill import BackfillService
 from app.sync.incremental import IncrementalSync
+from app.sync.webhook_processing import WebhookBatchProcessor
 
 
 class FakeClient:
@@ -39,7 +41,7 @@ class FakeClient:
 async def test_incremental_sync_commits_checkpoint(sessions, kind, bad, named):
     records = [point(bad, kind, named=named), point(kind=kind, named=named)]
     client = FakeClient([Page(records, "p2"), Page([], None)])
-    service = IncrementalSync(Settings(), sessions, client, {kind: REGISTRY[kind]})
+    service = IncrementalSync(Settings(), sessions, GoogleSource(client), {kind: REGISTRY[kind]})
     await service.run(kind)
     async with sessions() as session:
         state = await session.get(SyncState, kind)
@@ -62,7 +64,10 @@ async def test_targeted_historical_sync_does_not_regress_checkpoint(sessions):
             )
         )
     service = IncrementalSync(
-        Settings(), sessions, FakeClient([Page([], None)]), {"steps": REGISTRY["steps"]}
+        Settings(),
+        sessions,
+        GoogleSource(FakeClient([Page([], None)])),
+        {"steps": REGISTRY["steps"]},
     )
 
     await service.run(
@@ -91,7 +96,9 @@ async def test_backfill_resumes_saved_page_token(sessions):
         )
     client = FakeClient([Page([], None)])
     settings = Settings(backfill_start_date=end.date(), backfill_window_days=31)
-    service = BackfillService(settings, sessions, client, {"steps": REGISTRY["steps"]})
+    service = BackfillService(
+        settings, sessions, GoogleSource(client), {"steps": REGISTRY["steps"]}
+    )
     assert await service.run(["steps"]) == 1
     assert client.tokens == ["resume-me"]
     async with sessions() as session:
@@ -100,7 +107,9 @@ async def test_backfill_resumes_saved_page_token(sessions):
 
 
 @pytest.mark.parametrize("paused", [False, True])
-async def test_backfill_failure_does_not_block_other_data_types(sessions, monkeypatch, paused):
+async def test_backfill_failure_does_not_block_other_data_types(
+    sessions, monkeypatch, paused, frozen_now
+):
     from app.google_health import pagination
 
     monkeypatch.setattr(pagination, "MAX_PAGES_PER_CALL", 2)
@@ -118,11 +127,11 @@ async def test_backfill_failure_does_not_block_other_data_types(sessions, monkey
                 raise RuntimeError("unavailable scope")
             return Page([], None)
 
-    settings = Settings(backfill_start_date=datetime.now(UTC).date())
+    settings = Settings(backfill_start_date=frozen_now.date())
     service = BackfillService(
         settings,
         sessions,
-        IsolatedClient(),
+        GoogleSource(IsolatedClient()),
         {"steps": REGISTRY["steps"], "sleep": REGISTRY["sleep"]},
     )
     assert await service.run() == 1
@@ -140,12 +149,12 @@ async def test_backfill_failure_does_not_block_other_data_types(sessions, monkey
         assert tokens == [None, "p1", "p2"]
 
 
-async def test_unfiltered_reference_backfill_creates_only_one_snapshot_job(sessions):
-    settings = Settings(backfill_start_date=datetime.now(UTC).date())
+async def test_unfiltered_reference_backfill_creates_only_one_snapshot_job(sessions, frozen_now):
+    settings = Settings(backfill_start_date=frozen_now.date())
     service = BackfillService(
         settings,
         sessions,
-        FakeClient([Page([], None)]),
+        GoogleSource(FakeClient([Page([], None)])),
         {"food": REGISTRY["food"]},
     )
 
@@ -168,7 +177,9 @@ def heart_rate(bpm=60):
 async def test_incremental_run_reports_per_run_outcome(sessions):
     """records_downloaded is cumulative and counts safety-window re-downloads; last_run does not."""
     client = FakeClient([Page([heart_rate()], None), Page([heart_rate()], None)])
-    service = IncrementalSync(Settings(), sessions, client, {"heart-rate": REGISTRY["heart-rate"]})
+    service = IncrementalSync(
+        Settings(), sessions, GoogleSource(client), {"heart-rate": REGISTRY["heart-rate"]}
+    )
     assert service.sequence == 0 and service.last_runs == {}
     await service.run("heart-rate")
     assert service.last_runs["heart-rate"] == {
@@ -273,7 +284,9 @@ async def test_resume_finishes_old_window_then_fetches_requested_window(
             NEW_START: {None: Page([heart_rate_at("new", "2026-08-17T10:30:00Z")], None)},
         }
     )
-    service = IncrementalSync(Settings(), sessions, client, {"heart-rate": REGISTRY["heart-rate"]})
+    service = IncrementalSync(
+        Settings(), sessions, GoogleSource(client), {"heart-rate": REGISTRY["heart-rate"]}
+    )
 
     if limit == 1:
         with pytest.raises(PaginationPaused):
@@ -307,7 +320,9 @@ async def test_pending_first_page_precedes_a_different_requested_window(sessions
             NEW_START: {None: Page([], None)},
         }
     )
-    service = IncrementalSync(Settings(), sessions, client, {"heart-rate": REGISTRY["heart-rate"]})
+    service = IncrementalSync(
+        Settings(), sessions, GoogleSource(client), {"heart-rate": REGISTRY["heart-rate"]}
+    )
     await service.run("heart-rate", NEW_START, NEW_END)
     assert client.calls == [(OLD_START, OLD_END, None), (NEW_START, NEW_END, None)]
 
@@ -326,7 +341,7 @@ async def test_webhook_element_completes_only_after_its_own_window(sessions):
         fail_starts={NEW_START},
     )
     incremental = IncrementalSync(
-        Settings(), sessions, client, {"heart-rate": REGISTRY["heart-rate"]}
+        Settings(), sessions, GoogleSource(client), {"heart-rate": REGISTRY["heart-rate"]}
     )
     processor = WebhookBatchProcessor(sessions, incremental, {"heart-rate"})
     payload = {
@@ -385,13 +400,13 @@ async def test_a_resumed_round_keeps_the_start_of_its_first_page(sessions, monke
 
     monkeypatch.setattr(incremental, "datetime", Frozen)
     starts = []
-    original = incremental.store_page
+    original = ingestion.store_page
 
     async def recording(session, spec, page, **options):
         starts.append(options.get("fetch_started"))
         return await original(session, spec, page, **options)
 
-    monkeypatch.setattr(incremental, "store_page", recording)
+    monkeypatch.setattr(ingestion, "store_page", recording)
 
     class Crashing:
         async def list_data_points(self, spec, start, end, page_token=None):
@@ -401,11 +416,11 @@ async def test_a_resumed_round_keeps_the_start_of_its_first_page(sessions, monke
 
     specs = {"steps": REGISTRY["steps"]}
     with pytest.raises(RuntimeError):
-        await IncrementalSync(Settings(), sessions, Crashing(), specs).run("steps")
+        await IncrementalSync(Settings(), sessions, GoogleSource(Crashing()), specs).run("steps")
     first = now[0]
     now[0] = first + timedelta(minutes=30)
     client = FakeClient([Page([], None), Page([], None)])
-    await IncrementalSync(Settings(), sessions, client, specs).run("steps")
+    await IncrementalSync(Settings(), sessions, GoogleSource(client), specs).run("steps")
     assert client.tokens == ["p2", None]  # the interrupted round first, then a new one
     assert [start.replace(tzinfo=UTC) for start in starts] == [first, first, now[0]]
     async with sessions() as session:
@@ -420,8 +435,7 @@ async def test_numeric_failures_commit_receipts_and_advance_pages(sessions, lane
     from app.models.raw_versions import RawApiResponse
     from app.models.retrieval import RetrievalReceipt
     from app.parsers.common import canonical_json
-    from app.services import storage
-    from app.sync import backfill, incremental
+    from app.services.archive import storage
 
     records = [numeric_point(value=value) for value in (*BAD_NUMBERS, "9999999999.995", "71000")]
     body = canonical_json({"dataPoints": records}).encode()
@@ -436,7 +450,7 @@ async def test_numeric_failures_commit_receipts_and_advance_pages(sessions, lane
         results.append(stats)
         return stats
 
-    monkeypatch.setattr(incremental if lane == "sync" else backfill, "store_page", storing)
+    monkeypatch.setattr(ingestion, "store_page", storing)
     await Runner(sessions, lane, "weight").run(client)
     assert client.tokens == [None, "p2"]
     assert sum(s.normalization_skipped for s in results) == len(records) - 1

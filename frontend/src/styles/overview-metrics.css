@@ -1,0 +1,486 @@
+.metric-cards {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+.metric-cards[data-stale] {
+  opacity: .72;
+}
+/* Each card's history button covers the whole card; the heading and values stay outside it. */
+.metric-card {
+  padding: 17px 14px 12px;
+  min-width: 0;
+  position: relative;
+  cursor: pointer;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, currentColor 6%, transparent), transparent 58%),
+    var(--surface-sheen), var(--surface);
+  transition:
+    border-color var(--dur) var(--ease-out),
+    box-shadow var(--dur) var(--ease-out),
+    transform var(--dur) var(--ease-out);
+}
+.metric-top {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+}
+.metric-top svg {
+  width: 30px;
+  height: 30px;
+  flex-shrink: 0;
+}
+.steps-card {
+  color: var(--step-icon);
+}
+.sleep-card {
+  color: var(--sleep-icon);
+}
+.heart-card {
+  color: var(--heart-icon);
+}
+.metric-top strong {
+  display: block;
+  color: var(--text);
+  font-size: 1.625rem;
+  margin-top: 5px;
+  white-space: nowrap;
+  font-weight: 660;
+  letter-spacing: -0.035em;
+  font-variant-numeric: tabular-nums;
+}
+.metric-note {
+  font-size: 0.75rem;
+  margin-top: 8px;
+  min-height: 18px;
+  color: var(--muted);
+}
+/* Wherever a card is a flex column, the heading and note keep their height (the pill would
+   otherwise squeeze under its own text) and the chart takes the remaining room. */
+.metric-card .metric-top,
+.metric-card .metric-note {
+  flex-shrink: 0;
+}
+.chart {
+  height: 42px;
+  margin-top: 10px;
+  color: inherit;
+}
+.chart svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+  overflow: visible;
+}
+/* First load (main.js): the figures that are still "—" pulse until the data or a failure
+   arrives. */
+#overview[aria-busy="true"]
+  :is(.metric-top strong, #profile-values button, .connection-times dd) {
+  animation: model-loading 1.2s ease-in-out infinite alternate;
+}
+@media (prefers-reduced-motion: reduce) {
+  #overview[aria-busy="true"]
+  :is(.metric-top strong, #profile-values button, .connection-times dd) {
+    opacity: 0.45;
+  }
+}
+.chart-axis {
+  display: flex;
+  /* Large text: labels wrap instead of running together ("00:0012:0024:00"). */
+  flex-wrap: wrap;
+  column-gap: 4px;
+  justify-content: space-between;
+  font-size: 0.75rem;
+  margin-top: 5px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.01em;
+}
+.metric-icon {
+  display: inline-flex;
+  width: 34px;
+  height: 34px;
+  flex: none;
+}
+.metric-icon svg {
+  width: 100%;
+  height: 100%;
+}
+#steps-chart {
+  color: var(--step-chart);
+}
+#sleep-chart {
+  color: var(--sleep-light);
+}
+#heart-chart {
+  color: var(--heart-chart);
+}
+#overview .metric-top {
+  display: block;
+  position: static;
+  padding-left: 0;
+  text-align: center;
+}
+#overview .metric-top > div {
+  display: contents;
+}
+#overview .metric-top .metric-icon {
+  position: static;
+  display: inline-flex;
+  vertical-align: middle;
+  margin: 0 5px 0 0;
+  width: 26px;
+  height: 26px;
+  margin-right: 7px;
+  border-radius: 8px;
+  background: color-mix(in srgb, currentColor 14%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, currentColor 16%, transparent);
+  padding: 4px;
+}
+#overview .metric-top h2 {
+  display: inline;
+  vertical-align: middle;
+}
+#overview .metric-top strong {
+  margin: 10px 0 0;
+  text-align: center;
+}
+.metric-open {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: inherit;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+.metric-card:hover {
+  border-color: color-mix(in srgb, currentColor 40%, transparent);
+  box-shadow: var(--shadow-2),
+    0 0 0 1px color-mix(in srgb, currentColor 10%, transparent);
+  transform: translateY(-2px);
+}
+.metric-card:has(> .metric-open:active) {
+  transform: translateY(0) scale(0.992);
+  transition-duration: 80ms;
+}
+.metric-open:focus-visible {
+  border-radius: inherit;
+}
+.metric-top h2 {
+  color: color-mix(in srgb, var(--text) 82%, var(--muted));
+  font-size: 0.875rem;
+  font-weight: 550;
+  letter-spacing: -0.005em;
+}
+.chart .empty-chart {
+  font-size: 0.75rem;
+  color: var(--muted);
+  text-align: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: 100%;
+  padding: 0;
+  --art: url(/assets/empty/empty-no-data.svg);
+}
+/* The icon chip fills its wrapper. */
+#overview .metric-top .metric-icon svg {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+}
+.chart .empty-chart:before {
+  content: "";
+  display: block;
+  flex: none;
+  background: currentColor;
+  -webkit-mask: var(--art) center/contain no-repeat;
+  mask: var(--art) center/contain no-repeat;
+  height: min(100%, 34px);
+  aspect-ratio: 4/3;
+  opacity: 0.75;
+}
+.metric-note.ongoing-badge {
+  min-height: 0;
+  white-space: normal;
+}
+@media (min-width: bp(w1400)) {
+  .metric-top strong {
+    font-size: 1.875rem;
+  }
+  .metric-card {
+    padding: 20px 16px 14px;
+  }
+  .chart {
+    height: 46px;
+  }
+}
+@media (max-width: bp(w1150)) {
+  .metric-top {
+    gap: 7px;
+  }
+  .metric-top svg {
+    width: 24px;
+  }
+  .metric-top strong {
+    font-size: 1.375rem;
+  }
+  .metric-top h2 {
+    font-size: 0.75rem;
+  }
+  .metric-card {
+    padding: 14px 10px;
+  }
+}
+@media (max-width: bp(w900)), (max-height: 30em) {
+  .metric-top strong {
+    font-size: 1.75rem;
+  }
+  .metric-top h2 {
+    font-size: 0.875rem;
+  }
+  .metric-top svg {
+    width: 30px;
+  }
+  .metric-card {
+    padding: 18px;
+  }
+  .overview-grid[data-tabbed] .metric-cards {
+    display: contents;
+  }
+  /* A single metric card gets the whole slot: its chart takes the height the card has left. */
+  .overview-grid[data-tabbed] .metric-card {
+    display: flex;
+    flex-direction: column;
+  }
+  .overview-grid[data-tabbed] .metric-card .chart {
+    flex: 1 1 auto;
+    min-height: 60px;
+    height: auto;
+  }
+  .overview-grid[data-tabbed] .metric-card .chart svg {
+    height: 100%;
+  }
+}
+@media (max-width: bp(w540)) {
+  .metric-cards {
+    gap: 7px;
+  }
+  .metric-card {
+    padding: 13px 9px;
+  }
+  .metric-top {
+    display: block;
+  }
+  .metric-top svg {
+    width: 24px;
+    height: 24px;
+    margin-bottom: 6px;
+  }
+  .metric-top h2 {
+    font-size: 0.75rem;
+  }
+  .metric-top strong {
+    font-size: 1.1875rem;
+  }
+  .metric-note {
+    font-size: 0.75rem;
+    min-height: 2.8em;
+    line-height: 1.4;
+  }
+  .chart-axis {
+    font-size: 0.75rem;
+    flex-wrap: wrap;
+    column-gap: 4px;
+    line-height: 1.3;
+  }
+  .chart-axis > :last-child {
+    margin-left: auto;
+    text-align: right;
+  }
+  .chart-axis .axis-mid {
+    display: none;
+  }
+  .chart {
+    height: 36px;
+  }
+  .metric-icon {
+    width: 26px;
+    height: 26px;
+    margin-bottom: 6px;
+  }
+  /* Narrow cards: the "Gün devam ediyor" pill and long values wrap instead of spilling out of
+    the card. */
+  .metric-card .ongoing-badge {
+    white-space: normal;
+    text-align: center;
+    line-height: 1.3;
+    padding: 3px 8px;
+    border-radius: 10px;
+  }
+}
+@media (max-width: bp(w360)) {
+  .metric-top strong {
+    font-size: 1.0625rem;
+  }
+}
+@media (min-width: bp(w901)) and (min-height: 30.0625em) {
+  .metric-cards {
+    gap: 10px;
+  }
+  .metric-card {
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    overflow: auto;
+    overscroll-behavior: contain;
+  }
+  .metric-top {
+    gap: 8px;
+  }
+  .metric-icon,
+  .metric-top svg {
+    width: 24px;
+    height: 24px;
+  }
+  .metric-top h2 {
+    font-size: 0.75rem;
+  }
+  .metric-top strong {
+    font-size: 1.375rem;
+    margin-top: 3px;
+  }
+  .metric-note {
+    font-size: 0.75rem;
+    margin-top: 5px;
+    min-height: 16px;
+  }
+  .chart {
+    height: 30px;
+    margin-top: 6px;
+  }
+  .chart-axis {
+    font-size: 0.75rem;
+    margin-top: 4px;
+  }
+  .metric-card .chart {
+    position: relative;
+    flex: 1 0 24px;
+    min-height: 24px;
+    height: 24px;
+    margin-top: 12px;
+  }
+  .metric-card .chart svg {
+    position: absolute;
+    inset: 0;
+  }
+  .metric-card .chart-axis {
+    flex-shrink: 0;
+  }
+}
+@media (min-width: bp(w901)) and (min-height: 30.0625em) and (max-height: 51.25em) {
+  #overview .metric-top strong {
+    margin-top: 3px;
+  }
+  .metric-card {
+    padding: 10px;
+  }
+  .metric-card .chart {
+    margin-top: 6px;
+  }
+  .metric-card .chart-axis {
+    margin-top: 2px;
+  }
+  .metric-note.ongoing-badge {
+    padding: 2px 6px;
+  }
+}
+@media (min-width: bp(w901)) and (min-height: 30.0625em) and (max-height: 46.25em) {
+  .metric-top strong {
+    font-size: 1.25rem;
+  }
+  .chart {
+    height: 24px;
+  }
+  .metric-note {
+    margin-top: 3px;
+  }
+  .metric-card {
+    padding: 6px 10px;
+  }
+}
+@media (min-width: bp(w901)) and (min-height: 51.3125em) {
+  .metric-card {
+    padding: 16px;
+  }
+  .metric-top {
+    display: block;
+    position: relative;
+    padding-left: 36px;
+  }
+  .metric-top .metric-icon {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 26px;
+    height: 26px;
+  }
+  .metric-top svg {
+    width: 26px;
+    height: 26px;
+  }
+  .metric-top h2 {
+    font-size: 0.8125rem;
+    line-height: 1.625rem;
+  }
+  .metric-top strong {
+    font-size: clamp(1.75rem, 3.4dvh, 2.125rem);
+    line-height: 1.2;
+    margin: 10px 0 0 -36px;
+  }
+  .metric-note {
+    font-size: 0.75rem;
+    margin-top: 10px;
+    min-height: 18px;
+  }
+  .metric-card .chart {
+    min-height: 32px;
+    margin-top: 10px;
+  }
+  .chart-axis {
+    font-size: 0.75rem;
+    margin-top: 8px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .metric-card:hover {
+    transform: none;
+  }
+}
+/* Laptops with browser chrome: three cards stay on screen with a usable chart. */
+@media (min-width: bp(w901)) and (min-height: 30.0625em) and (max-height: 40.5625em) {
+  .metric-card {
+    padding: 6px 8px;
+  }
+  .metric-top strong {
+    font-size: 1.125rem;
+  }
+  .metric-note {
+    margin-top: 2px;
+  }
+  .metric-card .chart {
+    margin-top: 4px;
+    min-height: 2rem;
+  }
+  .metric-card .chart-axis {
+    margin-top: 2px;
+  }
+}

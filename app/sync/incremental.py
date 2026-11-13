@@ -8,23 +8,27 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
 from sqlalchemy import CursorResult, select, update
-from sqlalchemy.ext.asyncio import async_sessionmaker
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.config import Settings
+from app.core.ingestion_stats import StoreStats
 from app.core.logging import event
 from app.core.provenance import current_context_id, new_context_id, provenance
 from app.core.timeutil import as_utc
-from app.google_health.client import GoogleHealthClient
+from app.db.contracts import TransactionSessions
+from app.google_health.client import Page
 from app.google_health.data_types import DataTypeSpec
-from app.google_health.pagination import PageBudget, PaginationPaused, iter_pages
+from app.google_health.fetch_window import FetchWindow
+from app.google_health.pagination import PageBudget, PaginationPaused
 from app.models.state import JobStatus, SyncState, fetch_round_start
-from app.services.reconciliation_reports import record_changes, reporting
-from app.services.retrieval import ReceiptWriter
-from app.services.storage import StoreStats, store_page
+from app.services.providers.ingestion import PageSource
+from app.services.synchronization.reconciliation_reports import record_changes, reporting
+from app.services.synchronization.retrieval import ReceiptWriter
 from app.sync.checkpoints import incremental_start
-from app.sync.deletions import mark_source_deletions
 from app.sync.errors import error_code, error_summary, is_transient
 from app.sync.ownership import CheckedSessions, OwnershipLost, run_ownership
+from app.sync.page_cycle import PageCycle
+from app.sync.rounds import FetchTiming, SyncRun
 
 logger = logging.getLogger(__name__)
 
@@ -43,12 +47,12 @@ class IncrementalSync:
         self,
         settings: Settings,
         sessions: async_sessionmaker,
-        client: GoogleHealthClient,
+        source: PageSource,
         specs: dict[str, DataTypeSpec],
     ):
         self.settings = settings
         self.sessions = sessions
-        self.client = client
+        self.source = source
         self.specs = specs
         # In-memory per-run outcomes so clients can tell when a run they started has finished.
         self.sequence = 0
@@ -128,49 +132,14 @@ class IncrementalSync:
         if data_type not in self.specs:
             raise ValueError(f"Unsupported data type: {data_type}")
         async with run_ownership(self.sessions, data_type) as sessions:
-            assert sessions is not None  # A waiting acquisition always owns the run.
+            if sessions is None:
+                raise OwnershipLost("sync run ownership was not acquired")
             if check_owner is not None:
                 sessions = CheckedSessions(sessions, check_owner)
             spec = self.specs[data_type]
             request_end = requested_end or datetime.now(UTC)
-            async with sessions.begin() as session:
-                state = await session.scalar(
-                    select(SyncState).where(SyncState.data_type == data_type)
-                )
-                if state is None:
-                    state = SyncState(data_type=data_type)
-                    session.add(state)
-                rounds: list[tuple[datetime, datetime, str | None]] = []
-                # Finishing a foreign checkpoint can leave no budget for this window's
-                # first page. Its pending range must still precede the next caller's.
-                if (
-                    (state.last_page_token or state.status == JobStatus.pending)
-                    and state.last_requested_from
-                    and state.last_requested_to
-                ):
-                    rounds.append(
-                        (
-                            as_utc(state.last_requested_from),
-                            as_utc(state.last_requested_to),
-                            state.last_page_token,
-                        )
-                    )
-                request_start = requested_start or incremental_start(
-                    state.last_successful_sync,
-                    self.settings.safety_window(data_type),
-                    request_end,
-                )
-                requested = (as_utc(request_start), as_utc(request_end))
-                if not rounds or rounds[0][:2] != requested:
-                    rounds.append((*requested, None))
-                state.status = JobStatus.running
-                state.last_error = None
-            event(
-                logger,
-                "SYNC_STARTED",
-                data_type=data_type,
-                requested_from=str(request_start),
-                resumed=rounds[0][2] is not None,
+            rounds, requested = await self._prepare_rounds(
+                sessions, data_type, requested_start, request_end
             )
             total = StoreStats()
             budget = PageBudget()
@@ -184,19 +153,10 @@ class IncrementalSync:
                     with scope:
                         await self._fetch_round(
                             spec,
-                            round_start,
-                            round_end,
-                            page_token,
-                            total,
-                            data_type,
-                            sessions,
-                            budget,
+                            window=FetchWindow(round_start, round_end, page_token),
+                            run=SyncRun(data_type, sessions, total, budget),
                         )
-                async with sessions.begin() as session:
-                    state = await session.get(SyncState, data_type)
-                    assert state is not None
-                    state.status = JobStatus.completed
-                    state.last_error = None
+                await self._set_outcome(sessions, data_type, JobStatus.completed)
                 self._finish(data_type, total, failed=False)
                 event(
                     logger,
@@ -206,11 +166,7 @@ class IncrementalSync:
                 )
                 return total
             except PaginationPaused:
-                async with sessions.begin() as session:
-                    state = await session.get(SyncState, data_type)
-                    assert state is not None
-                    state.status = JobStatus.pending
-                    state.last_error = None
+                await self._set_outcome(sessions, data_type, JobStatus.pending)
                 # Preserve the existing outcome contract: an incomplete invocation is
                 # never reported as success, even though its pages committed normally.
                 self._finish(data_type, total, failed=True)
@@ -218,11 +174,7 @@ class IncrementalSync:
                 raise
             except Exception as exc:
                 try:
-                    async with sessions.begin() as session:
-                        state = await session.get(SyncState, data_type)
-                        assert state is not None
-                        state.status = JobStatus.failed
-                        state.last_error = error_summary(exc)
+                    await self._set_outcome(sessions, data_type, JobStatus.failed, exc)
                 except OwnershipLost:
                     # A replacement owner may already be resuming; never fail its state.
                     pass
@@ -237,53 +189,111 @@ class IncrementalSync:
                 )
                 raise
 
-    async def _fetch_round(
+    async def _prepare_rounds(
         self,
-        spec: DataTypeSpec,
-        start: datetime,
-        end: datetime,
-        page_token: str | None,
-        total: StoreStats,
+        sessions: TransactionSessions,
         data_type: str,
-        sessions,
-        budget: PageBudget,
+        requested_start: datetime | None,
+        request_end: datetime,
+    ) -> tuple[list[tuple[datetime, datetime, str | None]], tuple[datetime, datetime]]:
+        """Resume the durable checkpoint before this caller's window, sharing one budget."""
+        async with sessions.begin() as session:
+            state = await session.scalar(select(SyncState).where(SyncState.data_type == data_type))
+            if state is None:
+                state = SyncState(data_type=data_type)
+                session.add(state)
+            rounds: list[tuple[datetime, datetime, str | None]] = []
+            # Finishing a foreign checkpoint can leave no budget for this window's
+            # first page. Its pending range must still precede the next caller's.
+            if (
+                (state.last_page_token or state.status == JobStatus.pending)
+                and state.last_requested_from
+                and state.last_requested_to
+            ):
+                rounds.append(
+                    (
+                        as_utc(state.last_requested_from),
+                        as_utc(state.last_requested_to),
+                        state.last_page_token,
+                    )
+                )
+            request_start = requested_start or incremental_start(
+                state.last_successful_sync,
+                self.settings.safety_window(data_type),
+                request_end,
+            )
+            requested = (as_utc(request_start), as_utc(request_end))
+            if not rounds or rounds[0][:2] != requested:
+                rounds.append((*requested, None))
+            state.status = JobStatus.running
+            state.last_error = None
+        event(
+            logger,
+            "SYNC_STARTED",
+            data_type=data_type,
+            requested_from=str(request_start),
+            resumed=rounds[0][2] is not None,
+        )
+        return rounds, requested
+
+    @staticmethod
+    async def _set_outcome(
+        sessions: TransactionSessions,
+        data_type: str,
+        status: JobStatus,
+        failure: Exception | None = None,
     ) -> None:
         async with sessions.begin() as session:
             state = await session.get(SyncState, data_type)
-            state.last_requested_from = start
-            state.last_requested_to = end
-            state.last_page_token = page_token
+            if state is None:
+                raise RuntimeError("Incremental sync state is missing") from None
+            state.status = status
+            state.last_error = error_summary(failure) if failure is not None else None
+
+    async def _fetch_round(self, spec: DataTypeSpec, *, window: FetchWindow, run: SyncRun) -> None:
+        async with run.sessions.begin() as session:
+            state = await session.get(SyncState, run.data_type)
+            if state is None:
+                raise RuntimeError("Incremental sync state is missing")
+            state.last_requested_from = window.start
+            state.last_requested_to = window.end
+            state.last_page_token = window.page_token
             # A spent budget only records this range as pending: no fetch start or
             # receipt is begun for a round that cannot request its first page.
-            paused = budget.remaining <= 0
+            paused = run.budget.remaining <= 0
+            round_started: datetime | None = None
             if not paused:
                 # A resumed round keeps the time its first page was fetched: "seen in
                 # this fetch" always means since the round's real start.
                 round_started = as_utc(
                     await fetch_round_start(
-                        session, "sync", data_type, fresh=page_token is None, now=datetime.now(UTC)
+                        session,
+                        "sync",
+                        run.data_type,
+                        fresh=window.page_token is None,
+                        now=datetime.now(UTC),
                     )
                 )
-        if paused:
+        if round_started is None:
             raise PaginationPaused("Google Health page budget exhausted")
         # Only a fetch that starts at the first page sees the whole window, so only
         # then can records that stopped appearing be marked as deleted at the source.
-        fetched_since = round_started if page_token is None else None
-        receipt = ReceiptWriter(sessions, spec, start, end, "sync", data_type, page_token)
+        fetched_since = round_started if window.page_token is None else None
+        receipt = ReceiptWriter(
+            run.sessions,
+            spec,
+            "sync",
+            run.data_type,
+            window=window,
+        )
         await receipt.begin()
         try:
             await self._store_round(
                 spec,
-                start,
-                end,
-                page_token,
-                total,
-                data_type,
-                round_started,
-                fetched_since,
+                FetchTiming(round_started, fetched_since),
                 receipt,
-                sessions,
-                budget,
+                window=window,
+                run=run,
             )
         except BaseException as failure:
             await receipt.failure(failure)
@@ -291,57 +301,36 @@ class IncrementalSync:
 
     async def _store_round(
         self,
-        spec,
-        start,
-        end,
-        page_token,
-        total,
-        data_type,
-        round_started,
-        fetched_since,
-        receipt,
-        sessions,
-        budget,
+        spec: DataTypeSpec,
+        timing: FetchTiming,
+        receipt: ReceiptWriter,
+        *,
+        window: FetchWindow,
+        run: SyncRun,
     ) -> None:
-        # Records of this round set apart as unstorable (app/services/raw_rejections.py).
-        rejected = 0
+        async def checkpoint(session: AsyncSession, page: Page) -> None:
+            state = await session.get(SyncState, run.data_type)
+            if state is None:
+                raise RuntimeError("Incremental sync state is missing")
+            if not page.cyclic:
+                state.last_page_token = page.next_page_token
+            state.records_downloaded += len(page.data_points)
+            state.updated_at = datetime.now(UTC)
 
-        async def restart() -> None:
-            nonlocal round_started, fetched_since, rejected
-            rejected = 0
-            round_started = await receipt.reset()
-            # Even a saved-token continuation now fetches the entire window. Only
-            # sightings since this new attempt can prevent source-deletion marks.
-            fetched_since = round_started
+        async def report(session: AsyncSession, stats: StoreStats) -> None:
+            await record_changes(session, run.data_type, stats, page=True)
 
-        async for page in iter_pages(
-            self.client, spec, start, end, page_token, on_reset=restart, budget=budget
-        ):
-            try:
-                async with sessions.begin() as session:
-                    page_stats = await store_page(session, spec, page, fetch_started=round_started)
-                    state = await session.get(SyncState, data_type)
-                    if not page.cyclic:  # A repeated token is never a resume point.
-                        state.last_page_token = page.next_page_token
-                    state.records_downloaded += len(page.data_points)
-                    # Heartbeat per page; run ownership also protects slow network waits.
-                    state.updated_at = datetime.now(UTC)
-                    await receipt.page(session, page)
-                    await record_changes(session, data_type, page_stats, page=True)
-                total.add(page_stats)
-                rejected += page_stats.rejected
-                receipt.committed(page)
-            except BaseException as failure:
-                receipt.received = page
-                # The page's records rolled back; what Google sent is still kept, also when
-                # the task was cancelled (restart, deploy) between fetching and storing.
-                await self.client.keep_after(page.responses, failure)
-                raise
-        async with sessions.begin() as session:
-            state = await session.get(SyncState, data_type)
+        rejected = await PageCycle(self.source, spec, receipt, timing, run.budget).run(
+            window, checkpoint, on_commit=run.total.add, report=report
+        )
+        await self.source.normalize(window)
+        async with run.sessions.begin() as session:
+            state = await session.get(SyncState, run.data_type)
+            if state is None:
+                raise RuntimeError("Incremental sync state is missing")
             previous_success = state.last_successful_sync
             # A widened webhook window may end in the future; the watermark never does.
-            reached = min(end, datetime.now(UTC))
+            reached = min(window.end, datetime.now(UTC))
             state.last_successful_sync = (
                 max(as_utc(previous_success), reached) if previous_success else reached
             )
@@ -350,11 +339,13 @@ class IncrementalSync:
             # A rejected record may be an archived one, sent again: it was returned, but
             # this round cannot show it. The round still advances; marking waits for a
             # round without rejections (a record missing meanwhile is marked then).
-            if fetched_since is not None and not rejected:
-                deleted = await mark_source_deletions(session, spec, start, end, fetched_since)
-            await record_changes(session, data_type, StoreStats(source_deleted=deleted))
+            if timing.fetched_since is not None and not rejected:
+                deleted = await self.source.mark_missing(
+                    session, spec, window.start, window.end, timing.fetched_since
+                )
+            await record_changes(session, run.data_type, StoreStats(source_deleted=deleted))
             receipt.event(session, "completed")
-        total.source_deleted += deleted
+        run.total.source_deleted += deleted
 
     async def run_all(self) -> dict[str, StoreStats | Exception]:
         semaphore = asyncio.Semaphore(self.settings.sync_concurrency)

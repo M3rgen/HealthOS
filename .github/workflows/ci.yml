@@ -1,15 +1,39 @@
 name: ci
 
-on:
+"on":
   push:
+    branches: [main]
   pull_request:
+
+concurrency:
+  # Each commit on main keeps its own run: a later push must not cancel or replace it, because
+  # the release gate needs the result of that exact commit.
+  group: ci-${{ github.ref == 'refs/heads/main' && github.sha || github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 permissions:
   contents: read
 
+defaults:
+  run:
+    shell: bash
+
 jobs:
   verify:
-    runs-on: ubuntu-latest
+    name: verify (Python ${{ matrix.python }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 105
+    continue-on-error: ${{ matrix.experimental }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Exact patch for a repeatable run, matching the shipped image.
+          # uv 0.13.6 supports installing this patch on every CI job.
+          - python: "3.12.16"
+            experimental: false
+          - python: "3.13"
+            experimental: true
     services:
       postgres:
         image: postgres:17.10-alpine@sha256:742f40ea20b9ff2ff31db5458d127452988a2164df9e17441e191f3b72252193
@@ -32,27 +56,63 @@ jobs:
       APP_UI_TOKEN: ci-only-ui-token-not-a-secret-0123456789
       RECONCILIATION_ENABLED: "false"
       WATCHDOG_ENABLED: "false"
+      UV_PYTHON: ${{ matrix.python }}
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-      - uses: astral-sh/setup-uv@d0d8abe699bfb85fec6de9f7adb5ae17292296ff # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          version: "0.12.1"
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: "0.13.6"
           enable-cache: true
       - name: Validate lock and install frozen dependencies
         run: |
+          uv python install "${{ matrix.python }}"
           uv lock --check
           uv sync --frozen --extra dev
+      - name: Clock harness (clock.yml runs weekly; this fails the moment it breaks)
+        run: make test-clock-preflight
       - name: Lint and format
         run: |
           uv run --frozen --extra dev ruff check .
           uv run --frozen --extra dev ruff format --check .
-      - name: Unit tests
-        run: uv run --frozen --extra dev pytest -q -m "not integration"
-      - name: PostgreSQL integration tests
+      - name: Unit tests and coverage floors
+        timeout-minutes: 35
+        # Fails below fail_under (pyproject.toml) or the security-module floor (Makefile).
+        run: |
+          make coverage-security
+          mkdir -p .test-tmp-ci-coverage
+          cp .coverage .test-tmp-ci-coverage/.coverage.sqlite
+      - name: PostgreSQL 17 client tools
+        # Ubuntu 24.04 ships client 16, which cannot dump the 17 server above. The signing key is
+        # checked against its published fingerprint before apt trusts it.
+        run: |
+          key=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc
+          sudo install -d -m 0755 "$(dirname "$key")"
+          sudo curl --fail --silent --show-error --location --retry 3 --retry-all-errors \
+            -o "$key" https://www.postgresql.org/media/keys/ACCC4CF8.asc
+          gpg --show-keys --with-colons "$key" | grep -q '^fpr:*B97B0AFCAA1A47F044F244A07FCC7D46ACCC4CF8:'
+          echo "deb [signed-by=$key] https://apt.postgresql.org/pub/repos/apt noble-pgdg main" \
+            | sudo tee /etc/apt/sources.list.d/pgdg.list
+          sudo apt-get update -o Dir::Etc::sourcelist=/etc/apt/sources.list.d/pgdg.list \
+            -o Dir::Etc::sourceparts=- -o APT::Get::List-Cleanup=0
+          sudo apt-get install --yes --no-install-recommends postgresql-client-17
+      - name: PostgreSQL integration and unit suites
+        timeout-minutes: 45
+        # tests/integration, then the unit suite against a migrated database (see Makefile).
+        # The target sets HEALTHOS_REQUIRE_POSTGRES, so a lost server fails instead of skipping.
+        # The same for the backup round trip and its client tools.
         env:
-          # Fail instead of skipping if DATABASE_URL ever stops pointing at PostgreSQL.
-          HEALTHOS_REQUIRE_POSTGRES: "1"
-        run: uv run --frozen --extra dev pytest -q -m integration -rs
+          HEALTHOS_PG_BIN: /usr/lib/postgresql/17/bin
+          HEALTHOS_REQUIRE_PG_CLIENT: "1"
+          # Keep the SQLite baseline while both PostgreSQL suites append their measurements.
+          # Every run still enforces the unchanged project floor.
+          PYTEST_ADDOPTS: --cov=app --cov-append --cov-report=term
+        run: |
+          make test-postgres
+          cp .coverage .test-tmp-ci-coverage/.coverage.postgres
+      - name: Combined SQLite and PostgreSQL coverage floors
+        run: make ci-coverage-report
       - name: PostgreSQL migration integration
         run: |
           uv run --frozen --extra dev alembic upgrade head
@@ -63,39 +123,78 @@ jobs:
       - name: Type check
         run: uv run --frozen --extra dev pyright
       - name: Compose model
-        env:
-          APP_ENV_FILE: .env.example
         run: docker compose --env-file .env.example config --quiet
       - name: Compose override combinations
+        # The overrides the installers put in COMPOSE_FILE, each on top of the base file.
         env:
-          APP_ENV_FILE: .env.example
           GARMIN_API_KEY_HOST_FILE: /tmp/ci-garmin-key
           APPLE_RECEIVER_TOKEN_HOST_FILE: /tmp/ci-apple-token
         run: |
-          for override in dev garmin apple windows; do
+          for override in dev garmin apple; do
             echo "base + $override"
             docker compose --env-file .env.example -f docker-compose.yml -f "docker-compose.$override.yml" config --quiet
           done
-      - name: Reproducible application image
-        run: docker build --tag personal-health-mirror:ci .
+
+  bridge_boundary:
+    # Exercises real subprocess/stdio boundaries with tests/support/probe_cli.py.
+    # This synthetic peer cannot prove the real CLI's OS sandbox; those tests remain opt-in.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      UV_PYTHON: "3.12.16"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: "0.13.6"
+          enable-cache: true
+      - name: Install frozen dependencies
+        run: |
+          uv python install 3.12.16
+          uv sync --frozen --extra dev
+      - name: Bridge boundary against a synthetic CLI (no account or model)
+        run: uv run --frozen --extra dev pytest -q tests/test_codex_probe_decisions.py tests/test_codex_runtime_rpc.py
+
+  installer:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: "0.13.6"
+          enable-cache: true
+      - name: Install and check the packaged entry point
+        run: |
+          uv python install 3.12.16
+          uv sync --frozen --extra dev
+          uv run --frozen --extra dev pytest -q tests/test_installer*.py
 
   browser:
     # Playwright checks in tests/browser against a Vite preview of the built frontend.
     # Every backend route is answered by synthetic fixtures; no services are needed.
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 40
     defaults:
       run:
         working-directory: frontend
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          node-version: "24.21.0"
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24.22.2"
           cache: npm
           cache-dependency-path: frontend/package-lock.json
       - name: Install frozen frontend dependencies
         run: npm ci
+      - name: ESLint
+        run: npm run lint
       - name: Install Playwright Chromium
         run: npx playwright install --with-deps chromium
       - name: Build frontend and enforce initial JS/CSS budgets
@@ -108,37 +207,372 @@ jobs:
           HEALTHOS_TEST_TIMEOUT_MS: "600000"
         run: npm run test:browser
 
-  installer:
-    # Installer scripts (install.sh / install.ps1) on every host OS; pwsh exists on all runners.
+  e2e:
+    # The one check where nothing is a fixture: the built frontend, the real app and PostgreSQL.
+    # Login, panel, a measurement written through the API, a reload, and the one-screen rule on a
+    # months-long synthetic archive (tests/e2e/run_journey.py).
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:17.10-alpine@sha256:742f40ea20b9ff2ff31db5458d127452988a2164df9e17441e191f3b72252193
+        env:
+          POSTGRES_DB: health_test
+          POSTGRES_USER: health_test
+          POSTGRES_PASSWORD: ci-only-password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U health_test -d health_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql+asyncpg://health_test:ci-only-password@127.0.0.1:5432/health_test
+      UV_PYTHON: "3.12.16"
+      # Hosted runners have no GPU and few cores, like the browser job.
+      HEALTHOS_TEST_STEP_TIMEOUT_MS: "60000"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: "0.13.6"
+          enable-cache: true
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24.22.2"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install frozen dependencies
+        run: |
+          uv python install 3.12.16
+          uv sync --frozen --extra dev
+      - name: Install frozen frontend dependencies
+        working-directory: frontend
+        run: npm ci
+      - name: Install Playwright Chromium
+        working-directory: frontend
+        run: npx playwright install --with-deps chromium
+      - name: End-to-end journey (real backend and PostgreSQL)
+        run: make test-e2e
+
+  security:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 55
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: "0.13.6"
+          enable-cache: true
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24.22.2"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Python dependency audit
+        run: |
+          uv python install 3.12.16
+          uv export --frozen --no-dev --no-emit-project | uvx --python 3.12.16 --exclude-newer 2026-11-08T00:00:00Z pip-audit==2.10.1 -r /dev/stdin --strict
+      - name: Frontend production dependency audit
+        if: ${{ !cancelled() }}
+        working-directory: frontend
+        run: npm audit --omit=dev --audit-level=high
+      - name: Reproducible application image
+        if: ${{ !cancelled() }}
+        id: image
+        # Two independent builds of the same commit must yield the same file tree; they are both
+        # uncached so that neither reuses a layer built on another day.
+        # .github/scripts/compare_images.py names the only timestamp fields it ignores.
+        run: |
+          epoch="$(git log -1 --format=%ct)"
+          docker build --no-cache --build-arg SOURCE_DATE_EPOCH="$epoch" --tag healthos:ci .
+          docker build --no-cache --build-arg SOURCE_DATE_EPOCH="$epoch" --tag healthos:rebuild .
+          python3 .github/scripts/compare_images.py healthos:ci healthos:rebuild
+      - name: Container vulnerability audit
+        if: ${{ !cancelled() && steps.image.outcome == 'success' }}
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: healthos:ci
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+          scanners: vuln
+
+  workflows:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install verified actionlint CLI (v1.7.12)
+        working-directory: ${{ runner.temp }}
+        run: |
+          # Both hosted x64 and local arm64 act runners use a verified release archive.
+          case "$RUNNER_ARCH" in
+            X64) asset=linux_amd64; digest=8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8 ;;
+            ARM64) asset=linux_arm64; digest=325e971b6ba9bfa504672e29be93c24981eeb1c07576d730e9f7c8805afff0c6 ;;
+            *) echo "no verified actionlint build for $RUNNER_ARCH" >&2; exit 1 ;;
+          esac
+          curl --fail --silent --show-error --location --retry 5 --retry-all-errors --retry-delay 5 \
+            --connect-timeout 30 --output actionlint.tar.gz \
+            "https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_${asset}.tar.gz"
+          echo "$digest  actionlint.tar.gz" | sha256sum --check --strict
+          mkdir -p actionlint-bin
+          tar -xzf actionlint.tar.gz -C actionlint-bin actionlint
+          echo "$RUNNER_TEMP/actionlint-bin" >> "$GITHUB_PATH"
+      - name: Install verified ShellCheck CLI (v0.11.0)
+        working-directory: ${{ runner.temp }}
+        run: |
+          # The same pinned ShellCheck on hosted x64 and under local arm64 act, whose image ships none.
+          case "$RUNNER_ARCH" in
+            X64) asset=x86_64; digest=8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198 ;;
+            ARM64) asset=aarch64; digest=12b331c1d2db6b9eb13cfca64306b1b157a86eb69db83023e261eaa7e7c14588 ;;
+            *) echo "no verified ShellCheck build for $RUNNER_ARCH" >&2; exit 1 ;;
+          esac
+          curl --fail --silent --show-error --location --retry 5 --retry-all-errors --retry-delay 5 \
+            --connect-timeout 30 --output shellcheck.tar.xz \
+            "https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.${asset}.tar.xz"
+          echo "$digest  shellcheck.tar.xz" | sha256sum --check --strict
+          mkdir -p shellcheck-bin
+          tar -xJf shellcheck.tar.xz -C shellcheck-bin --strip-components=1 shellcheck-v0.11.0/shellcheck
+          echo "$RUNNER_TEMP/shellcheck-bin" >> "$GITHUB_PATH"
+      - name: Check workflows and shell scripts
+        # actionlint discovers ShellCheck on PATH; require the pinned one so shell checks cannot silently skip.
+        run: |
+          command -v shellcheck
+          actionlint -color
+
+  secrets:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install verified Gitleaks CLI
+        working-directory: ${{ runner.temp }}
+        run: |
+          # Hosted runners are x64; arm64 is here so `act` can run the same step on Apple Silicon.
+          case "$RUNNER_ARCH" in
+            X64) asset=linux_x64; digest=551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb ;;
+            ARM64) asset=linux_arm64; digest=e4a487ee7ccd7d3a7f7ec08657610aa3606637dab924210b3aee62570fb4b080 ;;
+            *) echo "no verified Gitleaks build for $RUNNER_ARCH" >&2; exit 1 ;;
+          esac
+          curl --fail --silent --show-error --location --retry 5 --retry-all-errors --retry-delay 5 \
+            --connect-timeout 30 --output gitleaks.tar.gz \
+            "https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_${asset}.tar.gz"
+          echo "$digest  gitleaks.tar.gz" | sha256sum --check --strict
+          mkdir -p gitleaks-bin
+          tar -xzf gitleaks.tar.gz -C gitleaks-bin gitleaks
+          echo "$RUNNER_TEMP/gitleaks-bin" >> "$GITHUB_PATH"
+      - name: Scan all Git history
+        run: |
+          bash tests/security/gitleaks.sh
+          gitleaks git . --log-opts="--all" --redact
+
+  codeql:
+    # Lives here, not in a separate workflow, so that summary (and therefore release_gate.py) sees it.
+    # CodeQL has no Linux arm64 build, so under `act` on Apple Silicon the analysis cannot run: those
+    # steps are skipped there and make ci-gate records that in its receipt.
+    name: CodeQL (${{ matrix.language }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    permissions:
+      contents: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [python, javascript-typescript]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Not run under act
+        if: ${{ env.ACT }}
+        run: echo "::warning::CodeQL did not run under act (no Linux arm64 build); only a hosted run proves it"
+      - uses: github/codeql-action/init@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
+        if: ${{ !env.ACT }}
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: none
+      - uses: github/codeql-action/analyze@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
+        if: ${{ !env.ACT }}
+        id: analyze
+        with:
+          category: /language:${{ matrix.language }}
+          output: ${{ runner.temp }}/codeql-sarif
+          # A fork's pull request has a read-only token; the findings still reach the step below.
+          upload: ${{ github.event.pull_request.head.repo.fork && 'never' || 'always' }}
+      - name: Fail on high-severity findings
+        if: ${{ !env.ACT }}
+        env:
+          SARIF_DIR: ${{ steps.analyze.outputs.sarif-output }}
+        run: python3 .github/scripts/codeql_gate.py "$SARIF_DIR"
+
+  smoke:
+    # Real stack: build, migrations, hardening, encrypted backup and restore into a new database.
+    # Bind mounts resolve on the Docker host, which `act` containers do not share, so this runs
+    # only on a real runner; make ci-gate records that in its receipt.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      UV_PYTHON: "3.12.16"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: "0.13.6"
+          enable-cache: true
+      - name: Not run under act
+        if: ${{ env.ACT }}
+        run: echo "::warning::Compose smoke did not run under act (bind mounts); run make compose-smoke on the host"
+      - name: Compose smoke and backup/restore round trip
+        if: ${{ !env.ACT }}
+        env:
+          HEALTHOS_SMOKE_MANIFEST: ${{ runner.temp }}/smoke-image-manifest.json
+        run: |
+          uv python install 3.12.16
+          make compose-smoke
+      - name: Keep the tree of the smoke-tested image for release.yml
+        if: ${{ !env.ACT }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: smoke-image-manifest
+          path: ${{ runner.temp }}/smoke-image-manifest.json
+          if-no-files-found: error
+          retention-days: 90
+      - name: Backup unit under real systemd
+        if: ${{ !env.ACT }}
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq age
+          make test-backup-unit
+
+  # Installer gates (this extension only), beyond the Linux unit tests of the installer job:
+  # lint, macOS and Windows hosts, real Docker installs, and Windows PowerShell 5.1. None can run
+  # under act (no macOS or Windows runner; bind mounts resolve on the Docker host; PSScriptAnalyzer
+  # comes from the PowerShell Gallery), so each skips there and says so. Actions run on Node 24
+  # (IP-12/3): checkout v7.0.1 and setup-uv v10.3.3. Runner images are pinned on purpose instead of
+  # *-latest (IP-12/3): pinning keeps a red job the installer's fault, not an image change.
+  installer_lint:
+    # shellcheck for every shell script (IP-7/6, IP-8/4: install.sh has no `set -e`, so the
+    # linter and tests/test_installer_failures.py guard it) and PSScriptAnalyzer for every
+    # PowerShell script with the repository settings (deliberate exclusions are explained there).
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Not run under act
+        if: ${{ env.ACT }}
+        run: echo "::warning::installer_lint did not run under act (PSScriptAnalyzer comes from the PowerShell Gallery); only a hosted run proves it"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: ${{ !env.ACT }}
+        with:
+          persist-credentials: false
+      - name: shellcheck
+        if: ${{ !env.ACT }}
+        run: |
+          shellcheck --version
+          # The installer at every severity; the scripts it shares with the main line at warning
+          # and above (their info/style notes are settled there, not in this extension).
+          shellcheck install.sh
+          shellcheck --severity=warning scripts/*.sh
+      - name: PSScriptAnalyzer
+        if: ${{ !env.ACT }}
+        shell: pwsh
+        run: |
+          Set-PSRepository PSGallery -InstallationPolicy Trusted
+          Install-Module PSScriptAnalyzer -RequiredVersion 1.25.0 -Scope CurrentUser -Force
+          $settings = Join-Path $PWD '.github/PSScriptAnalyzerSettings.psd1'
+          $results = @('install.ps1', 'scripts', 'deploy/windows') | ForEach-Object {
+            Invoke-ScriptAnalyzer -Path $_ -Recurse -Settings $settings
+          }
+          $results | Format-Table -AutoSize ScriptName, Line, Severity, RuleName, Message
+          if ($results) { throw "PSScriptAnalyzer: $(@($results).Count) finding(s)" }
+
+  installer_hosts:
+    # Installer scripts (install.sh / install.ps1) on macOS and Windows; pwsh exists on both.
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: [macos-15, windows-2025]
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-      - uses: astral-sh/setup-uv@d0d8abe699bfb85fec6de9f7adb5ae17292296ff # v6
+      - name: Not run under act
+        if: ${{ env.ACT }}
+        run: echo "::warning::installer_hosts did not run under act (no macOS or Windows runner); only a hosted run proves it"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: ${{ !env.ACT }}
         with:
-          version: "0.12.1"
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        if: ${{ !env.ACT }}
+        with:
+          version: "0.13.6"
           enable-cache: true
       - name: Installer tests
-        # A Python uv.lock has wheels for (macOS runners already ship Homebrew Python 3.15,
-        # psycopg-binary stops at cp314); the same range as BRIDGE_PYTHON in install.sh.
-        run: uv run --frozen --extra dev --python '>=3.12,<3.15' pytest -q tests/test_installer_unix.py tests/test_installer_windows.py
+        if: ${{ !env.ACT }}
+        # A Python uv.lock has wheels for and pyproject.toml accepts (macOS runners already ship
+        # Homebrew Python 3.15); the same range as BRIDGE_PYTHON in install.sh.
+        shell: bash
+        run: >-
+          uv run --frozen --extra dev --python '>=3.12,<3.14' pytest -q
+          tests/test_installer_unix.py tests/test_installer_windows.py tests/test_installer_windows_hardening.py
+          tests/test_installer_secret_groups.py tests/test_installer_token_output.py
+          tests/test_installer_defaults.py tests/test_installer_env_backups.py
+          tests/test_installer_failures.py tests/test_install_docs.py tests/test_installer_ci.py
 
-  installer-linux-docker:
-    # Real end-to-end trial install with Docker on a Linux runner.
-    runs-on: ubuntu-latest
+  installer_linux_docker:
+    # Real end-to-end install with Docker on a Linux runner: trial, and full mode without Google
+    # (IP-2: Apple only, which needs no key). The installer masks the UI token in this log
+    # (::add-mask::) and does not print it (no TTY). Compose logs on any failure.
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - mode: trial
+            sources: none
+          - mode: full
+            sources: apple
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-      - name: Run installer (trial mode)
-        run: bash install.sh --non-interactive --mode trial --sources none --backups no --autostart no --lang en
+      - name: Not run under act
+        if: ${{ env.ACT }}
+        run: echo "::warning::installer_linux_docker did not run under act (bind mounts resolve on the Docker host); only a hosted run proves it"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: ${{ !env.ACT }}
+        with:
+          persist-credentials: false
+      - name: Run installer (${{ matrix.mode }} mode, sources ${{ matrix.sources }})
+        if: ${{ !env.ACT }}
+        run: >-
+          bash install.sh --non-interactive --mode ${{ matrix.mode }} --sources ${{ matrix.sources }}
+          --backups no --autostart no --lang en || { docker compose logs --no-color; exit 1; }
+      - name: .env has the UI token and the chosen sources
+        if: ${{ !env.ACT }}
+        # The value itself is never echoed here (the installer already masked it).
+        run: |
+          token="$(sed -n 's/^APP_UI_TOKEN=//p' .env | tail -n 1)"
+          test -n "$token"
+          grep -q "^HEALTHOS_SOURCES=${{ matrix.sources }}$" .env
       - name: Check liveness endpoint
+        if: ${{ !env.ACT }}
         # install.sh already waited for /health/live; this asserts the result once.
-        run: curl -fsS http://127.0.0.1:8000/health/live
+        run: |
+          curl -fsS http://127.0.0.1:8000/health/live || { docker compose logs --no-color; exit 1; }
       - name: Real encrypted backup
+        if: ${{ !env.ACT }}
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends age
@@ -149,20 +583,21 @@ jobs:
           ls backups/health-*.dump.age
           cat backups/last-backup-status.json
           grep -Eq '"result": *"success"' backups/last-backup-status.json
-      - name: Compose logs on failure
-        if: failure()
-        run: docker compose logs --no-color
-      - name: Stop stack
-        if: always()
-        run: docker compose down
 
-  installer-windows-ps51:
+  installer_windows_ps51:
     # Windows PowerShell 5.1 (shell: powershell), the version a stock Windows PC runs.
-    runs-on: windows-latest
+    runs-on: windows-2025
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Not run under act
+        if: ${{ env.ACT }}
+        run: echo "::warning::installer_windows_ps51 did not run under act (no Windows runner); only a hosted run proves it"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: ${{ !env.ACT }}
+        with:
+          persist-credentials: false
       - name: Parse every .ps1 with the 5.1 parser
+        if: ${{ !env.ACT }}
         shell: powershell
         run: |
           $PSVersionTable.PSVersion
@@ -181,6 +616,7 @@ jobs:
             }
           if ($bad -gt 0) { exit 1 }
       - name: Dry-run installer (trial and full)
+        if: ${{ !env.ACT }}
         shell: powershell
         run: |
           foreach ($mode in 'trial', 'full') {
@@ -189,3 +625,62 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw "install.ps1 -Mode $mode exited with $LASTEXITCODE" }
             if (-not (Test-Path $out)) { throw "no preview written for $mode" }
           }
+
+  summary:
+    if: ${{ always() }}
+    needs:
+      - verify
+      - bridge_boundary
+      - installer
+      - installer_lint
+      - installer_hosts
+      - installer_linux_docker
+      - installer_windows_ps51
+      - browser
+      - e2e
+      - security
+      - workflows
+      - secrets
+      - codeql
+      - smoke
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: CI results
+        env:
+          VERIFY: ${{ needs.verify.result }}
+          BRIDGE_BOUNDARY: ${{ needs.bridge_boundary.result }}
+          INSTALLER: ${{ needs.installer.result }}
+          INSTALLER_LINT: ${{ needs.installer_lint.result }}
+          INSTALLER_HOSTS: ${{ needs.installer_hosts.result }}
+          INSTALLER_LINUX_DOCKER: ${{ needs.installer_linux_docker.result }}
+          INSTALLER_WINDOWS_PS51: ${{ needs.installer_windows_ps51.result }}
+          BROWSER: ${{ needs.browser.result }}
+          E2E: ${{ needs.e2e.result }}
+          SECURITY: ${{ needs.security.result }}
+          WORKFLOWS: ${{ needs.workflows.result }}
+          SECRETS: ${{ needs.secrets.result }}
+          CODEQL: ${{ needs.codeql.result }}
+          SMOKE: ${{ needs.smoke.result }}
+        run: |
+          {
+            echo '| Kontrol | Sonuç | Coverage |'
+            echo '| --- | --- | --- |'
+            echo "| Python 3.12 (kapı); 3.13 (bilgi amaçlı) | $VERIFY | Satır+dal ve güvenlik tabanları zorunlu |"
+            echo "| Köprü sınırı (sahte CLI) | $BRIDGE_BOUNDARY | JSON-RPC ve ret kararları; gerçek CLI ayrıca doğrulanır |"
+            echo "| Kurulum | $INSTALLER | — |"
+            echo "| Kurulum: shellcheck ve PSScriptAnalyzer | $INSTALLER_LINT | — |"
+            echo "| Kurulum: macOS ve Windows | $INSTALLER_HOSTS | — |"
+            echo "| Kurulum: Linux'ta Docker ile deneme kurulumu | $INSTALLER_LINUX_DOCKER | — |"
+            echo "| Kurulum: Windows PowerShell 5.1 | $INSTALLER_WINDOWS_PS51 | — |"
+            echo "| Tarayıcı | $BROWSER | — |"
+            echo "| Uçtan uca yolculuk | $E2E | — |"
+            echo "| Bağımlılık ve imaj güvenliği | $SECURITY | — |"
+            echo "| İş akışları ve kabuk denetimi | $WORKFLOWS | — |"
+            echo "| Tüm geçmişte secret taraması | $SECRETS | — |"
+            echo "| CodeQL | $CODEQL | — |"
+            echo "| Compose ve yedek/geri yükleme | $SMOKE | — |"
+          } >> "$GITHUB_STEP_SUMMARY"
+          for result in "$VERIFY" "$BRIDGE_BOUNDARY" "$INSTALLER" "$INSTALLER_LINT" "$INSTALLER_HOSTS" "$INSTALLER_LINUX_DOCKER" "$INSTALLER_WINDOWS_PS51" "$BROWSER" "$E2E" "$SECURITY" "$WORKFLOWS" "$SECRETS" "$CODEQL" "$SMOKE"; do
+            test "$result" = success || exit 1
+          done

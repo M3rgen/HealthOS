@@ -13,15 +13,15 @@ from sqlalchemy import create_engine, select, text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
-from test_pg_migrations import HEAD
+from support.migration_chain import HEAD
 from typer.testing import CliRunner
 
 from app.google_health.data_types import REGISTRY
 from app.models.state import RawHealthData
-from app.parsers import normalize
 from app.parsers.common import payload_hash, source_id, temporal
-from app.services.raw_history import verify_guards
-from app.services.storage import store_records
+from app.services.archive.normalization import normalize
+from app.services.archive.raw_history_verification import verify_guards
+from app.services.archive.storage import store_records
 
 pytestmark = pytest.mark.integration
 
@@ -114,7 +114,7 @@ async def execute(sessions, *statements: str) -> None:
 
 async def linked_pair(sessions) -> None:
     """A renamed duplicate linked to its successor by the backfill (with its source chain)."""
-    from app.services.identity_backfill import identity_backfill
+    from app.services.identities.identity_backfill import identity_backfill
 
     await legacy(sessions, HEART, heart(60), T0)
     await legacy(sessions, HEART, heart(60, name="Example Band"), T0 + timedelta(days=1))
@@ -256,7 +256,7 @@ def test_migration_up_down_refuses_while_identity_rows_exist(
         command.upgrade(alembic_config, "head")
 
         async def refill() -> tuple[int, int]:
-            from app.services.identity_backfill import identity_backfill
+            from app.services.identities.identity_backfill import identity_backfill
 
             async_engine = create_async_engine(database_url, poolclass=NullPool)
             sessions = async_sessionmaker(async_engine, expire_on_commit=False)

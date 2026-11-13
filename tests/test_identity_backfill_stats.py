@@ -2,16 +2,19 @@
 
 from collections import Counter
 
-from app.services import identity_backfill as legacy
-from app.services.identity_backfill_stats import SUMMARY_ITEMS, BackfillStats, _fingerprints
+import app.services.identities.identity_backfill_stats as identity_backfill_stats
+from app.services.identities.identity_backfill_stats import (
+    SUMMARY_ITEMS,
+    BackfillStats,
+    fingerprints,
+)
 
 
 def test_legacy_exports_are_the_extracted_implementations() -> None:
-    assert legacy.BackfillStats is BackfillStats
-    assert BackfillStats.__module__ == "app.services.identity_backfill_stats"
-    assert legacy.SUMMARY_ITEMS == SUMMARY_ITEMS == 20
-    assert legacy._fingerprints is _fingerprints
-    assert _fingerprints("a" * 16, "short", "b" * 16) == ["a" * 12, "short", "b" * 12]
+    assert identity_backfill_stats.BackfillStats is BackfillStats
+    assert BackfillStats.__module__ == "app.services.identities.identity_backfill_stats"
+    assert identity_backfill_stats.SUMMARY_ITEMS == SUMMARY_ITEMS == 20
+    assert fingerprints("a" * 16, "short", "b" * 16) == ["a" * 12, "short", "b" * 12]
 
 
 def test_add_preserves_counters_lists_metadata_and_sorted_serialization() -> None:

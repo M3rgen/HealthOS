@@ -7,14 +7,17 @@ from unittest.mock import Mock
 import pytest
 from derived_records import BAND, PHONE, T0, manual, point, snapshot, store, summary
 from interpretation_records import QUERY, SCOPE_ERROR, call
-from interpretation_records import production_reader as production_reader
 
 from app.parsers.common import canonical_json, payload_hash
-from app.services import health_interpretation
-from app.services import interpretation_measures as measures
-from app.services.codex_health import ArchiveQuery
-from app.services.interpretation_inputs import MAX_INPUT_BYTES, MAX_INPUT_RECORDS, Inputs
-from app.services.manual_flags import record_flag
+from app.services.archive.manual_flags import record_flag
+from app.services.interpretation import health_interpretation
+from app.services.interpretation import interpretation_measures as measures
+from app.services.interpretation.interpretation_inputs import (
+    MAX_INPUT_BYTES,
+    MAX_INPUT_RECORDS,
+    Inputs,
+)
+from app.services.umay.codex_health import ArchiveQuery
 
 
 def amount(kind, name, start, end, value, source=BAND):
@@ -37,6 +40,14 @@ def assert_refusal(result):
     assert result["reason_codes"] == ["summary_budget_exceeded"]
     assert result["error"] == SCOPE_ERROR
     assert "summaries" not in result and "next_cursor" not in result
+
+
+def test_nested_overlap_after_disjoint_interval():
+    rows = [
+        {"start": T0 + timedelta(hours=start), "end": T0 + timedelta(hours=end)}
+        for start, end in [(0, 2), (3, 10), (4, 5)]
+    ]
+    assert measures._overlapping_intervals(rows)
 
 
 @pytest.mark.parametrize("kind", ["active-energy-burned", "total-calories", "distance"])
@@ -96,7 +107,7 @@ async def test_touching_duplicates_and_conflicts_keep_original_amounts(sessions,
     await store(sessions, kind, *records)
     async with sessions() as session:
         before = await snapshot(session)
-    row = (await call("longitudinal", data_type=kind))["summaries"][0]
+    row = (await call(sessions, "longitudinal", data_type=kind))["summaries"][0]
     factor = 0.001 if kind == "distance" else 1
     assert row["statistics"]["count"] == (3 if overlap else 2)
     assert row["statistics"]["maximum"] == (6000 if overlap else 2000) * factor
@@ -148,7 +159,7 @@ async def test_filtered_groups_and_absence_budget_precede_statistics_and_models(
             await record_flag(session, flagged, "test", True)
     unsupported = {"date": QUERY["start_date"], "sampleTime": {"physicalTime": T0.isoformat()}}
     await store(sessions, kind, point(kind, "unsupported", unsupported, PHONE))
-    whole = (await call(action))["summaries"]
+    whole = (await call(sessions, action))["summaries"]
     assert len(whole) == (15 if action == "physiology" else 11)
     selected = next(row for row in whole if row["state"] == "available")
     missing = next(row for row in whole if row["state"] == "absent")
@@ -167,9 +178,9 @@ async def test_filtered_groups_and_absence_budget_precede_statistics_and_models(
     for selection in filters:
         expected = [r for r in whole if all(r[k] == v for k, v in selection.items())]
         monkeypatch.setattr(health_interpretation, "MAX_SUMMARIES", len(expected))
-        page = await call(action, limit=1, **selection)
+        page = await call(sessions, action, limit=1, **selection)
         assert page["total_summaries"] == len(expected)
-        rest = await call(action, cursor=page["next_cursor"], limit=200, **selection)
+        rest = await call(sessions, action, cursor=page["next_cursor"], limit=200, **selection)
         assert page["summaries"] + (rest["summaries"] if page["next_cursor"] else []) == expected
         with monkeypatch.context() as patch:
             blocked = Mock(side_effect=AssertionError("budget must precede statistics and models"))
@@ -178,20 +189,20 @@ async def test_filtered_groups_and_absence_budget_precede_statistics_and_models(
             if expected:
                 patch.setattr(health_interpretation, "MAX_SUMMARIES", len(expected) - 1)
                 for paging in ({}, {"limit": 1}, {"cursor": page["next_cursor"]}):
-                    assert_refusal(await call(action, **paging, **selection))
+                    assert_refusal(await call(sessions, action, **paging, **selection))
             else:
-                assert (await call(action, **selection))["summaries"] == []
+                assert (await call(sessions, action, **selection))["summaries"] == []
             blocked.assert_not_called()
     async with sessions() as session:
         assert await snapshot(session) == before
     monkeypatch.setattr(health_interpretation, "MAX_SUMMARIES", len(whole))
-    page = await call(action, source=selected["source"], limit=1)
+    page = await call(sessions, action, source=selected["source"], limit=1)
     assert page["next_cursor"]
     outside = PHONE if selected["source"] == "kaynak-" + payload_hash(BAND) else BAND
     await store(sessions, kind, point(kind, "outside", unsupported, outside))
-    changed = await call(action, source=selected["source"], cursor=page["next_cursor"])
+    changed = await call(sessions, action, source=selected["source"], cursor=page["next_cursor"])
     assert changed["code"] == "stale_cursor"
-    assert (await call(action, source=selected["source"], limit=1))["summaries"] == page[
+    assert (await call(sessions, action, source=selected["source"], limit=1))["summaries"] == page[
         "summaries"
     ]
 
@@ -216,7 +227,7 @@ async def test_single_measurement_or_absence_uses_budget_and_filters(
     present = bool(present) and action == "longitudinal"
     args = dict(data_type=kind)
     monkeypatch.setattr(health_interpretation, "MAX_SUMMARIES", 1)
-    row = (await call(action, **args))["summaries"][0]
+    row = (await call(sessions, action, **args))["summaries"][0]
     assert row["state"] == ("available" if present else "absent")
     assert row["metric"] == (kind.replace("-", "_") if present else kind)
     assert row["statistics"]["count"] == (1 if present else 0)
@@ -227,9 +238,9 @@ async def test_single_measurement_or_absence_uses_budget_and_filters(
     blocked = Mock(side_effect=AssertionError("absent summaries also require preflight"))
     monkeypatch.setattr(measures, "statistics", blocked)
     monkeypatch.setattr(measures, "Longitudinal", blocked)
-    assert_refusal(await call(action, limit=1, **args))
+    assert_refusal(await call(sessions, action, limit=1, **args))
     source = "unknown" if present else "manuel"
-    assert (await call(action, source=source, **args))["summaries"] == []
+    assert (await call(sessions, action, source=source, **args))["summaries"] == []
     definition = kind if present else "missing"
-    assert (await call(action, definition=definition, **args))["summaries"] == []
+    assert (await call(sessions, action, definition=definition, **args))["summaries"] == []
     blocked.assert_not_called()

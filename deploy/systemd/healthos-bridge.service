@@ -11,7 +11,8 @@ StartLimitIntervalSec=300
 StartLimitBurst=5
 
 [Service]
-Type=simple
+Type=notify
+NotifyAccess=main
 User=healthos-bridge
 Group=healthos-bridge
 WorkingDirectory=/opt/healthos
@@ -19,6 +20,10 @@ Environment=HOME=/var/lib/healthos-bridge
 Environment=CODEX_HOME=/var/lib/healthos-bridge
 Environment=PATH=/usr/local/bin:/usr/bin:/bin
 EnvironmentFile=/etc/healthos/bridge.env
+# A Python that uv downloads (any host whose Python is not 3.12, Debian 12 included) lands in the
+# installing account's home, which ProtectHome= below hides: the service would die with a bare
+# 203/EXEC. Keep the interpreter in the checkout instead; this check names the fix in the journal.
+ExecStartPre=/bin/sh -c 'test -x "$$(readlink -f /opt/healthos/.venv/bin/python)" || { echo "healthos-bridge: .venv/bin/python is missing or lies under a home directory this service cannot read. Rebuild it inside the checkout: cd /opt/healthos && rm -rf .venv && UV_PYTHON_INSTALL_DIR=/opt/healthos/.python uv sync --frozen --no-dev" >&2; exit 1; }'
 ExecStart=/opt/healthos/.venv/bin/python /opt/healthos/scripts/start_codex_bridge.py --foreground
 StateDirectory=healthos-bridge
 StateDirectoryMode=0700
@@ -32,6 +37,25 @@ PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
 ReadWritePaths=/var/lib/healthos-bridge
+# Defence in depth for the bridge account: project secrets and
+# backups it never needs stay unreadable. EnvironmentFile= is read before this applies.
+InaccessiblePaths=-/opt/healthos/.env -/opt/healthos/backups -/opt/healthos/backup-status -/etc/healthos
+# Conservative beyond these: the Codex app-server is not known to tolerate
+# MemoryDenyWriteExecute (Node JIT), RestrictNamespaces or a narrow syscall filter.
+CapabilityBoundingSet=
+AmbientCapabilities=
+# AF_NETLINK sets up loopback in the Codex sandbox; no external network family is added.
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+LockPersonality=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
 StandardOutput=journal
 StandardError=journal
 

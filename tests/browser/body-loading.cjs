@@ -1,6 +1,6 @@
 // Synthetic profile data and a delayed module response exercise the production loader wiring.
 const assert = require('node:assert/strict');
-const { BASE, launch, run, until } = require('./lib.cjs');
+const { BASE, launch, run, until, showCard, showSystemGroup } = require('./lib.cjs');
 const fx = require('../../frontend/preview/fixtures.cjs');
 
 const viewer = `export function createBody(container, motion) {
@@ -82,6 +82,7 @@ async function setup(browser, size, mode = 'delayed') {
   await page.routeWebSocket(/\/api\/codex\/chat/, () => {});
   await page.goto(BASE);
   await page.waitForFunction(() => document.querySelectorAll('#history-rows tr').length === 7);
+  await showCard(page, 'profile');
   return { page, state, release };
 }
 async function fits(page) {
@@ -126,6 +127,7 @@ run(async () => {
         assert.ok(await page.locator('#body-model .model-fallback').isVisible());
         await fits(page);
         await page.locator('[data-page="system"]').click();
+        await showSystemGroup(page, 'settings');
         await page.locator('#model-motion').check();
         await refreshWeight(page, state, 81.2);
         assert.equal(state.imports, 0);

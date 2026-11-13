@@ -5,7 +5,7 @@
 // fixtures only; no live account records.
 const assert = require('node:assert/strict');
 const path = require('node:path');
-const { BASE, launch, run, shot } = require('./lib.cjs');
+const { BASE, launch, run, shot, showSystemGroup } = require('./lib.cjs');
 const fx = require(path.join(__dirname, '../../frontend/preview/fixtures.cjs'));
 
 const sizes = [{width:1440,height:900}, {width:1280,height:720},
@@ -104,6 +104,7 @@ run(async () => {
       // Devices: each row names its rank in words; the Garmin watch shows its last pull.
       await page.getByRole('button', {name:'Sistem', exact:true}).click();
       await page.waitForFunction(() => document.querySelectorAll('#devices-list .device-row').length === 4);
+      await showSystemGroup(page, 'devices');
       const rows = page.locator('#devices-list .device-row');
       assert.deepEqual(await rows.locator('.device-precedence').allTextContents(), [
         'Aktivite: ikincil · Sağlık: öncelikli', 'Aktivite: ikincil · Sağlık: ikincil',
@@ -122,7 +123,7 @@ run(async () => {
       assert.match(dialog, /Öncelik\s*Aktivite: öncelikli · Sağlık: ikincil/);
       assert.match(dialog, /Son çekim\s*16 Ekim 2026 16:00 · 30 dk önce/);
       assert.match(dialog, /Platform\s*Garmin/);
-      assert.match(dialog, /activities.*daily-summaries.*heart-rate.*sleep.*steps/);
+      assert.match(dialog, /Aktiviteler.*Günlük özetler.*Nabız.*Uyku.*Adım/);
       await contained(page);
       await page.keyboard.press('Escape');
       assert.equal(await open.evaluate(el => el === document.activeElement), true);

@@ -1,0 +1,9 @@
+# Install as /etc/systemd/system/healthos-backup.service.d/backup-paths.conf.
+# Set BACKUP_HOST_DIR=/srv/healthos-backups in /etc/healthos/backup.env (manual and timer runs).
+# Adjust the checkout and metadata paths if they differ; keep metadata separate from backups.
+[Service]
+# Reset both lists so the old backup directory is no longer prepared or writable.
+ExecStartPre=
+ExecStartPre=+/bin/sh -ec 'test -d /srv/healthos-backups || install -d -m 700 /srv/healthos-backups; test -d /opt/healthos/backup-status || install -d -m 755 /opt/healthos/backup-status; chown -Rh root:root /srv/healthos-backups /opt/healthos/backup-status || echo "healthos-backup: could not take ownership of the backup directories" >&2'
+ReadWritePaths=
+ReadWritePaths=-/srv/healthos-backups -/opt/healthos/backup-status

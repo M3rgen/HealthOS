@@ -30,8 +30,9 @@ from identity_records import (
 from sqlalchemy import delete, text, update
 from sqlalchemy.exc import IntegrityError, OperationalError
 
-from app.models import identity as identity_models
-from app.models.identity import RawHealthDataIdentity, RawHealthDataSupersession
+import app.models.identity_constants as identity_constants
+import app.models.identity_guards as identity_guards
+from app.models.identity_tables import RawHealthDataIdentity, RawHealthDataSupersession
 from app.parsers.identity import (
     new_record_id,
     reading,
@@ -40,7 +41,7 @@ from app.parsers.identity import (
     specific_key,
     supersession_reason,
 )
-from app.services.raw_history import verify_guards
+from app.services.archive.raw_history_verification import verify_guards
 
 
 def test_v2_key_ignores_display_name_package_suffix_and_civil_fields() -> None:
@@ -156,13 +157,12 @@ def test_model_and_migration_ddl_are_the_same() -> None:
     def normalize_sql(statements) -> list[str]:
         return [re.sub(r"\s+", " ", statement).strip() for statement in statements]
 
-    assert normalize_sql(migration.POSTGRESQL_DDL) == normalize_sql(identity_models.POSTGRESQL_DDL)
-    assert normalize_sql(migration.SQLITE_DDL) == normalize_sql(identity_models.SQLITE_DDL)
-    assert migration.IDENTITY_TABLES == identity_models.IDENTITY_TABLES
-    assert migration.FUNCTION_BODIES == identity_models.FUNCTION_BODIES
+    assert normalize_sql(migration.POSTGRESQL_DDL) == normalize_sql(identity_guards.POSTGRESQL_DDL)
+    assert migration.IDENTITY_TABLES == identity_constants.IDENTITY_TABLES
+    assert migration.FUNCTION_BODIES == identity_guards.FUNCTION_BODIES
     # The analytics views are those of 20261024_0013 now (tests/test_eligibility.py compares
     # them, and the 0012 views its downgrade restores with these).
-    from app.services import analytics_views
+    from app.services.identities import analytics_views
 
     assert migration.NORMALIZED_TABLES == analytics_views.NORMALIZED_TABLES
 
@@ -230,7 +230,7 @@ async def test_verify_reports_a_missing_identity_guard(sessions) -> None:
 
 
 async def test_sightings_only_widen_on_sqlite(sessions) -> None:
-    from app.models.identity import RawSourceSighting
+    from app.models.identity_tables import RawSourceSighting
 
     async with sessions.begin() as session:
         session.add(

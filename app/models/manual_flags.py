@@ -15,7 +15,7 @@ so the key would only guard inserts, which the API checks itself, and on Postgre
 turn its protective ``TRUNCATE`` refusal into a foreign-key error.
 
 The table refuses ``UPDATE``, ``DELETE`` and ``TRUNCATE`` (``ENABLE ALWAYS`` triggers calling
-0011's ``healthos_refuse_change()``); ``health-mirror verify`` checks them like the ones of
+0011's ``healthos_refuse_change()``); ``healthos verify`` checks them like the ones of
 0011. The trigger SQL is duplicated, frozen, in the migration; tests/test_manual_flags.py
 compares the two.
 """
@@ -26,24 +26,19 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import (
-    DDL,
     BigInteger,
     CheckConstraint,
     DateTime,
     Index,
-    Integer,
     PrimaryKeyConstraint,
     String,
     Uuid,
-    event,
     func,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
-
-# Its after_create DDL defines healthos_refuse_change(), which the triggers below call.
-import app.models.raw_versions  # noqa: E402, F401  isort: skip
+from app.db.guards import GuardSet
 
 FLAG_TABLE = "manual_measurement_flag_events"
 # The append-only tables of this revision.
@@ -68,9 +63,7 @@ class ManualMeasurementFlagEvent(Base):
         Index("ix_manual_measurement_flag_events_current", "measurement_id", "created_at", "id"),
     )
 
-    id: Mapped[int] = mapped_column(
-        BigInteger().with_variant(Integer(), "sqlite"), primary_key=True, autoincrement=True
-    )
+    id: Mapped[int] = mapped_column(BigInteger(), primary_key=True, autoincrement=True)
     # manual_measurements.id (checked by the API; that table never loses a row).
     measurement_id: Mapped[uuid.UUID] = mapped_column(Uuid(), nullable=False)
     # FLAGS; a new flag needs no schema change.
@@ -83,54 +76,9 @@ class ManualMeasurementFlagEvent(Base):
     )
 
 
-# trigger -> (table, timing/events/level, function)
-_PG_TRIGGERS = {}
+GUARDS = GuardSet()
 for _table in FLAG_TABLES:
-    _PG_TRIGGERS[f"{_table}_append_only"] = (
-        _table,
-        f"BEFORE UPDATE OR DELETE ON {_table} FOR EACH ROW",
-        "healthos_refuse_change",
-    )
-    _PG_TRIGGERS[f"{_table}_no_truncate"] = (
-        _table,
-        f"BEFORE TRUNCATE ON {_table} FOR EACH STATEMENT",
-        "healthos_refuse_change",
-    )
+    GUARDS.append_only(_table)
 
-PROTECTIVE_TRIGGERS = tuple(
-    (table, trigger, function) for trigger, (table, _, function) in _PG_TRIGGERS.items()
-)
-PG_TRIGGER_SQL = {
-    trigger: (table, f"CREATE TRIGGER {trigger}\n{definition}\nEXECUTE FUNCTION {function}()")
-    for trigger, (table, definition, function) in _PG_TRIGGERS.items()
-}
-# No function of its own: healthos_refuse_change() belongs to 0011 (and is checked with it).
-FUNCTION_BODIES: dict[str, str] = {}
-
-_SQLITE_TRIGGERS = {}
-for _table in FLAG_TABLES:
-    for _operation in ("UPDATE", "DELETE"):
-        _name = f"{_table}_no_{_operation.lower()}"
-        _SQLITE_TRIGGERS[_name] = (
-            _table,
-            f"""CREATE TRIGGER {_name}
-BEFORE {_operation} ON {_table}
-BEGIN
-    SELECT RAISE(ABORT, '{_table} keeps every record: {_operation} refused');
-END""",
-        )
-SQLITE_TRIGGER_SQL = dict(_SQLITE_TRIGGERS)
-
-POSTGRESQL_DDL = (
-    *(sql for _, sql in PG_TRIGGER_SQL.values()),
-    *(
-        f"ALTER TABLE {table} ENABLE ALWAYS TRIGGER {trigger}"
-        for table, trigger, _ in PROTECTIVE_TRIGGERS
-    ),
-)
-SQLITE_DDL = tuple(sql for _, sql in _SQLITE_TRIGGERS.values())
-
-for _statement in POSTGRESQL_DDL:
-    event.listen(Base.metadata, "after_create", DDL(_statement).execute_if(dialect="postgresql"))
-for _statement in SQLITE_DDL:
-    event.listen(Base.metadata, "after_create", DDL(_statement).execute_if(dialect="sqlite"))
+FUNCTION_BODIES = GUARDS.functions
+POSTGRESQL_DDL = GUARDS.postgresql_ddl

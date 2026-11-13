@@ -2,11 +2,9 @@
 
 from datetime import timedelta
 
-import pytest
 from derived_records import BAND, DAY, T0, point, store, summary
 
-from app.services import codex_health
-from app.services.codex_health import read_health
+from app.services.umay.codex_health import read_health
 
 QUERY = dict(start_date=str(DAY), end_date=str(DAY), timezone="UTC")
 # Work budgets are independent of the page, so a smaller limit is no remedy.
@@ -14,13 +12,8 @@ SCOPE_ERROR = "Yorum sorgusu tamamlanamadı; aralığı ya da metriği daralt."
 PAGE_ERROR = "Yorum sorgusu tamamlanamadı; aralığı veya sayfa boyutunu daralt."
 
 
-@pytest.fixture(autouse=True)
-def production_reader(sessions, monkeypatch):
-    monkeypatch.setattr(codex_health, "SessionLocal", sessions)
-
-
-async def call(action, **kwargs):
-    return await read_health({"action": action, **QUERY, **kwargs})
+async def call(sessions, action, **kwargs):
+    return await read_health(sessions, {"action": action, **QUERY, **kwargs})
 
 
 async def resting(sessions, values, start=DAY, source=BAND, method=None):

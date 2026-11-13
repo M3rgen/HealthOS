@@ -2,9 +2,417 @@
 
 All notable changes to HealthOS are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Releases before 0.2.1 were not recorded
-in this file.
+in this file when they were made; the 0.2 entry was written afterwards from the project history.
 
-## Unreleased
+> **Version numbers were reset once.** From October 3, 2026 the project's early snapshots were
+> labelled 0.5.0. On October 23, 2026 the numbering was restarted at 0.2 and 0.5.0 was retired.
+> There is no 0.3, 0.4 or 0.5 release: 0.2 is newer than every snapshot labelled 0.5.0, and the
+> releases since are 0.2.1, 0.2.2 and so on.
+
+## [0.2.2.1] - 2026-11-13
+
+The first interim release toward 0.2.3. It covers everything merged since v0.2.2; interim
+releases use four-part versions (`0.2.2.N`, tag `v0.2.2.N`), and the frontend manifest writes the
+same number as `0.2.2+N`.
+
+### Fifth hardening pass, November 2026
+
+Security and upgrade notes:
+
+- Production refuses a PostgreSQL superuser connection unless `HEALTHOS_ALLOW_SUPERUSER_UNTIL` grants at most 30 days of migration time. Configure `POSTGRES_APP_USER` and `POSTGRES_APP_PASSWORD`; role provisioning rejects membership in owner or privileged roles. `/health` reports temporary superuser grace.
+- The dashboard uses `healthos.localhost`. A page request on plain `localhost` or `127.0.0.1` is redirected there before the login form appears, so the key is entered once, unless `APP_PUBLIC_URL` explicitly selects another origin; a `POST /login` on the plain address returns `409` with a link, sets no cookie and records no login. API calls, health checks, static files and the Google OAuth paths are not redirected. The default `GOOGLE_REDIRECT_URI` is now `http://healthos.localhost:8000/auth/google/callback`: register it in the Google Cloud Console before relying on the default, or keep an explicit `localhost` value in `.env`. An explicit `localhost` callback still uses a single-use handoff without a second UI login.
+- Tokenless development requires a loopback client peer. A loopback listener alone no longer admits a forwarded remote client.
+- The Umay bridge permits account/config reads once per connection before thread creation and returns only required fields, excluding account details and host paths. Identical successfully processed webhook deliveries are suppressed for 24 hours without database writes.
+- Production validates database password strength, the HTTPS Google API origin, Fernet roots and exact `APP_ENV` values at startup.
+- The secret strength rule no longer rejects the random hexadecimal output of the documented key generators because of chance letter repeats; words repeated behind changing numbers or separators are still refused.
+- Retired Google token roots in `GOOGLE_TOKEN_ENCRYPTION_KEYS_OLD` are validated but never used to read tokens, and startup warns when the setting is filled. After upgrading from v0.2.2, and after any change of `GOOGLE_TOKEN_ENCRYPTION_KEY`, Google sync pauses until you use "Connect Google" once; records and backups are kept. If a root key or database dump leaked, revoke HealthOS access at Google before rotating ([steps](docs/RUNBOOK.md#upgrade-from-v022)).
+- A Garmin key file with looser permissions logs a startup warning and adds the `/health` reason `garmin_key_file_permissive`; a later release will refuse to start with it.
+- Migrations `20261111_0030` to `20261112_0034` add append-only Garmin tables (record observations, heart sample sets, completed daily and activity results) and a singleton table for normalization status. They run in the `migrate` service, only add tables, change no existing row and refuse a downgrade that would discard their contents ([notes](docs/MIGRATIONS.md)).
+- The removed command alias `health-mirror` and two unused Compose drafts, `docker-compose.windows.yml` and `docker-compose.linux.example.yml`, are gone. Before upgrading, run `grep '^COMPOSE_FILE=' .env` and drop those two file names from the value if present; otherwise Compose stops on the missing file. Scripts must call `healthos`. The unused `CLOUDFLARE_TUNNEL_TOKEN` line left `.env.example`.
+
+Deployment and publication:
+
+- Application, migration and role provisioning share one project image; only the application service builds it. Google setup preserves existing Compose overrides and Garmin key mounts.
+- The backup timer runs at 03:30 UTC. Deployment documents the detailed and application-visible status files, Debian prerequisites, and a copyable systemd override for a separate backup disk.
+- The deployment and backup path was verified on Debian 12 on 11 November 2026, including restore drills, Compose smoke and the real backup unit; Debian 13, Google consent, the public tunnel and Umay were outside that run.
+- Windows instructions match the supported CLI, application-role password and empty compatibility override. The ufw example restricts Compose-source access to Docker bridge interfaces.
+- Public snapshots exclude operational runbooks and the maintainer's branch guide regardless of renamed files. Built-in privacy checks work without local configuration, allow local pattern overrides, and report matching paths without file contents. Public references use contributor guidance, private plan filenames use a generic test pattern, and maintainer publication tools stay outside image builds.
+- Releases no longer overwrite existing assets. Release guidance requires independent review and environment approval instead of permanent ruleset bypasses.
+- Tool requirements: `uv` must be 0.13.6 or newer within 0.13 (`>=0.13.6,<0.14`; the image uses 0.13.6), and CI and the image share Python 3.12.16. The frontend build uses Vite 8.3.8, which closes the two high advisories in the build tooling, and the clock tests use the pinned `time-machine` package.
+- `make env` creates a private `.env` (mode 600) from the template with three generated secrets and never overwrites an existing file; the quick start also prepares the backup status directory before Compose starts.
+- `backup.sh` checks the host Python before running, and `restore.sh` reads the backup settings file (`BACKUP_ENV_FILE` or the default path), accepts a relative key path and refuses to start when the PostgreSQL volume lacks free space for a copy of the live database. When the backup helper cannot run, `/health` reports `backup_failed` instead of an old success.
+- Release tags may have four parts (`v0.2.2.N`, N at least 1); `make bump-interim` and `make bump-target VERSION=X.Y.Z` advance the five version files and open a new Unreleased section, and refuse to run while one is open.
+- CI checks workflows with actionlint and ShellCheck (a finding fails the required summary and stops publishing), and the scheduled audit fails on build-tool advisories. Publication checks stop on exported data files, known file signatures and JSON over 100 KB unless an exact reviewed path and SHA-256 allows it, and never print their contents.
+- CI combines SQLite and PostgreSQL coverage under the existing total/security floors and preserves measurement copies. The required bridge boundary job exercises 24 transport cases with a synthetic CLI; real-CLI verification remains separate.
+
+Added:
+
+- `healthos import-fit PATH` and `POST /api/imports/garmin-fit` import a FIT activity file from Garmin or another maker (at most 8 MiB, no Garmin account needed); the result is counters only, importing the same file again adds no duplicate workouts, and an invalid file or failed write leaves nothing behind. A file whose field types do not match the FIT profile is refused.
+- Sample data: `healthos demo` loads about 90 days of synthetic data for an invented person (`--remove` deletes it again). An installation without a working source offers **Örnek veriyle dene** in the overview and in Sistem; while it is shown a banner on every page says so and offers **Örnek veriyi kaldır**. Loading is refused once the archive holds Google or Garmin data ([details](docs/reference/sources.md#sample-data-örnek-veri)).
+
+Garmin and data reliability:
+
+- The metric history reaches every page of the Garmin archive. Corrected or re-appearing Garmin content updates the current view: a corrected heart-rate sample, daily value or activity no longer leaves the old value or sport visible. Days left half processed outside the normal window are completed in bounded transactions.
+- Malformed Garmin responses (bad lists, JSON errors, repeated activity pages) are no longer counted as a successful pull; over-long durations, duplicate heart-rate timestamps, truncated activity ids and a malformed `Retry-After` header or token expiry no longer stop or corrupt a sync. Token exchange retries are bounded, and a response that echoes the bearer token or key is refused and archived with that value masked.
+- After ownership of a data kind is lost, no further raw or normalized write is made. A normalization failure is stored in its own status and degrades `/health` and `/api/status` with `garmin_normalization_failed` until a later normalization succeeds.
+- FIT activities from other makers are accepted as their own FIT source, and the activity history no longer runs an extra query per day.
+- Webhook notification queries cover at most 256 windows, coverage evidence over long ranges is read in bounded pieces, and webhook key-set downloads are limited to one per 60 seconds and 64 KiB. Two different manual values for the same moment are shown as a conflict in the profile, not silently resolved.
+
+Interface and frontend quality:
+
+- Minute refresh preserves an open monthly history or coverage view and repeats only the submitted coverage selection; returning to a hidden tab refreshes immediately.
+- Garmin-only connection and System panels show pull state, explain unavailable manual sync, and list Garmin data types. Source names and server error messages follow the interface language.
+- Failed loads offer one retry, disable unavailable sync/export actions and clear stale profile values; initial loading has an explicit indicator.
+- System status/count columns and mobile dates stay visible; history day labels, 200% text step cards, short-phone rows, pointer targets and the Umay button preserve usable space without page scrolling. Transfer and coverage text is simpler.
+- Text overflow/collision checks measure visible text in both languages across viewport and text-size matrices. Build budgets document the baseline and 5% target headroom while retaining historical ceilings; shared width breakpoints preserve compiled CSS.
+- The login page offers Turkish and English; without a saved choice the interface, too, uses the browser's language (Turkish or English, English for any other). A failed login keeps the chosen language and the safe return address.
+- Forms record measurement and workout times in the time zone chosen under **Görünüm** (a skipped daylight-saving hour moves forward, a repeated hour takes the earlier one); **Kaydet** and **İptal** stay visible in the workout form; the measurement list says it shows the newest 100 entries.
+- A dashboard load error is no longer hidden by a sync error in the same round, and cards that could not refresh show the time of their last good data.
+- On phones the overview opens with the Steps card and the 3D body model loads only when Profil is shown; history rows fit narrow and landscape phones and at 200% text, and checkboxes and radio buttons have at least a 24 by 24 px target on desktop.
+- Explicit JSDoc `any` escapes are replaced with data/DOM/figure contracts. Preview captures use fixed viewports, languages, clocks and preferences; hidden or stationary figures release their animation loop.
+
+Documentation:
+
+- Flat `app.services.<module>` imports raise a `DeprecationWarning` and are planned for removal in 0.2.4; use the sub-package paths. Contributors also have guards for layer directions, sub-package edges and session-lock cleanup.
+- Security reports go to the private reporting form; public issues are for non-security bugs. Operational examples pass tokens through standard input instead of process arguments.
+- A security policy records reporting, supported-source status, privacy and design boundaries. Architecture and bridge details share one canonical document with compatibility links; the layer map reflects implemented dependencies and guard coverage.
+- Installation and runbook checks use current backup health metadata instead of relying on a potentially stale legacy success. README includes the existing-installation migration path, and verification status statements carry dates.
+
+### Fourth hardening pass, November 2026
+
+Upgrade notes:
+
+- Production now wants secrets as strong as generated ones: `APP_UI_TOKEN`, `GOOGLE_HEALTH_WEBHOOK_AUTHORIZATION` and a configured `CODEX_BRIDGE_TOKEN` need at least 32 characters and no common password ([rule](docs/reference/config.md#secret-strength)). A secret that passed the previous 16-character rule stops startup with a message naming it; `HEALTHOS_ALLOW_LEGACY_SECRETS=true` keeps it, with a warning at every start, until you replace it. The bridge launcher applies the same rule.
+- The bridge launcher accepts as `CODEX_BRIDGE_BIND_HOST` only loopback and Docker bridge addresses (`docker0`, Compose `br-*`); any other address needs `CODEX_BRIDGE_ALLOW_NON_LOCAL_BIND=1`.
+- Bridge service: keep the Python that `uv` downloads inside the checkout, `UV_PYTHON_INSTALL_DIR=/opt/healthos/.python uv sync --frozen --no-dev`, and reinstall the unit. A copy in a home directory is hidden from the service; the new unit names this fix in the journal instead of failing with a bare `203/EXEC` ([steps](docs/DEPLOYMENT.md#9-optional-the-umay-bridge)).
+- `/health` may list `backup_missing`, `backup_failed` or `backup_status_unreadable`; `status` does not change. `webhook_notifications.status` may hold the new value `interrupted` (no schema change), which `healthos webhook-status` counts.
+
+Security:
+
+- The bridge's connections ignore proxy environment variables. Connections that have not shown the bearer wait in their own queue of 16 (the oldest is dropped when it is full) for at most 5 seconds, and a TLS handshake gets 5 seconds, so they cannot lock the chat out.
+- Garmin responses are read under byte and time budgets: 64 MiB on the wire, 32 MiB decompressed, 1 MiB for the token exchange, 120 seconds per body. A refused body is archived as incomplete, not parsed and not retried ([details](docs/reference/garmin.md#garmin-connect-personal-api)).
+- Umay's answers keep a link only when it points to this site; a link elsewhere becomes plain text ([Privacy](docs/PRIVACY.md#umay-and-openai)).
+
+Data and reliability:
+
+- Flagging the same measurement concurrently records one event, not several.
+- The history page reads only the metric it shows (heart rate: about 88 MB of reads down to 1.5 MB on a synthetic archive).
+- `POST /backfill/start` while the same selection is running joins that run instead of starting another.
+- The single-run lock no longer names a process that holds a lock in another database.
+- Google and Garmin implement one typed provider contract; incremental sync and backfill share one page cycle; an interrupted webhook element has its own status and archive scans read in pages; the choice of database dialect lives in one module, and the application installs only the PostgreSQL adapter (SQLite stays a test fixture). Runner #336 to #339.
+
+Deployment and backups:
+
+- `make compose-smoke` does not read `.env` and removes only the images it built.
+- PostgreSQL gets 60 seconds to stop.
+- Upgrading an earlier install that is still empty no longer stops at `provision-app-role` when an app start is recorded in it.
+- The Sistem page shows **Son yedek**; `/health` reports `last_backup_success`.
+
+Interface:
+
+- Error, empty-archive and notice states no longer make the main page scroll; the browser checks also measure `main` and the visible page.
+- A part of the page that cannot load shows an error screen with a reload button; if the English text fails to load, the page opens in Turkish with a notice.
+- At 200 % text the selected day stays in the top bar; **Ölçüm ekle** is visible in an empty archive.
+- Without Google, the Sistem page hides the Google panels and the empty-state button matches the setup.
+- The frontend type check runs in full `strict` mode with an empty baseline.
+
+Quality:
+
+- New `e2e` CI gate, required by `summary`: `make test-e2e` drives the built frontend against the real app and PostgreSQL ([development](docs/DEVELOPMENT.md#validation)).
+- The release and CodeQL gate tests run the workflow steps themselves.
+- A weekly run in random order (`make test-order`, in `clock.yml`).
+- `audit.yml` and the development guide say that a Vite advisory can reach the shipped bundle.
+
+Not proven: any GitHub-hosted or `x64` run (`e2e` ran under `act` on `arm64` only), `release.yml`, the fifteen opt-in real-CLI tests, the bridge's full start with the real CLI under the new unit, Debian, real phones, Safari and screen readers. The 200 % step of the viewport matrix failed once in three `act` runs and could not be reproduced.
+
+### Final hardening pass, November 2026
+
+Upgrade notes:
+
+- Restart Umay's bridge after updating: its front now passes only the chat's seven RPCs, and an older front keeps forwarding everything until it is restarted (the chat refuses to use it). From now on a change to the persona, health-tool schema, filter or policy needs a restart: the bridge fixes them at start, and the chat refuses a bridge verified under another version ([steps](docs/RUNBOOK.md#update-the-application)).
+- Reinstall the backup units and run `daemon-reload`: the new unit reads the deploy user's `.env` through `LoadCredential=` (systemd 247+) and takes `backups/` and `backup-status` for root on every run. After that, reading `backups/` needs `sudo`. Hosts with a custom checkout or backup paths must also adjust `LoadCredential=` and the `chown` ([details](docs/DEPLOYMENT.md#8-encrypted-backups)).
+- A mistyped `GARMIN_API_KEY_HOST_FILE` now stops `docker compose up` instead of making Docker create a root-owned directory.
+- `/health` may report `degraded` with a Garmin reason it did not report before; `garmin_pull_uninitialized` is expected until every kind has succeeded once.
+
+Security:
+
+- Umay's bridge front terminates the WebSocket and passes only the chat's seven RPCs, in their exact shape. `command/exec`, configuration writes and any other thread, reachable with the bearer before this (reproduced on the real CLI 0.161.0), are refused; replies to the app-server's requests are filtered too.
+- Dashboard inputs with NUL, invalid Unicode, UTC overflow or oversized numbers get a `422` instead of a `500`. Login attempts log a fixed `LOGIN_ATTEMPT` event with only the client class and the result. The secret strength check catches repetition hidden behind changing numbers or separators.
+
+Deployment and backups:
+
+- The scheduled backup works with the documented `.env` ownership, its capability set still empty, and `/health/backup` updates after a timer run. `make test-backup-unit` runs the unit under real systemd.
+
+Database and reliability:
+
+- A data-losing downgrade is refused at one point for every revision, including `alembic downgrade base` with rows present ([notes](docs/MIGRATIONS.md#downgrades-that-would-lose-data-are-refused)).
+- Webhook deliveries wait for a free slot instead of counting as running (six concurrent deliveries: all six finish, was two), and the new `webhook-unfinished` job finishes what a shutdown left behind, every five minutes.
+- Each Garmin kind has its own PostgreSQL ownership: a first-row race and stale writers are gone, and a CLI backfill makes the scheduled pull wait for that kind. Garmin normalization runs in seven-day transactions.
+- Garmin health is on `/health` and `/api/status` (last success, fixed error code, lag, three reasons). Failed pulls report; automatic recovery stays Google's.
+- Sync and webhook errors carry a typed HTTP status and error code instead of parsing message text, and parameter stacks became value objects (runner #328, #329 added tests for uncaught mutations).
+
+Interface:
+
+- Polling keeps scroll position, open rows and focus; live regions are written only when they change.
+- The Sistem page is four groups that fit the screen, with tabs on small screens. With desktop Umay open, Tab no longer stops on hidden controls.
+
+Quality and repository:
+
+- Preview fixtures are compared with real API responses, and a real drift (a measurement `value` that was a number in the fixture) was fixed. A release image is compared with the one the smoke job tested, and `publish` runs in the `release` environment.
+- The clock matrix works again, and a broken harness now fails the blocking `verify` job (`make test-clock-preflight`). Event-loop tests count loop turns instead of wall-clock time; cancellation-budget tests wait for the archive write. `codex_runtime_rpc.py` counts toward coverage.
+- Frontend functions are limited to 60 lines and complexity 10, and `tsc --strict` errors went from 469 to 9 (all three.js typings).
+
+Not proven: any run on GitHub-hosted runners or `x64` (`act` is `arm64`, and skips CodeQL and `smoke`, which were run by hand on the host); `release.yml`, the `release` environment and attestation; a real ChatGPT turn through the filtered front (run with the real CLI and a synthetic provider); Linux and systemd for the bridge; the fifteen opt-in real-CLI tests in this combined tree; a real Garmin account; real screen readers and phones; Debian (the deployment guide was followed on Ubuntu 24.04). `npm audit` over the build tooling reports six advisories (two high, vite), left to the maintainer. The 8 MiB frame limit of the bridge front is a judgement, not a measurement.
+
+### Second hardening pass, November 2026
+
+Upgrade notes:
+
+- Umay's bridge now needs one restart after updating: the app connects only over TLS 1.3 to a certificate pinned to `CODEX_BRIDGE_TOKEN`, and refuses an old plain bridge with a clear message. `.env` stays as it is (`ws://` is dialled as `wss://`). See [bridge upgrade](docs/DEPLOYMENT.md#9-optional-the-umay-bridge).
+- A new, empty database now stops at `provision-app-role` without `POSTGRES_APP_USER` and `POSTGRES_APP_PASSWORD` (`POSTGRES_ALLOW_OWNER_RUNTIME=1` overrides it). Existing archives keep running as the owner, with a startup warning and a `/health` reason.
+- Production now refuses weak secrets beyond length and one repeated character ([strength check](docs/reference/config.md#secret-strength)). A token that passed before can be refused now.
+- Upgrading from v0.2.2 works: the empty revision `20261107_a001` and the merge `20261109_0029` join its database to this tree, and its `apple_*` data is untouched ([path](docs/RUNBOOK.md#upgrade-from-v022)).
+
+Security:
+
+- Umay's bridge proves its identity with TLS; an impostor on its port gets neither the bearer token nor a message.
+- Login is throttled across the whole application (`429` with `Retry-After`); logging out closes an open Umay chat immediately; health responses are `no-store`.
+- Plain `localhost` and `127.0.0.1` sessions last 24 hours, `healthos.localhost` and HTTPS stay at 30 days, because a cookie cannot be scoped to a port.
+- The login redirect is rebuilt from validated parts so code scanning can see it, and a table of hostile `next` values (backslash, encoded and control-character spellings) is tested end to end.
+
+Deployment and backups:
+
+- `healthos verify` no longer reports tampering after an honest restore and still catches a real change; a false guard warning after restoring a live archive is gone.
+- `make backup` reads `/etc/healthos/backup.env`, runs with `sudo` when it must, and matches the timer. `make restore` needs `BACKUP_AGE_IDENTITY` or a key file for `.age` files.
+- The app container receives only the settings it reads; `.dockerignore` and `.gitignore` exclude `secrets`.
+- The development override really publishes PostgreSQL on `127.0.0.1:5432`.
+
+Reliability:
+
+- A run waiting for its turn no longer holds up other data types' turns, and write collisions retry with jitter. The connection pool grew to `3 × SYNC_CONCURRENCY + 3` (9 at the default).
+- A real backup and restore round trip is tested against PostgreSQL 17.
+
+Interface:
+
+- A server error is no longer shown as an empty archive; pages have their own address, so Back, Forward and reload work; about 456 KB less to download on a phone; heart rate is shown as "atım/dk".
+- Layout follows the browser's font size; charts are at least 40 px tall on laptops; the history panel drags on landscape phones; one retry control per failure.
+- ESLint size limits and a `tsc --strict` ratchet for the frontend.
+
+Quality and repository:
+
+- CodeQL and a Compose smoke run block CI; daily dependency audits, a weekly clock matrix; a release verifies its own provenance before publishing.
+- The runbook keeps operations only; what each migration changed moved to [Migration notes](docs/MIGRATIONS.md). Facts checked against the code; `README` no longer says the interface is Turkish-only, and Turkish text moved to `*.tr.md`.
+
+Not proven: a real ChatGPT login and turn through the bridge front (run with the real Codex CLI 0.161.0 and a fake login); any run of these workflows on GitHub Actions, the rulesets, `publish` and attestation; a real Garmin account in this pass; real phones, Safari, Firefox and screen readers. About 470 frontend strict-mode errors remain under the ratchet. The clock matrix and a few timing-budget tests failed once each at high machine load and passed alone.
+
+### Hardening and verification, November 2026
+
+Dependency and image upgrades: `certifi` 2026.7.22 → 2026.10.18; `cryptography` 46.0.7 → 50.0.0 (cap
+now `<51`, resolving four pip-audit advisories; tokens written with 46.0.7 were read back on 50.0.0 and vice versa);
+`dompurify` 3.4.16 → 3.4.17; new dev dependencies `pytest-timeout` and TypeScript 5.9.3; Node build
+image 24.21.0 → 24.22.2; Python runtime image 3.12.13 → 3.12.16. Rebuild images and rerun `npm ci`.
+
+Database:
+
+- Migration `20261108_0028`: derived-day invalidation is deferred to commit and applied in key
+  order, so concurrent syncs no longer deadlock on the same days; a page transaction aborted for a
+  deadlock or serialization failure is retried, four attempts in total (tested on PostgreSQL 16.2, not 17; a
+  three-party deadlock with the derived-day builder is still possible and only writers are retried). Large pages write about 12 times
+  faster, and Garmin writes no longer invalidate Google days.
+- Optional non-superuser application role (`POSTGRES_APP_USER`, `POSTGRES_APP_PASSWORD`, the new
+  `provision-app-role` service): the schema owner still migrates, and the append-only triggers are out of the
+  app's reach. New installs set it through `.env.example`; existing installs change only after adding both lines ([runbook](docs/RUNBOOK.md#application-database-role)).
+  `docker compose exec app alembic upgrade` is no longer the path: use the `migrate` service.
+
+Deployment and security:
+
+- Production refuses a weak or placeholder `APP_UI_TOKEN`, `GOOGLE_HEALTH_WEBHOOK_AUTHORIZATION` or configured
+  `CODEX_BRIDGE_TOKEN` (under 16 characters or one repeated character), and a `CODEX_BRIDGE_URL`
+  outside loopback or the Docker gateway.
+- Google OAuth uses PKCE (`S256`).
+- `/backfill/start` and `/sync/*` spend the manual-write budget and return `429` when it is used up.
+- CLI failures print only the error class; logs are redacted. Google and Garmin commands now say that
+  their source is off (`HEALTHOS_SOURCES=none`), and selecting an uninstalled `apple` logs a warning, adds a `/health` reason and shows "Kurulu değil".
+- Compose: `docker-compose.garmin.yml` enables Garmin without editing tracked files (key owned by UID
+  10001); `APP_PORT` in `.env` no longer moves the container listener; the Docker user is
+  `healthos` (UID 10001 unchanged) and `/health` reports `service: healthos`; Caddy is read-only with dropped capabilities; every
+  service has memory and process limits; the backup unit creates `/opt/healthos/backups` itself; systemd units hardened (`backup` 1.9, bridge 3.9 by `systemd-analyze security`).
+
+Interface:
+
+- Every page fits one screen down to 320×256; type follows the browser's font-size preference; 44 px touch
+  targets, 12 px minimum text, skip link; empty and error states for Measurements and Overview.
+- Full-screen Umay sheet on phones (modal, focus kept inside); history panel resizes by keyboard.
+- `main.js` split; a malformed response no longer locks the panel; notices offer **Yeniden dene**;
+  WebGL context loss shows a silhouette; English translation complete; data types and dates
+  localized; `checkJs` required in lint.
+
+Quality gates:
+
+- CI runs `make coverage-security` and `make test-postgres`, including the whole unit suite on PostgreSQL;
+  gates are protected by mutation tests (`tests/test_ci_gates.py`). Release needs a tag matching the
+  version, on `main`, with successful CI on that commit, then attests provenance. `make ci-gate`
+  records a local receipt the pre-push hook requires; rulesets and CODEOWNERS ship in `.github/`.
+- `pytest-timeout` fails a test after 60 seconds; `make test-postgres`, `make test-clock` and the
+  `local_sockets` fixture (`HEALTHOS_REQUIRE_SOCKETS=1`) are new. Pyright is `standard`; Ruff `C901` ≤ 24 (lowered to 16 later this month).
+
+Not yet proven: no run of these workflows on GitHub Actions, rulesets not applied, `publish` and
+attestation never executed. `npm audit` over dev dependencies reports vite and source-map-js (production: none). Tested only in
+Chromium: real phones, Safari and screen readers were not. The Apple importer's presence was stubbed.
+
+### Documentation and first run
+
+- `.env.example` now sets `HEALTHOS_SOURCES=none`: a fresh `.env` boots in production mode with
+  only `POSTGRES_PASSWORD`, `POSTGRES_APP_PASSWORD` and `APP_UI_TOKEN`. An existing `.env` is not affected; a `.env` with
+  the line removed still means `google`, plus Garmin with `GARMIN_ENABLED=true`.
+- README: a tested Garmin-only quickstart, and production no longer described as requiring Google.
+- New reference page, Sources: what each `HEALTHOS_SOURCES` value does, and what is not in this
+  tree. Apple Health is labelled as absent from this tree; `HEALTHOS_SOURCES=apple` accepts the
+  value and imports nothing.
+- Corrected: migrations run in the one-shot `migrate` service, not at app start; the Umay bridge
+  has a shipped systemd unit; `docs/reference/config.md` lists every setting and template variable.
+- English: `docs/UI_AUTH.md`, `docs/UMAY_INTERPRETATION.md`, `docs/UMAY_TRANSFER.md`,
+  `docs/PERFORMANCE_BUDGET.md` and project planning notes; the dated backfill guide is marked
+  as Turkish documentation without changing its contents.
+
+### Version
+
+- `pyproject.toml` is the single version source, and the app reads its version from the
+  installed project metadata (`app/core/version.py`); `tests/test_version_agreement.py` keeps
+  `pyproject.toml`, `uv.lock`, `frontend/package.json` and `frontend/package-lock.json` in step. The
+  declared version is now 0.2.2.1, the first interim release toward 0.2.3.
+
+### Upgrade notes
+
+- The Umay bridge now starts only with a Codex CLI release it has been verified against
+  (0.161.0). Before it starts it measures the CLI in an isolated probe (about 15 seconds); with
+  another release, or when the probe fails, the bridge stays off and the rest of HealthOS works
+  as before. A bridge started by the earlier launcher is not reused: restart it once. The new
+  optional `CODEX_BRIDGE_CLI` (absolute path) selects the CLI binary.
+- After every HealthOS update, restart the Umay bridge. The chat now compares the running
+  bridge's effective settings with the bridge policy (including a fingerprint of the policy and
+  probe code) and refuses to open a thread on a bridge that does not match, so Umay stays off
+  until the bridge is restarted. The bridge no longer inherits the operator's environment: only
+  an allow-list plus proxy and CA variables reach it, and its home is `healthos-bridge/home`.
+- Development: `pytest-cov` and `pytest-xdist` are new dev dependencies (`uv sync --extra dev`).
+  `make test`, and so `make verify`, runs the unit tests in parallel; `pytest -q -p no:xdist`
+  runs them in one process.
+- Development: the interface has a linter, `cd frontend && npm run lint` (ESLint with
+  `no-unsanitized`). The new pinned dev dependencies need Node ^20.19, ^22.13 or 24+; the
+  Dockerfile and CI already use 24. `frontend/package-lock.json` changed, so cached
+  `node_modules` keyed on it are rebuilt.
+
+### Security
+
+- Error logs no longer carry health records, source or device names, SQL parameters or the
+  database's DETAIL text (CWE-532). Backfill and identity-reconciliation failures keep only the
+  exception's class chain, SQLSTATE and code locations, in the log as in
+  `identity_reconcile_state.last_error`. Every log record, APScheduler's and uvicorn's included,
+  leaves without its traceback; background job failures log where they happened
+  (`module:function:line`). Earlier log copies and stored error summaries are unchanged.
+- Garmin: the token exchange's body (the bearer token, or an error answer that may echo the key)
+  is no longer stored in `garmin_api_responses`; the row keeps `[redacted: garmin bearer token]`
+  while `body_sha256` and `body_size` still describe the bytes Garmin sent (CWE-312). Response
+  bodies that contain the token in use, and response headers that carry credentials, are masked
+  too. Rows written earlier stay as they are (the archive is append-only); their tokens expired
+  24 hours after they were issued. No schema change.
+- Umay bridge: the model can no longer read files or images outside the health archive or start
+  sub-agents, and the chat sends no text to a thread whose CLI release, model, approval policy
+  or sandbox differs from the verified one. `healthos-bridge.service` hides `.env`, the backups
+  and `/etc/healthos` from the bridge account.
+- Umay bridge: every thread repeats all bridge limits (sub-agents capped, image viewing and the
+  other disabled features off), and a bridge that cannot prove its settings through
+  `config/read` gets no user text. The launcher measures and runs the same native Codex binary
+  (shell shims are skipped; npm installs use the package's own binary) and reports a stale
+  bridge or a busy port by PID instead of failing silently.
+- Logs: a traceback embedded in a plain log message (as uvicorn does for lifespan errors) is cut
+  to its first line and the exception class.
+
+### Fixed
+
+- Interface: a page restored with the browser's Back button no longer stays frozen; it fetches
+  fresh data at once, restarts the 60-second refresh and brings the 3D model (or its silhouette)
+  back.
+- Interface: notices can be closed; success notices leave after 5 seconds instead of 20, and an
+  error clears itself when the same request next succeeds. The notice box is smaller.
+- Umay: a streaming answer is drawn at most once per frame and turns into Markdown when it ends;
+  a malformed frame is skipped without dropping the connection; links in answers open in a new
+  tab.
+- Interface: a day with an unknown status reads "Bilinmiyor"; every value in the coverage and
+  device panels is escaped.
+
+### Changed
+
+- Documentation: `docs/REFERENCE.md` is split by topic into `docs/reference/`; the old page is now
+  a table of contents that keeps every old section anchor. The reference and `docs/RUNBOOK.md` are
+  in English, and both use the `healthos` command name throughout.
+- Tests: `make coverage` enforces a coverage floor for the unit suite (92.6%; 93.7% measured) and
+  `make coverage-security` 90% for the security modules. PostgreSQL race tests wait for the
+  observed lock instead of fixed sleeps, and tests that compute "today" run on a fixed clock.
+  Identity test files are named after what they test; helpers shared by test modules live in
+  `tests/support/`.
+- The bridge's real-CLI regression runs with
+  `HEALTHOS_CODEX_CLI=/path/to/codex pytest tests/test_codex_bridge_runtime.py`.
+- Interface accessibility: the heart and sleep accent colours are lighter (at least 5:1 on small
+  text), disabled buttons use their own colour tokens instead of fading, a finished Umay answer
+  is announced to screen readers with a short summary, and the notice is a labelled status.
+- Interface: up to 900 px wide the overview cards are tabs (Profil, Bağlantı, Adım, Uyku, Nabız)
+  so neither the page nor the card column scrolls on phones and tablets.
+- Interface code: the CSS is formatted one rule per line, its precedence comes from
+  `@layer base, components, overrides` rather than import order, and 117 duplicate rules were
+  merged without changing what is drawn. Shared state and formatters live in `state.js` and
+  `format.js`. Umay's Markdown and sanitiser libraries load on the first connection, which cuts
+  the initial JavaScript from about 58 KB to 38 KB (gzip).
+
+### Added
+
+- System › About: HealthOS is not a medical device; HRV and SpO₂ are device estimates; the data
+  stays on your own server; what Umay sends to OpenAI when it is on (the Turkish summary of
+  [Privacy](docs/PRIVACY.md)).
+- The interface is ready for translation: all text is in one dictionary, and System › Appearance
+  › Dil offers English (the main dashboard is translated, other pages fall back to Turkish).
+  Turkish stays the default and its text is unchanged.
+
+### Product name: HealthOS (prepared 2026-11-07)
+
+One product name, HealthOS, everywhere. The rename itself needs no migration and changes nothing in
+the database.
+
+Upgrade notes:
+
+- The command is now `healthos` (`docker compose exec app healthos status`). The old name,
+  `health-mirror`, was a deprecated alias in this prerelease and has been removed; scripts must call `healthos`.
+- The Python distribution is renamed from `personal-health-mirror` to `healthos`. Docker users
+  rebuild the image as usual; a native install picks up the new name with `uv sync`.
+- Names a running installation depends on are unchanged: the container user, the default
+  webhook subscriber id (`GOOGLE_HEALTH_WEBHOOK_SUBSCRIBER_ID`), the `service` field of
+  `/health`, and the systemd unit names in `deploy/systemd/` (always `healthos-*`). launchd
+  agents exist only in the guided installer of the published release, which is not part of this
+  source tree; it replaces its old `org.healtos.*` agents (below).
+
+Changed:
+
+- The misspelled product name is corrected to HealthOS (the repository was renamed to
+  `M3rgen/HealthOS`; the old URLs redirect). Browser preferences and uploaded appearance images
+  stored under the old `healtos` names are carried over automatically on first load; the old
+  copies are left in place.
+- Installations made with the guided installer (GitHub release; not in this source tree) are
+  carried over by running the installer again: settings and key directories under the old name
+  are copied to the new one and the originals kept, and the old `org.healtos.*` launchd agents are replaced, their plists
+  kept as `.bak-<UTC stamp>` files.
+- The CLI's help, the API title and the documentation use HealthOS and `healthos`; a test keeps
+  the old names to the places that need them for compatibility or history.
+
+Added:
+
+- [Architecture](docs/ARCHITECTURE.md): the layers and their import rules, the data flow of
+  every source, why each source keeps its own raw tables and why the record-identity layer is
+  as large as it is.
+- [Privacy](docs/PRIVACY.md): HealthOS is not a medical device (HRV and SpO₂ are device
+  estimates); where the data lives; exactly what Umay sends to OpenAI; a GDPR/KVKK note. The
+  README's privacy section carries the short version.
+
+## [0.2.2] - 2026-11-07
 
 ### Changed
 
@@ -178,7 +586,7 @@ Added: a guided, bilingual (English / Türkçe) installer for every platform
   file (`health-mirror apple-token`), optional https host admitted for that path only
   (`APPLE_RECEIVER_ENDPOINT_URI`), body and request limits. Records are archived first
   (append-only), then normalized with `provider = 'APPLE'` and source code `HEALTH_KIT`, so the
-  precedence policy, the dashboard, the workout list, Cihazlarım and Umay see them; Watch and
+  precedence policy, the dashboard, the workout list, **Cihazlarım** and Umay see them; Watch and
   iPhone samples and the two gates are never added together. HRV from Apple is SDNN and is kept
   apart from RMSSD. The receiver follows the app's published format; its fixtures are synthetic
   ([docs/REFERENCE.md](docs/REFERENCE.md#apple-health-github-version)).
@@ -242,9 +650,10 @@ Added: a guided, bilingual (English / Türkçe) installer for every platform
   copy: the first paint does not wait for the server, and a change made while the server is
   unreachable applies in that browser and is sent on the next contact.
 
-## 0.2.1 — 2026-10-31
+## [0.2.1] - 2026-10-31
 
-Covers everything merged since 0.2 (`4828135`), mainly Gitea #31 and #32.
+Covers everything merged since 0.2, mainly two integration batches: the Umay interpretation
+layer with the split of large modules and a series of reliability fixes, and Umay persona v7.
 
 ### Upgrade notes
 
@@ -338,3 +747,41 @@ Covers everything merged since 0.2 (`4828135`), mainly Gitea #31 and #32.
 - Backups made in the same second or concurrently no longer overwrite each other.
 - The grain texture and the background chosen under System › Appearance show on the home page
   again.
+
+## [0.2] - 2026-10-23
+
+The first release under the current numbering (tag `v0.2`). Earlier snapshots were labelled
+0.5.0 and are not described here.
+
+### Added
+
+- A self-hosted, read-only archive of the Google Health API v4: OAuth with read-only scopes,
+  resumable backfills by data type and time window, overlapping incremental sync, signed
+  webhooks that trigger retrieval, daily reconciliation and persisted checkpoints.
+- Raw-first storage: every Google response kept byte for byte, every record's payload kept with
+  all of its earlier versions, and database triggers that refuse deletes and rewrites;
+  `verify` checks them (migrations `20261020_0010` and `20261020_0011`).
+- Record identity for records without a Google id, so a renamed device or a reshaped interval is
+  the same record; source chains decided by a nightly reconciler or by the owner, and
+  duplicates superseded instead of deleted (migration `20261021_0012`).
+- Source deletions are marked with `source_deleted_at` and an event; no row is deleted.
+- A single-screen Turkish dashboard with daily cards, hourly charts, a 7-day history, CSV
+  export, manual body measurements and workouts, a 3D body reference and an appearance panel
+  whose choices are shared across devices.
+- Umay, an optional chat companion through a local Codex bridge, with read-only archive tools.
+- Encrypted, scheduled backups that are kept forever, with a free-space guard and a restore
+  drill.
+
+### Security
+
+- The interface and API sit behind a single-user access token with server-side login
+  sessions; security headers and a CSRF guard on manual entries; no interactive API
+  documentation in production; the Umay bridge never listens on all interfaces.
+
+### Changed
+
+- Operations hardening: a production guard in Compose, log rotation, a scheduler misfire
+  allowance, recovery of work left running at start-up, and backfill windows that keep failing
+  are set aside after ten attempts instead of blocking the rest.
+- CI runs PostgreSQL integration tests, browser checks of the single-screen rule and pyright;
+  the documentation was reorganized into a deployment guide and a runbook.

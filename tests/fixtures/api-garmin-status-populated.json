@@ -1,0 +1,120 @@
+{
+  "enabled": false,
+  "key_file_present": false,
+  "pull_interval_minutes": 120,
+  "lookback_days": 3,
+  "last_success_at": null,
+  "last_error": null,
+  "last_error_at": null,
+  "failing_kinds": [],
+  "raw_records": 1,
+  "responses": 0,
+  "kinds": {
+    "daily-summaries": {
+      "records": 0,
+      "newest_key": null,
+      "last_success_at": null,
+      "last_error": null,
+      "last_error_at": null,
+      "failing": false,
+      "backfill": null
+    },
+    "steps": {
+      "records": 1,
+      "newest_key": "2026-09-29",
+      "last_success_at": null,
+      "last_error": null,
+      "last_error_at": null,
+      "failing": false,
+      "backfill": null
+    },
+    "stress": {
+      "records": 0,
+      "newest_key": null,
+      "last_success_at": null,
+      "last_error": null,
+      "last_error_at": null,
+      "failing": false,
+      "backfill": null
+    },
+    "body-battery": {
+      "records": 0,
+      "newest_key": null,
+      "last_success_at": null,
+      "last_error": null,
+      "last_error_at": null,
+      "failing": false,
+      "backfill": null
+    },
+    "sleep-summaries": {
+      "records": 0,
+      "newest_key": null,
+      "last_success_at": null,
+      "last_error": null,
+      "last_error_at": null,
+      "failing": false,
+      "backfill": null
+    },
+    "hrv-summaries": {
+      "records": 0,
+      "newest_key": null,
+      "last_success_at": null,
+      "last_error": null,
+      "last_error_at": null,
+      "failing": false,
+      "backfill": null
+    },
+    "heart-rate": {
+      "records": 0,
+      "newest_key": null,
+      "last_success_at": null,
+      "last_error": null,
+      "last_error_at": null,
+      "failing": false,
+      "backfill": null
+    },
+    "spo2": {
+      "records": 0,
+      "newest_key": null,
+      "last_success_at": null,
+      "last_error": null,
+      "last_error_at": null,
+      "failing": false,
+      "backfill": null
+    },
+    "sleep": {
+      "records": 0,
+      "newest_key": null,
+      "last_success_at": null,
+      "last_error": null,
+      "last_error_at": null,
+      "failing": false,
+      "backfill": null
+    },
+    "hrv": {
+      "records": 0,
+      "newest_key": null,
+      "last_success_at": null,
+      "last_error": null,
+      "last_error_at": null,
+      "failing": false,
+      "backfill": null
+    },
+    "activities": {
+      "records": 0,
+      "newest_key": null,
+      "last_success_at": null,
+      "last_error": null,
+      "last_error_at": null,
+      "failing": false,
+      "backfill": null
+    }
+  },
+  "normalization": {
+    "status": "unknown",
+    "last_attempt_at": null,
+    "last_success_at": null,
+    "last_error_at": null,
+    "last_error_code": null
+  }
+}

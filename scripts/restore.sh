@@ -12,6 +12,9 @@
 # GOOGLE_TOKEN_ENCRYPTION_KEY that encrypted its OAuth refresh tokens.
 set -euo pipefail
 
+# shellcheck source=scripts/backup_env.sh
+. "$(dirname "${BASH_SOURCE[0]}")/backup_env.sh"
+
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
 fail() {
@@ -23,6 +26,15 @@ fail() {
   echo "usage: restore.sh BACKUP_FILE [target_db]" >&2
   exit 2
 }
+# The timer's ./backups is mode 700 and root-owned: nothing inside can even be seen without root.
+if [ "$(id -u)" != 0 ] && { [ ! -x "$(dirname "$1")" ] || { [ -e "$1" ] && [ ! -r "$1" ]; }; }; then
+  echo "restore: $1 is readable only by root; rerunning with sudo." >&2
+  command -v sudo >/dev/null || fail "sudo is not installed; rerun this script as root"
+  exec sudo ${BACKUP_AGE_IDENTITY:+BACKUP_AGE_IDENTITY="$BACKUP_AGE_IDENTITY"} \
+    ${BACKUP_KEY_FILE:+BACKUP_KEY_FILE="$BACKUP_KEY_FILE"} \
+    ${BACKUP_ENV_FILE:+BACKUP_ENV_FILE="$BACKUP_ENV_FILE"} \
+    bash "$ROOT/scripts/restore.sh" "$@"
+fi
 backup="$(cd "$(dirname "$1")" && pwd)/$(basename "$1")"
 target="${2:-health_restore}"
 [ -f "$backup" ] || fail "no such backup: $1"
@@ -30,7 +42,21 @@ target="${2:-health_restore}"
 case "$target" in
   health | postgres | template0 | template1) fail "refusing to restore over '$target'; pick a scratch database" ;;
 esac
-key_file="${BACKUP_KEY_FILE:-/etc/healthos/backup.key}"
+# backup.env (read as backup.sh does) can name a non-default key file.
+backup_env_file="${BACKUP_ENV_FILE:-/etc/healthos/backup.env}"
+file_key="$(file_value "$backup_env_file" BACKUP_KEY_FILE)"
+key_file="${BACKUP_KEY_FILE:-${file_key:-/etc/healthos/backup.key}}"
+# Decryption runs after cd to ROOT; keep paths relative to the caller's directory.
+case "$key_file" in
+  /*) ;;
+  *) key_file="$PWD/$key_file" ;;
+esac
+if [ -n "${BACKUP_AGE_IDENTITY:-}" ]; then
+  case "$BACKUP_AGE_IDENTITY" in
+    /*) ;;
+    *) BACKUP_AGE_IDENTITY="$PWD/$BACKUP_AGE_IDENTITY" ;;
+  esac
+fi
 
 case "$backup" in
   *.age)
@@ -55,10 +81,44 @@ psql_in() {
     --tuples-only --no-align --field-separator=$'\t' --command "$2"
 }
 
+# The scratch copy shares the live cluster's data volume; check before touching it.
+human_gib() {
+  case "$1" in
+    '' | *[!0-9]*) printf 'unknown GiB' ;;
+    *) awk -v b="$1" 'BEGIN { printf "%.2f GiB", b / 1073741824 }' ;;
+  esac
+}
+space_failure() {
+  fail "$1; free: $(human_gib "$free_bytes"), live database: $(human_gib "$live_bytes"). See docs/RUNBOOK.md#watch-the-disk"
+}
+live_bytes="$(psql_in health "SELECT pg_database_size('health')" 2>/dev/null)" || live_bytes=''
+free_kib="$(docker compose exec -T postgres df -Pk /var/lib/postgresql/data 2>/dev/null \
+  | awk 'END { print $4 }')" || free_kib=''
+free_bytes=''
+case "$free_kib" in
+  '' | *[!0-9]*) space_failure "cannot measure free space; refusing restore" ;;
+esac
+# Match backup.sh's POSIX df parsing: Available is in 1024-byte blocks.
+free_bytes="$((free_kib * 1024))"
+case "$live_bytes" in
+  '' | *[!0-9]*) space_failure "cannot measure live database size; refusing restore" ;;
+esac
+[ "$free_bytes" -ge "$live_bytes" ] || space_failure "insufficient free space; refusing restore"
+
 docker compose exec -T postgres dropdb -U health --if-exists "$target"
 docker compose exec -T postgres createdb -U health "$target"
 "${decrypt[@]}" | docker compose exec -T postgres \
-  pg_restore -U health --dbname="$target" --no-owner --exit-on-error
+  pg_restore -U health --dbname="$target" --no-owner --no-privileges --single-transaction --exit-on-error
+
+# Inspect only the scratch copy; even an old/incompatible dump never touches live data.
+revision="$(psql_in "$target" 'SELECT version_num FROM alembic_version ORDER BY version_num' 2>/dev/null)" \
+  || fail "restored revision query failed; schema compatibility cannot be verified"
+live_revision="$(psql_in health 'SELECT version_num FROM alembic_version ORDER BY version_num' 2>/dev/null)" \
+  || fail "live revision query failed; schema compatibility cannot be verified"
+[ -n "$revision" ] && [ -n "$live_revision" ] \
+  || fail "missing Alembic revision; refusing to validate a dump with an unknown schema version"
+[ "$revision" = "$live_revision" ] \
+  || fail "schema version mismatch: restored [$revision], live [$live_revision]. Refusing to validate this dump for live restore. Scratch database '$target' was kept; live data was not changed. Use matching application/migrations in an isolated environment first."
 
 count_sql="SELECT table_name, (xpath('/row/c/text()', query_to_xml(format(
   'SELECT count(*) AS c FROM %I.%I', table_schema, table_name), false, true, '')))[1]::text
@@ -101,7 +161,5 @@ printf 'table\trestored\tlive\tcomparison\n'
   }
 ' | LC_ALL=C sort
 echo "Counts compare a backup snapshot with the current live archive; differences alone do not imply corruption."
-revision="$(psql_in "$target" 'SELECT version_num FROM alembic_version' 2>/dev/null)" \
-  || fail "restored revision query failed"
 echo "Alembic revision: $revision"
 echo "Drop the scratch copy when done: docker compose exec -T postgres dropdb -U health $target"

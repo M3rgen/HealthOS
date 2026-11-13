@@ -16,11 +16,13 @@ from app.models.raw_versions import RawHealthDataVersion
 from app.models.retrieval import RetrievalEvent
 from app.models.state import BackfillJob, JobStatus, RawHealthData
 from app.parsers.common import source_id
-from app.parsers.normalize import normalize
-from app.services.dashboard import dashboard_data
-from app.services.raw_history import record_history
-from app.services.retrieval_coverage import coverage_report
-from app.services.storage import store_page, store_records
+from app.services.archive.normalization import normalize
+from app.services.archive.raw_history import record_history
+from app.services.archive.storage import store_page, store_records
+from app.services.dashboard_views.dashboard import dashboard_data
+from app.services.readers.dashboard_queries import DashboardQuery
+from app.services.shared.query_ranges import CivilDateRange
+from app.services.synchronization.retrieval_coverage import coverage_report
 
 
 def heart_rate(bpm=60):
@@ -60,9 +62,14 @@ async def test_daily_date_corrections_archive_http_and_keep_neighbor(sessions, b
         assert values == ([] if expected is None else [expected])
         assert [r["value"] for r in streams(card, "resting_bpm", 1)] == [70]
         async with sessions() as session:
-            panel = await dashboard_data(session, last, 2, "UTC")
+            panel = await dashboard_data(session, query=DashboardQuery(last, 2, "UTC"))
             assert [r["resting_bpm"] for r in panel["days"]] == [70, expected]
-            report = await coverage_report(session, REGISTRY, first, last, "UTC", kind)
+            report = await coverage_report(
+                session,
+                REGISTRY,
+                kind,
+                dates=CivilDateRange(first, last, "UTC"),
+            )
             days = report["types"][0]["days"]
             assert [d["has_value"] for d in days] == [expected is not None, True]
             event = await session.scalar(
@@ -92,6 +99,23 @@ async def test_dedup_and_changed_payload_upsert(sessions):
     assert changed.updated == 1
     assert raw_count == normalized_count == 1
     assert int(rate.bpm) == 65
+
+
+@pytest.mark.parametrize("copies", [1, 2])
+async def test_identical_consecutive_records_do_not_report_conflict(sessions, caplog, copies):
+    with caplog.at_level("INFO", logger="app.services.archive.storage"):
+        async with sessions.begin() as session:
+            stats = await store_page(
+                session, REGISTRY["heart-rate"], Page([heart_rate(60) for _ in range(copies)], None)
+            )
+    async with sessions() as session:
+        assert await session.scalar(select(func.count(RawHealthData.id))) == 1
+        assert await session.scalar(select(func.count(HeartRate.id))) == 1
+        assert await session.scalar(select(func.count(RawHealthDataVersion.id))) == 0
+    assert stats.inserted == stats.normalized == 1
+    events = [getattr(record, "event", None) for record in caplog.records]
+    assert "RECORD_BATCH_STORED" in events
+    assert "RECORD_BATCH_DUPLICATE_CONFLICT" not in events
 
 
 async def test_upsert_does_not_release_quarantined_records(sessions):
@@ -159,7 +183,7 @@ def test_synthetic_identity_keeps_same_interval_zones_distinct():
 
 async def test_duplicate_ids_in_one_batch_are_upserted_once(sessions, monkeypatch):
     """PostgreSQL rejects an ON CONFLICT statement that touches the same row twice."""
-    from app.services import storage
+    from app.services.archive import storage
 
     seen_batches = []
     original_raw = storage._upsert_raw_many
@@ -200,7 +224,7 @@ async def test_overflow_correction_preserves_history_and_hides_stale_value(sessi
     valid = point(kind=kind)
     broken = {**point(bad, kind), "name": valid["name"]}
     async with sessions() as session:
-        empty = await dashboard_data(session, day, 1, "UTC")
+        empty = await dashboard_data(session, query=DashboardQuery(day, 1, "UTC"))
     for record, expected_history in [(valid, []), (broken, [valid]), (valid, [valid, broken])]:
         async with sessions.begin() as session:
             stats = await store_records(session, spec, [record])
@@ -212,7 +236,9 @@ async def test_overflow_correction_preserves_history_and_hides_stale_value(sessi
                 select(RawHealthDataVersion).order_by(RawHealthDataVersion.version)
             )
             assert raw.raw_json == record and [row.raw_json for row in versions] == expected_history
-            assert (await dashboard_data(session, day, 1, "UTC") == empty) == (record == broken)
+            assert (
+                await dashboard_data(session, query=DashboardQuery(day, 1, "UTC")) == empty
+            ) == (record == broken)
 
 
 @pytest.mark.parametrize("value", [*BAD_NUMBERS, "10000000000", "9999999999.995"])
@@ -256,7 +282,7 @@ async def test_numeric_corrections_keep_raw_versions_and_valid_neighbors(session
 async def test_validation_does_not_hide_database_failures(sessions, monkeypatch, records, failure):
     from sqlalchemy.exc import DBAPIError, OperationalError
 
-    from app.services import storage
+    from app.services.archive import storage
 
     async def disconnected(session, *args):
         if failure == "sql":

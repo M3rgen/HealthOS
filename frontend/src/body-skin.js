@@ -1,4 +1,4 @@
-import * as THREE from 'three';
+import { Color, MeshPhysicalMaterial, MeshStandardMaterial, ShaderChunk, Vector3 } from 'three';
 
 // Tileable skin micro-detail (lane C, public/assets/skin/, see ASSETS.md): OpenGL +Y normal,
 // roughness 0.5 = neutral. One tile ≈ 6–7 cm on the body at 28 repeats per UV unit.
@@ -11,11 +11,12 @@ export const SKIN_DETAIL = {
   roughnessStrength: 1, // base roughness × (2 × detail): 0.5 is neutral, 0.43–0.57 → ×0.86–1.14
 };
 
+/** @returns {import('./body-types').SkinUniforms} */
 export function createSkinUniforms() {
   return {
-    rimColor: { value: new THREE.Color(0xf0c478) }, rimStrength: { value: .1 },
-    skinWrap: { value: new THREE.Vector3(.2, .09, .05) },
-    skinScatterColor: { value: new THREE.Color(1, .38, .24) }, skinScatter: { value: .2 },
+    rimColor: { value: new Color(0xf0c478) }, rimStrength: { value: .1 },
+    skinWrap: { value: new Vector3(.2, .09, .05) },
+    skinScatterColor: { value: new Color(1, .38, .24) }, skinScatter: { value: .2 },
     skinDetailNormal: { value: null }, skinDetailRoughness: { value: null },
     skinDetailRepeat: { value: SKIN_DETAIL.repeat },
     skinDetailNormalStrength: { value: SKIN_DETAIL.normalStrength },
@@ -30,21 +31,12 @@ export function createSkinUniforms() {
 // - tileable micro-detail normal blended over the base map (whiteout); the fat-driven
 //   normalScale only scales the base (muscle) map, never the pores;
 // - a thin amber Fresnel accent so the UI colour reads on the silhouette without tinting the skin.
-export function makeSkinMaterial(source, skinUniforms) {
-  const material = new THREE.MeshPhysicalMaterial();
-  THREE.MeshStandardMaterial.prototype.copy.call(material, source);
-  material.defines = { STANDARD: '', PHYSICAL: '' };
-  material.specularIntensity = .7;
-  material.sheen = .35;
-  material.sheenRoughness = .55;
-  material.sheenColor.set(0x5a463c);
-  if (!material.roughnessMap && material.roughness < .6) material.roughness = .6; // untextured skin reads as plastic below this
-  material.onBeforeCompile = (shader) => {
-    Object.assign(shader.uniforms, skinUniforms);
-    let lights = THREE.ShaderChunk.lights_physical_pars_fragment;
-    const diffuseLine = 'reflectedLight.directDiffuse += irradiance * BRDF_Lambert( material.diffuseContribution ) * ( 1.0 - F );';
-    if (lights.includes(diffuseLine)) {
-      lights = lights.replace(diffuseLine, `
+/** three's physical lighting chunk with the wrapped diffuse and back-scatter terms swapped in. */
+function skinLightsChunk() {
+  let lights = ShaderChunk.lights_physical_pars_fragment;
+  const diffuseLine = 'reflectedLight.directDiffuse += irradiance * BRDF_Lambert( material.diffuseContribution ) * ( 1.0 - F );';
+  if (lights.includes(diffuseLine)) {
+    lights = lights.replace(diffuseLine, `
         float skinNL = dot( geometryNormal, directLight.direction );
         vec3 skinWrapped = saturate( ( vec3( skinNL ) + skinWrap ) / ( 1.0 + skinWrap ) );
         reflectedLight.directDiffuse += skinWrapped * directLight.color * BRDF_Lambert( material.diffuseContribution ) * ( 1.0 - F );
@@ -52,21 +44,27 @@ export function makeSkinMaterial(source, skinUniforms) {
         vec3 skinBackDir = normalize( directLight.direction + skinSmoothNormal * 0.35 );
         float skinBack = min( pow( saturate( dot( geometryViewDir, - skinBackDir ) ), 4.0 ) * skinThin, 0.35 );
         reflectedLight.directDiffuse += directLight.color * skinBack * skinScatter * skinScatterColor * material.diffuseContribution;`);
-    }
-    shader.fragmentShader = shader.fragmentShader
-      .replace('#include <common>', `#include <common>
+  }
+  return lights;
+}
+
+/** @param {import('./body-types').Shader} shader three's compile-time shader object @param {import('./body-types').SkinUniforms} skinUniforms */
+function patchSkinShader(shader, skinUniforms) {
+  Object.assign(shader.uniforms, skinUniforms);
+  shader.fragmentShader = shader.fragmentShader
+    .replace('#include <common>', `#include <common>
         uniform vec3 rimColor; uniform float rimStrength;
         uniform vec3 skinWrap; uniform vec3 skinScatterColor; uniform float skinScatter;
         uniform sampler2D skinDetailNormal; uniform sampler2D skinDetailRoughness;
         uniform float skinDetailRepeat; uniform float skinDetailNormalStrength; uniform float skinDetailRoughnessStrength;
         float skinThin = 0.0;
         vec3 skinSmoothNormal = vec3( 0.0, 0.0, 1.0 );`)
-      .replace('#include <lights_physical_pars_fragment>', lights)
-      .replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>
+    .replace('#include <lights_physical_pars_fragment>', skinLightsChunk())
+    .replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>
         #if defined( SKIN_DETAIL_ROUGHNESS ) && defined( USE_NORMALMAP )
           roughnessFactor = clamp( roughnessFactor * mix( 1.0, 2.0 * texture2D( skinDetailRoughness, vNormalMapUv * skinDetailRepeat ).g, skinDetailRoughnessStrength ), 0.05, 1.0 );
         #endif`)
-      .replace('#include <normal_fragment_maps>', `
+    .replace('#include <normal_fragment_maps>', `
         #if defined( SKIN_DETAIL_NORMAL ) && defined( USE_NORMALMAP_TANGENTSPACE )
           vec3 mapN = texture2D( normalMap, vNormalMapUv ).xyz * 2.0 - 1.0;
           mapN.xy *= normalScale;
@@ -82,13 +80,28 @@ export function makeSkinMaterial(source, skinUniforms) {
         #else
           #include <normal_fragment_maps>
         #endif`)
-      .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
+    .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
         // Silhouette terms use the interpolated surface normal so normal-map creases don't light up.
         float rimFacing = 1.0 - saturate( dot( nonPerturbedNormal, normalize( vViewPosition ) ) );
         skinThin = rimFacing * rimFacing;
         skinSmoothNormal = nonPerturbedNormal;
         totalEmissiveRadiance += rimColor * rimStrength * pow( rimFacing, 4.0 );`);
-  };
+}
+
+/**
+ * @param {import('./body-types').Material} source the glTF material @param {import('./body-types').SkinUniforms} skinUniforms shared uniforms of createSkinUniforms()
+ * @returns {import('./body-types').Material}
+ */
+export function makeSkinMaterial(source, skinUniforms) {
+  const material = new MeshPhysicalMaterial();
+  MeshStandardMaterial.prototype.copy.call(material, source);
+  material.defines = { STANDARD: '', PHYSICAL: '' };
+  material.specularIntensity = .7;
+  material.sheen = .35;
+  material.sheenRoughness = .55;
+  material.sheenColor.set(0x5a463c);
+  if (!material.roughnessMap && material.roughness < .6) material.roughness = .6; // untextured skin reads as plastic below this
+  material.onBeforeCompile = (/** @type {import('./body-types').Shader} */ shader) => patchSkinShader(shader, skinUniforms);
   material.customProgramCacheKey = () => 'healthos-skin-v2';
   return material;
 }

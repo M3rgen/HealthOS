@@ -7,8 +7,8 @@ from text_records import TEXT_FIELDS, text_point
 
 from app.google_health.client import Page
 from app.google_health.data_types import REGISTRY
-from app.parsers.normalize import normalize
-from app.services.storage import _upsert_normalized_many, store_page
+from app.services.archive.normalization import normalize
+from app.services.archive.storage import _upsert_normalized_many, store_page
 
 pytestmark = pytest.mark.integration
 

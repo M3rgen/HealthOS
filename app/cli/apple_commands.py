@@ -59,17 +59,16 @@ def apple_import(
     if not path.is_file():
         typer.echo(f"Dosya bulunamadı: {path}", err=True)
         raise typer.Exit(2)
-    from app.apple.export_zip import LOCAL_HEADER, open_export_path
-    from app.services import apple_import as service
+    from app.services.providers import apple_import as service
 
-    with open(path, "rb") as handle:
-        kind = "zip" if handle.read(4) == LOCAL_HEADER else "xml"
+    kind = service.export_kind(path)
     sessions = context.sessions
+    max_output = context.settings().apple_import_max_uncompressed
     last = [time.monotonic()]
 
     async def chunks():
         # Progress on stderr every few seconds; the summary goes to stdout as JSON.
-        for chunk in open_export_path(path):
+        for chunk in service.export_chunks(path, max_output):
             yield chunk
             current = service.running()
             now = time.monotonic()
@@ -101,8 +100,8 @@ def apple_import(
 
 def apple_status() -> None:
     """Apple Sağlık alıcısının ayarını ve son içe aktarmaları göster (değer ve sır içermez)."""
-    from app.api.apple import receiver_token
-    from app.services import apple_import as service
+    from app.core.apple_paths import receiver_token
+    from app.services.providers import apple_import as service
 
     settings = context.settings()
     sessions = context.sessions
@@ -131,7 +130,7 @@ def apple_normalize(
     except ValueError as exc:
         typer.echo(f"Tarih biçimi YYYY-AA-GG olmalı: {exc}", err=True)
         raise typer.Exit(2) from None
-    from app.services.apple_normalize import normalize_archive
+    from app.services.providers.apple_normalize import normalize_archive
 
     sessions = context.sessions
 

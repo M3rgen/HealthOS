@@ -13,13 +13,13 @@ import pytest
 from sqlalchemy import func, select, text
 
 from app.google_health.data_types import REGISTRY
-from app.models.identity import RawHealthDataIdentity
+from app.models.identity_tables import RawHealthDataIdentity
 from app.models.raw_versions import RawHealthDataVersion
 from app.models.state import RawHealthData
-from app.parsers import normalize
 from app.parsers.common import payload_hash, source_id, temporal
-from app.services.storage import store_records
-from app.sync.deletions import mark_source_deletions
+from app.services.archive.normalization import normalize
+from app.services.archive.source_deletions import mark_source_deletions
+from app.services.archive.storage import store_records
 
 pytestmark = pytest.mark.integration
 
@@ -114,8 +114,8 @@ async def test_rename_is_its_own_rows_until_the_reconciler_links_them(pg_session
     """The write path never decides a rename: the new name gets rows of its own and the
     complete fetch defers the old rows' marks; the nightly reconciler decides the chain and
     links them, after which the dashboard counts each reading once."""
-    from app.models.identity import RawHealthDataSupersession
-    from app.services.identity_backfill import identity_backfill
+    from app.models.identity_tables import RawHealthDataSupersession
+    from app.services.identities.identity_backfill import identity_backfill
 
     await legacy(pg_sessions, HEART, heart(60), T0)
     await identity_backfill(pg_sessions)  # the full run after the deploy

@@ -15,9 +15,10 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 from typer.testing import CliRunner
 
-from app.services.dashboard import dashboard_data
-from app.services.manual_flags import excluded_measurement_ids, record_flag
-from app.services.raw_history import verify_guards
+from app.services.archive.manual_flags import excluded_measurement_ids, record_flag
+from app.services.archive.raw_history_verification import verify_guards
+from app.services.dashboard_views.dashboard import dashboard_data
+from app.services.readers.dashboard_queries import DashboardQuery
 
 pytestmark = pytest.mark.integration
 
@@ -81,7 +82,10 @@ async def test_the_profile_falls_back_past_a_test_entry(pg_sessions) -> None:
     async with pg_sessions.begin() as session:
         await record_flag(session, flagged, "test", True)
     async with pg_sessions() as session:
-        data = await dashboard_data(session, datetime(2026, 9, 29, tzinfo=UTC).date(), 7, "UTC")
+        data = await dashboard_data(
+            session,
+            query=DashboardQuery(datetime(2026, 9, 29, tzinfo=UTC).date(), 7, "UTC"),
+        )
     assert data["profile"]["weight"]["value"] == 80.0
 
 

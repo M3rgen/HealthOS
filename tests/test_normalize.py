@@ -9,8 +9,8 @@ from app.google_health.data_types import REGISTRY
 from app.models.health import Distance, SleepSession, Steps, Weight
 from app.parsers.common import parse_date, parse_datetime, temporal
 from app.parsers.identity import record_identity
-from app.parsers.normalize import normalize
 from app.parsers.sleep import SleepAsleep, sleep_asleep_seconds
+from app.services.archive.normalization import normalize
 
 
 def test_steps_parser():
