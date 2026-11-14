@@ -26,7 +26,14 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.db.guards import definitions
 from app.google_health.data_types import REGISTRY
-from app.models import apple, derived_invalidation, garmin, oauth_credentials, raw_rejections
+from app.models import (
+    apple,
+    derived_invalidation,
+    garmin,
+    heart_invalidation,
+    oauth_credentials,
+    raw_rejections,
+)
 from app.models.derived_invalidation import BUILD_LOCK
 from app.models.state import WebhookEvent
 from app.models.webhook_status import WebhookStatusEvent
@@ -36,6 +43,31 @@ from app.services.archive.storage import store_records
 from app.services.interpretation import derived
 
 pytestmark = pytest.mark.integration
+
+
+def later_schema_contract():
+    newer = {
+        "derived_day_pending",
+        "display_preferences",
+        garmin.STATE,
+        garmin.NORMALIZATION_STATE,
+        *oauth_credentials.TABLES,
+        *raw_rejections.TABLES,
+        *garmin.TABLES,
+        *apple.TABLES,
+        apple.IMPORTS,
+        apple.SOURCES,
+    }
+    # Later tables' guards on their own new tables exist at head only.
+    later = (
+        set(definitions(raw_rejections.GUARDS)[0])
+        | set(definitions(garmin.GUARDS)[0])
+        | set(definitions(oauth_credentials.GUARDS)[0])
+        | set(definitions(apple.GUARDS)[0])
+        | {derived_invalidation.DRAIN_TRIGGER}
+        | set(definitions(heart_invalidation.GUARDS)[0])
+    )
+    return newer, later
 
 
 async def test_0018_preserves_archive_history_manual_rows_and_guard_definitions(
@@ -74,26 +106,7 @@ async def test_0018_preserves_archive_history_manual_rows_and_guard_definitions(
         command.downgrade(alembic_config, "20261025_0017")
         # Tables of later migrations (0022, 0023, 0024, a001, 0026, 0027) do not exist at 0017;
         # 0025 adds only columns (provider, source_record_id) to the normalized tables.
-        newer = {
-            "derived_day_pending",
-            "display_preferences",
-            garmin.STATE,
-            garmin.NORMALIZATION_STATE,
-            *oauth_credentials.TABLES,
-            *raw_rejections.TABLES,
-            *garmin.TABLES,
-            *apple.TABLES,
-            apple.IMPORTS,
-            apple.SOURCES,
-        }
-        # Later tables' guards on their own new tables exist at head only.
-        later = (
-            set(definitions(raw_rejections.GUARDS)[0])
-            | set(definitions(garmin.GUARDS)[0])
-            | set(definitions(oauth_credentials.GUARDS)[0])
-            | set(definitions(apple.GUARDS)[0])
-            | {derived_invalidation.DRAIN_TRIGGER}
-        )
+        newer, later = later_schema_contract()
         # 0020 narrowed four of them and 0028 replaced every body (verify_guards pins both).
         invalidating = set(definitions(derived_invalidation.GUARDS)[0]) - later
         async with sessions() as session:

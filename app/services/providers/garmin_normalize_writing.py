@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any, cast
 
-from sqlalchemy import Table, bindparam, select, update
+from sqlalchemy import Select, Table, bindparam, select, tuple_, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import DeclarativeBase
 
@@ -16,6 +16,28 @@ from .garmin_versions import VERSION
 
 # Never compare bookkeeping or exclusion columns as measurement values.
 _SKIP_COMPARE = {"id", "created_at", "updated_at", "is_quarantined", "quarantine_reason"}
+
+
+def _key_columns(table: Table) -> tuple[str, ...]:
+    """The projection's existing conflict target, also used for reads and matching."""
+    if "data_type" in table.c:
+        return "data_type", "google_data_point_id"
+    return ("google_data_point_id",)
+
+
+def _row_key(table: Table, row: Any, *, legacy: bool = False) -> tuple[str, ...]:
+    """Use the same unique key for lookup, matching and exclusion inheritance."""
+    key = tuple(row[name] for name in _key_columns(table))
+    if legacy:
+        return (*key[:-1], key[-1].removesuffix(f":{VERSION}"))
+    return key
+
+
+def _lookup_keys(table: Table, rows: list[dict[str, Any]]) -> list[tuple[str, ...]]:
+    # Include unversioned rows so exclusions survive projection version changes.
+    return sorted(
+        {_row_key(table, row) for row in rows} | {_row_key(table, row, legacy=True) for row in rows}
+    )
 
 
 def _comparable(value: Any) -> Any:
@@ -57,10 +79,7 @@ async def write_rows(
     if not rows:
         return 0, 0, 0
     table = cast(Table, model.__table__)
-    keys = sorted(
-        {row["google_data_point_id"] for row in rows}
-        | {row["google_data_point_id"].removesuffix(f":{VERSION}") for row in rows}
-    )
+    keys = _lookup_keys(table, rows)
     columns = [column.name for column in table.columns if column.name not in _SKIP_COMPARE]
     existing = await _existing_rows(session, table, keys, columns)
     inserts: list[dict[str, Any]] = []
@@ -69,9 +88,9 @@ async def write_rows(
     inserted = updated = unchanged = 0
     now = datetime.now(UTC)
     for row in rows:
-        current = existing.get(row["google_data_point_id"])
+        current = existing.get(_row_key(table, row))
         if current is None:
-            legacy = existing.get(row["google_data_point_id"].removesuffix(f":{VERSION}"))
+            legacy = existing.get(_row_key(table, row, legacy=True))
             if legacy is not None and legacy["provider"] == GARMIN:
                 # Versioning must not revive an excluded measurement.
                 row = {
@@ -110,26 +129,35 @@ async def write_rows(
         for offset in range(0, len(params), 1000):
             await session.execute(statement, params[offset : offset + 1000])
     if inserts:
-        conflict = ["google_data_point_id"]
-        if "data_type" in table.c:
-            conflict.insert(0, "data_type")
-        statement = dialect_insert(session, table).on_conflict_do_nothing(index_elements=conflict)
+        statement = dialect_insert(session, table).on_conflict_do_nothing(
+            index_elements=list(_key_columns(table))
+        )
         for offset in range(0, len(inserts), 1000):
             await session.execute(statement, inserts[offset : offset + 1000])
         inserted = len(inserts)
     return inserted, updated, unchanged
 
 
+def _existing_query(table: Table, keys: list[tuple[str, ...]], columns: list[str]) -> Select:
+    # The scalar unique index starts with data_type. ID-only lookups scan the
+    # whole table and can match a different metric with the same ID.
+    key_columns = [table.c[name] for name in _key_columns(table)]
+    predicate = (
+        tuple_(*key_columns).in_(keys)
+        if len(key_columns) > 1
+        else key_columns[0].in_([key[0] for key in keys])
+    )
+    return select(
+        *(table.c[name] for name in ("id", "is_quarantined", "quarantine_reason", *columns))
+    ).where(predicate)
+
+
 async def _existing_rows(
-    session: AsyncSession, table: Table, keys: list[str], columns: list[str]
-) -> dict[str, dict[str, Any]]:
-    existing: dict[str, dict[str, Any]] = {}
+    session: AsyncSession, table: Table, keys: list[tuple[str, ...]], columns: list[str]
+) -> dict[tuple[str, ...], dict[str, Any]]:
+    existing: dict[tuple[str, ...], dict[str, Any]] = {}
     for offset in range(0, len(keys), 1000):
-        found = await session.execute(
-            select(
-                *(table.c[name] for name in ("id", "is_quarantined", "quarantine_reason", *columns))
-            ).where(table.c.google_data_point_id.in_(keys[offset : offset + 1000]))
-        )
+        found = await session.execute(_existing_query(table, keys[offset : offset + 1000], columns))
         for row in found.mappings():
-            existing[row["google_data_point_id"]] = dict(row)
+            existing[_row_key(table, row)] = dict(row)
     return existing

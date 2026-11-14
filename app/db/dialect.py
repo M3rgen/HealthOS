@@ -12,7 +12,7 @@ from typing import Any
 
 from sqlalchemy import any_, bindparam, func, text
 from sqlalchemy.dialects.postgresql import ARRAY, insert
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession
 
 from app.db.postgres import CREDENTIAL_LOCK_KEY
 
@@ -41,12 +41,32 @@ class PostgreSQL:
     def attempt_scope(self, session: AsyncSession, attempts: int):
         return attempts, session.begin_nested
 
-    async def control(self, session: AsyncSession, statement, parameters=None) -> None:
+    async def control(
+        self, session: AsyncSession | AsyncConnection, statement, parameters=None
+    ) -> None:
         """Apply PostgreSQL transaction settings or refresh planner statistics."""
         await session.execute(statement, parameters)
 
     async def clock(self, session: AsyncSession) -> datetime:
         return await session.scalar(text("SELECT clock_timestamp()"))
+
+    async def read_revision(self, session: AsyncSession) -> tuple[object, ...] | None:
+        """The MVCC visibility of *all* committed writers, including other processes.
+
+        A snapshot includes in-flight XIDs: their later commit must invalidate a hit
+        even when no new XID was allocated. Own writes are invisible to that marker,
+        so a transaction with an assigned XID must bypass the cache. Keep unusually
+        large active-transaction lists out of the bounded process cache as well.
+        XIDs are cluster-wide: unrelated databases can cause conservative misses too.
+        """
+        snapshot, writing = (
+            await session.execute(
+                text("SELECT pg_current_snapshot()::text, pg_current_xact_id_if_assigned()::text")
+            )
+        ).one()
+        if writing is not None or len(snapshot) > 4096:
+            return None
+        return (session.get_bind(), snapshot)
 
     async def credential_lock(self, session: AsyncSession, namespace: int) -> None:
         await session.execute(

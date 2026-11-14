@@ -2,10 +2,11 @@ from __future__ import annotations
 
 from datetime import date
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.api.deps import runtime as runtime_dep
+from app.api.read_limits import request_session
 from app.runtime import Runtime
 from app.schemas.status import GarminDaily, GarminStatus
 
@@ -16,20 +17,22 @@ MAX_DAYS = 92
 
 @router.get("/status", response_model=GarminStatus)
 async def garmin_status(
-    response: Response, runtime: Runtime = Depends(runtime_dep)
+    request: Request, response: Response, runtime: Runtime = Depends(runtime_dep)
 ) -> GarminStatus:
     """Pull state of the Garmin Connect Personal API archive (no values, no secrets)."""
     response.headers["Cache-Control"] = "no-store"
     if runtime.garmin is None:
         return {"enabled": False, "key_file_present": False, "kinds": {}}
     try:
-        return await runtime.garmin.status()
+        async with request_session(runtime.garmin.sessions, request) as session:
+            return await runtime.garmin.status(session=session)
     except SQLAlchemyError as exc:
         raise HTTPException(503, "Garmin status unavailable") from exc
 
 
 @router.get("/daily", response_model=GarminDaily)
 async def garmin_daily(
+    request: Request,
     response: Response,
     start: date = Query(..., alias="from"),
     end: date = Query(..., alias="to"),
@@ -42,6 +45,7 @@ async def garmin_daily(
     if runtime.garmin is None:
         return {"source": "garmin", "from": start.isoformat(), "to": end.isoformat(), "days": []}
     try:
-        return await runtime.garmin.daily(start, end)
+        async with request_session(runtime.garmin.sessions, request) as session:
+            return await runtime.garmin.daily(start, end, session=session)
     except SQLAlchemyError as exc:
         raise HTTPException(503, "Garmin archive unavailable") from exc

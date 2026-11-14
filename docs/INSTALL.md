@@ -32,16 +32,16 @@ as root it installs system units, as a normal user it installs user units, and a
 `sudo` is printed for you to run:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/M3rgen/HealthOS/v0.2.2.1/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/M3rgen/HealthOS/v0.2.3/install.sh | bash
 ```
 
 **Windows 10/11** (PowerShell, as your normal user):
 
 ```powershell
-irm https://raw.githubusercontent.com/M3rgen/HealthOS/v0.2.2.1/install.ps1 | iex
+irm https://raw.githubusercontent.com/M3rgen/HealthOS/v0.2.3/install.ps1 | iex
 ```
 
-Both commands install a release (here v0.2.2.1): the installer clones its own tag
+Both commands install a release (here v0.2.3): the installer clones its own tag
 (`HEALTHOS_INSTALLER_VERSION`), never the moving `main` branch, unless you ask for it.
 
 **The development version** (`main`, not a release):
@@ -58,14 +58,14 @@ curl -fsSL https://raw.githubusercontent.com/M3rgen/HealthOS/main/install.sh | b
 then run it from the checkout; it then uses that checkout and clones nothing:
 
 ```sh
-git clone --branch v0.2.2.1 https://github.com/M3rgen/HealthOS.git
+git clone --branch v0.2.3 https://github.com/M3rgen/HealthOS.git
 cd HealthOS
 less install.sh
 ./install.sh            # or: ./install.sh --dry-run   to see every action first
 ```
 
 ```powershell
-git clone --branch v0.2.2.1 https://github.com/M3rgen/HealthOS.git
+git clone --branch v0.2.3 https://github.com/M3rgen/HealthOS.git
 cd HealthOS
 notepad .\install.ps1
 powershell -ExecutionPolicy Bypass -File .\install.ps1     # or add -DryRun
@@ -77,14 +77,14 @@ A coding agent with shell access (Claude Code, OpenAI Codex CLI or similar) can 
 installation for you by following [AI_INSTALL.md](AI_INSTALL.md). Give it this prompt:
 
 ```text
-Install HealthOS on this computer by following https://raw.githubusercontent.com/M3rgen/HealthOS/v0.2.2.1/docs/AI_INSTALL.md — ask me before any step that needs admin rights or my accounts, and never delete data.
+Install HealthOS on this computer by following https://raw.githubusercontent.com/M3rgen/HealthOS/v0.2.3/docs/AI_INSTALL.md — ask me before any step that needs admin rights or my accounts, and never delete data.
 ```
 
 Ready to run in a terminal:
 
 ```sh
-claude "Install HealthOS on this computer by following https://raw.githubusercontent.com/M3rgen/HealthOS/v0.2.2.1/docs/AI_INSTALL.md — ask me before any step that needs admin rights or my accounts, and never delete data."
-codex "Install HealthOS on this computer by following https://raw.githubusercontent.com/M3rgen/HealthOS/v0.2.2.1/docs/AI_INSTALL.md — ask me before any step that needs admin rights or my accounts, and never delete data."
+claude "Install HealthOS on this computer by following https://raw.githubusercontent.com/M3rgen/HealthOS/v0.2.3/docs/AI_INSTALL.md — ask me before any step that needs admin rights or my accounts, and never delete data."
+codex "Install HealthOS on this computer by following https://raw.githubusercontent.com/M3rgen/HealthOS/v0.2.3/docs/AI_INSTALL.md — ask me before any step that needs admin rights or my accounts, and never delete data."
 ```
 
 Or paste the prompt into Claude Code, Codex or any other agent that can run commands. The agent
@@ -304,7 +304,7 @@ Proxmox: a VM, or an LXC container with nesting enabled for Docker.
 sudo apt install git age python3      # Fedora: sudo dnf install git age python3
 sudo systemctl enable --now docker
 docker compose version
-curl -fsSL https://raw.githubusercontent.com/M3rgen/HealthOS/v0.2.2.1/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/M3rgen/HealthOS/v0.2.3/install.sh | bash
 ```
 
 **Root or your own user.**
@@ -450,7 +450,7 @@ Git (`xcode-select --install` or Homebrew); for backups `brew install age` and P
 (`brew install python`; the `python3` of the Xcode command line tools is too old).
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/M3rgen/HealthOS/v0.2.2.1/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/M3rgen/HealthOS/v0.2.3/install.sh | bash
 ```
 
 The installer detects macOS and preselects it. Checkout: `~/healthos`. Backup key:
@@ -476,7 +476,7 @@ or `winget install Git.Git`; `winget install FiloSottile.age` for backups. Windo
 and PowerShell 7 both work.
 
 ```powershell
-irm https://raw.githubusercontent.com/M3rgen/HealthOS/v0.2.2.1/install.ps1 | iex
+irm https://raw.githubusercontent.com/M3rgen/HealthOS/v0.2.3/install.ps1 | iex
 ```
 
 The installer detects Windows and preselects it. It lists every platform, but installs only the
@@ -656,13 +656,13 @@ Every platform uses the same backup semantics as [`scripts/backup.sh`](../script
 
 Updating is the same on every platform: take a backup, check out the new release tag, run the
 installer again. A checkout made by the installer sits on a release tag (no branch), so
-`git pull` does not apply; use the tag of the release you want (here the next one, v0.2.2.1):
+`git pull` does not apply; use the tag of the release you want (here the next one, v0.2.3):
 
 ```sh
 cd ~/healthos                 # or /opt/healthos, or %USERPROFILE%\healthos
 make backup                  # or: bash scripts/backup.sh  (Windows: .\scripts\backup.ps1)
 git fetch --tags
-git checkout v0.2.2.1          # a checkout on the main branch instead: git pull --ff-only
+git checkout v0.2.3          # a checkout on the main branch instead: git pull --ff-only
 ./install.sh                 # Windows: .\install.ps1
 ```
 

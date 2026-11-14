@@ -23,6 +23,7 @@ from app.services.archive import source_deletions, storage
 from app.services.archive.manual_flags import record_flag
 from app.services.archive.storage import store_records
 from app.services.interpretation import interpretation_inputs
+from app.services.interpretation.canonical_daily import METHOD
 from app.services.providers.ingestion import GoogleSource
 from app.services.shared.query_ranges import CivilDateRange
 from app.services.umay import codex_health
@@ -182,7 +183,23 @@ async def test_archive_inputs_and_tool_json_stay_identical(sessions, monkeypatch
         )
     async with sessions() as session:
         assert await snapshot(session) == before
-    digest = sha256(JSONResponse(result).body).hexdigest()
+    assert result["daily"]["derived"]["method_version"] == METHOD
+    # Check the intentional coverage contract change before comparing the legacy
+    # fingerprint: all other tool/archive bytes stay pinned on both backends.
+    for metric in result["coverage"]["metrics"]:
+        if metric["metric_key"] in {"steps", "sleep_seconds", "weight"}:
+            assert metric["exclusions"]["invalid_shape"] == 0
+            assert "invalid_shape_unknown" not in metric["reason_codes"]
+            metric["exclusions"]["invalid_shape"] = None
+            metric["reason_codes"].insert(1, "invalid_shape_unknown")
+        elif metric["metric_key"] == "muscle":
+            assert metric["exclusions"]["invalid_shape"] is None
+            metric["reason_codes"].remove("invalid_shape_unknown")
+    # Check the method independently; preserve the other bytes for both backend baselines.
+    body = JSONResponse(result).body
+    assert b"source-daily/6" not in body
+    body = body.replace(METHOD.encode(), b"source-daily/6")
+    digest = sha256(body).hexdigest()
     assert digest == EXPECTED[backend][zone], (backend, zone, digest)
 
 

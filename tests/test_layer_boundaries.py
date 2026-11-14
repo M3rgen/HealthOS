@@ -26,7 +26,14 @@ def imports(path):
 
 
 @pytest.mark.parametrize(
-    "directory, forbidden", [("services", "fastapi"), ("parsers", "app.models")]
+    "directory, forbidden",
+    [
+        ("services", "fastapi"),
+        ("parsers", "app.models"),
+        # Sessions know nothing of HTTP; app/api chooses read limits and maps timeouts.
+        ("db", "fastapi"),
+        ("db", "starlette"),
+    ],
 )
 def test_layers_do_not_import_forbidden_dependencies(directory, forbidden):
     violations = [

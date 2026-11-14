@@ -29,6 +29,7 @@ from app.api import (
     google_health,
     health,
     login,
+    read_limits,
     sync,
     webhooks,
 )
@@ -249,7 +250,9 @@ def create_app() -> FastAPI:
     application.state.ui_sessions = ui_sessions = SessionStore()
     application.state.oauth_states = OAuthStateStore()
     # Starlette runs the last-added middleware first: headers, host check, the move from plain
-    # localhost to healthos.localhost (before a login could set a cookie there), UI token.
+    # localhost to healthos.localhost (before a login could set a cookie there), UI token and,
+    # innermost, the request's database read limit.
+    read_limits.install(application)
     application.add_middleware(UITokenMiddleware, token=settings.app_ui_token, sessions=ui_sessions)
     application.add_middleware(
         CanonicalHostMiddleware, enabled=redirect_enabled(settings.app_public_url)

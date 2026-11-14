@@ -1,4 +1,5 @@
 from app.models import derived_invalidation as derived_invalidation
+from app.models import heart_invalidation as heart_invalidation
 from app.models import identity_guards as identity_guards
 from app.models.apple import AppleImport, ApplePayload, AppleRawRecord, AppleSource
 from app.models.derived import DerivedDay
@@ -20,6 +21,7 @@ from app.models.health import (
     Vo2Max,
     Weight,
 )
+from app.models.heart_projection import HeartHour, HeartPending, HeartProjectionState
 from app.models.identity_tables import (
     IdentityReconcileState,
     RawHealthDataIdentity,
@@ -56,6 +58,9 @@ from app.models.webhook_status import WebhookStatusEvent
 
 __all__ = [
     "DerivedDay",
+    "HeartHour",
+    "HeartPending",
+    "HeartProjectionState",
     "ManualMeasurement",
     "ManualMeasurementFlagEvent",
     "ManualWorkout",

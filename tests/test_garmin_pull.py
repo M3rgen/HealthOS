@@ -445,7 +445,7 @@ async def test_scheduled_pull_reobserves_old_content_without_rewriting_evidence(
             if kind == "steps"
             else {**activity(1, TODAY), "calories": value}
         )
-        fake.bodies[path] = [body]
+        fake.bodies[path] = [body, body]
         summary = await pull.run([kind])
         assert not summary.failed
         assert summary.kinds[kind].new_records == (1 if index < 2 else 0)

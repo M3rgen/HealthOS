@@ -35,6 +35,18 @@ A mistyped `GARMIN_API_KEY_HOST_FILE` stops `docker compose up` with `bind sourc
 exist`, naming that path (`create_host_path: false`), rather than letting Docker create it as a
 root-owned directory. If the key cannot be read, `migrate` stops naming `GARMIN_API_KEY_FILE`.
 
+**Docker setup checks.** Garmin shows a new key once, so copy it straight away. To check that the
+container's user can read the installed file without creating a host account, run
+`sudo setpriv --reuid=10001 --regid=10001 --clear-groups test -r /opt/healthos/secrets/garmin-personal-api-key && echo ok`
+(`setpriv` is part of util-linux, installed on Debian); once Compose is configured,
+`docker compose run --rm app healthos garmin-status` shows `"key_file_present": true`.
+`garmin-status` makes no request to Garmin. If `migrate` exits with `unsafe or missing production
+configuration: GARMIN_API_KEY_FILE`, the file is empty or not readable by UID 10001. Keep the key
+file owned by UID 10001 after every renewal; on Docker hosts backed by a VM, check `garmin-status`
+after changing it, because file ownership may be mapped differently there. The key mount, the
+ownership check and `garmin-status` were run against the production Compose stack with a
+synthetic key; the first `garmin-pull` needs a real key.
+
 **What is pulled.** Eleven kinds, every one a GET under `https://personal.connectapi.garmin.com`
 (outbound only; the UI stays on loopback and the tunnel passes only the Google webhook):
 
@@ -170,6 +182,21 @@ from each kind's HTTP success and backfill checkpoint (`garmin_normalization_sta
 Neither exception text nor values enter this state or its logs. A later HTTP success cannot
 clear it; only successful normalization clears the code, retaining the historical error time.
 An archive without normalization status reports `unknown` without inventing a past outcome.
+
+### Time evidence and recovery
+
+Migration `20261112_0035` adds `garmin_time_evidence` (offset eligibility per immutable raw
+heart version, including invalidity) and `garmin_day_times` (a completed day's selected raw
+heart id, or NULL for unknown). Both are append-only, with UPDATE/DELETE and PostgreSQL
+TRUNCATE guards, including replica mode. The migration rewrites no data or observations,
+invents no past time choices, and refuses a downgrade that would discard either table's evidence.
+
+Periodic normalization indexes missing current heart evidence in separate owned transactions
+of at most seven records, then recovers at most seven pending archive days per transaction.
+First/closer evidence, invalidation and A → B → A observations can reopen a completed day
+outside the pull window without another download. Values and the selected time choice commit
+together; unchanged runs append no evidence. Nearest-day selection, earlier-day ties and the
+unknown-offset fallback are unchanged. Explicit backfills retain their requested date range.
 
 **Why the shared tables and not a Garmin-specific set, and why only `ADD COLUMN` (measured).**
 The three phase-2 options were weighed before the migration was written. (b), a provider

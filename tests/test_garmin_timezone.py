@@ -4,12 +4,14 @@ from datetime import UTC, date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import pytest
-from garmin_records import daily_steps, heart_rate, store_page
-from sqlalchemy import select
+from garmin_records import FakeGarmin, daily_steps, heart_rate, store_page
+from sqlalchemy import event, select
+from test_garmin_activity_recovery import pull_at
 from test_garmin_normalize import MS, archive_day, raw
 
 from app.core.providers import GARMIN, garmin_record_key
 from app.core.timeutil import as_utc
+from app.models.garmin import GarminDailyProjection, GarminDayTime
 from app.models.health import HeartRate, Steps
 from app.services.providers import garmin_readers
 from app.services.providers.garmin_normalize import (
@@ -171,10 +173,11 @@ async def test_v1_reader_fallback_and_v2_preference_preserve_every_legacy_row(se
 
 
 @pytest.mark.parametrize("offset", [-1, 1])
-async def test_adjacent_heart_reversion_updates_inferred_day_boundaries(sessions, offset):
+async def test_adjacent_heart_reversion_updates_inferred_day_boundaries(sessions, tmp_path, offset):
     adjacent = DAY + timedelta(days=offset)
-    now = datetime(2026, 11, 8, 12, tzinfo=UTC)
+    now = datetime(2026, 11, 6, 12, tzinfo=UTC)
     await store_page(sessions, "steps", [daily_steps(DAY)], now)
+    original_inputs = None
     for index, hours in enumerate((3, 2, 3, 3)):
         midnight = datetime.combine(adjacent, datetime.min.time()) - timedelta(hours=hours)
         body = heart_rate(adjacent)
@@ -182,14 +185,149 @@ async def test_adjacent_heart_reversion_updates_inferred_day_boundaries(sessions
             startTimestampGMT=midnight.isoformat(),
             endTimestampGMT=(midnight + timedelta(days=1, seconds=-1)).isoformat(),
         )
-        await store_page(sessions, "heart-rate", [body], now + timedelta(minutes=index))
-        async with sessions.begin() as session:
-            stats = await normalize_window(session, DAY, DAY)
+        # Equal observation times still select by observation id on the return to A.
+        await store_page(sessions, "heart-rate", [body], now + timedelta(minutes=min(index, 1)))
+        runner = pull_at(
+            sessions, tmp_path, FakeGarmin(), now + timedelta(days=0 if index == 0 else 30 + index)
+        )
+        try:
+            stats = (await runner.run(["steps"])).normalized
+        finally:
+            await runner.aclose()
         async with sessions() as session:
             row = (await session.scalars(select(Steps))).one()
+            assert as_utc(row.end_time) == as_utc(row.start_time) + timedelta(days=1)
+            inputs = await session.scalar(
+                select(GarminDailyProjection.raw_record_ids)
+                .where(GarminDailyProjection.source_record_id == f"steps:{DAY}")
+                .order_by(GarminDailyProjection.id.desc())
+                .limit(1)
+            )
+            original_inputs = original_inputs or inputs
+            assert inputs == original_inputs
+            choices = (
+                await session.scalars(
+                    select(GarminDayTime)
+                    .where(GarminDayTime.day == str(DAY))
+                    .order_by(GarminDayTime.id)
+                )
+            ).all()
+            assert len(choices) == (1, 2, 3, 3)[index]
+            if index >= 2:
+                assert choices[-1].raw_record_id == choices[0].raw_record_id
             assert row.source_timezone == f"+0{hours}:00"
             assert as_utc(row.start_time) == datetime(2026, 11, 6, tzinfo=UTC) - timedelta(
                 hours=hours
             )
-        assert stats.updated == (2 if index in (1, 2) else 0)
-    assert stats.unchanged == 2 and stats.inserted == 0
+        for table in ("steps", "distance"):
+            assert stats.tables.get(table, {}).get("updated", 0) == (1 if index in (1, 2) else 0)
+    assert stats.unchanged == 0 and stats.inserted == 0
+
+
+def offset_heart(day, hours):
+    midnight = datetime.combine(day, datetime.min.time()) - timedelta(hours=hours)
+    return {
+        **heart_rate(day),
+        "startTimestampGMT": midnight.isoformat(),
+        "endTimestampGMT": (midnight + timedelta(days=1, seconds=-1)).isoformat(),
+    }
+
+
+@pytest.mark.parametrize("direction", [-1, 1])
+async def test_periodic_time_choices_handle_first_closer_tie_and_invalid_evidence(
+    sessions, tmp_path, direction
+):
+    from garmin_records import daily_summary
+    from test_garmin_activity_results import snapshot
+
+    from app.models.garmin import GarminTimeEvidence
+    from app.models.health import Distance, ScalarMetric
+
+    now = datetime(2026, 11, 8, 12, tzinfo=UTC)
+    far, close = (DAY + timedelta(days=direction * distance) for distance in (4, 1))
+    opposite = DAY - timedelta(days=direction)
+    for kind, body in (
+        ("steps", daily_steps(DAY)),
+        ("heart-rate", {"calendarDate": str(DAY), "heartRateValues": []}),
+        ("daily-summaries", daily_summary(DAY)),
+    ):
+        await store_page(sessions, kind, [body], now)
+    # Every transition uses the real periodic pull; the historical window is never requested.
+    changes = [
+        (None, None, None),
+        (far, offset_heart(far, 3), 3),
+        (close, offset_heart(close, 2), 2),
+        (opposite, offset_heart(opposite, 4), 2 if direction == -1 else 4),
+        (close, {"calendarDate": str(close)}, 4),
+        (opposite, {"calendarDate": str(opposite)}, 3),
+        (far, {"calendarDate": str(far)}, None),
+        (close, offset_heart(close, 2), 2),
+    ]
+    models = (Steps, Distance, ScalarMetric, GarminDayTime)
+    engine = sessions.kw["bind"].sync_engine
+    writes = []
+
+    def capture(conn, cursor, statement, parameters, context, executemany):
+        compiled = context.compiled
+        if compiled is not None and (compiled.isinsert or compiled.isupdate):
+            if compiled.statement.table.name in {
+                *(model.__tablename__ for model in models),
+                GarminTimeEvidence.__tablename__,
+                "garmin_daily_projections",
+                "garmin_heart_sets",
+                "garmin_heart_members",
+            }:
+                writes.append(statement)
+
+    for index, (key, body, hours) in enumerate(changes):
+        if key is not None:
+            # Equal observed_at exercises ordering by observation id, also on reversion.
+            await store_page(sessions, "heart-rate", [body], now)
+        fake = FakeGarmin()
+        runner = pull_at(sessions, tmp_path, fake, now + timedelta(days=30 + index))
+        try:
+            await runner.run(["steps"])
+            before = await snapshot(sessions, models)
+            writes.clear()
+            event.listen(engine, "before_cursor_execute", capture)
+            try:
+                again = (await runner.run(["steps"])).normalized
+            finally:
+                event.remove(engine, "before_cursor_execute", capture)
+            assert writes == []
+            assert again.inserted == again.updated == again.unchanged == 0
+            assert await snapshot(sessions, models) == before
+        finally:
+            await runner.aclose()
+        assert all(str(DAY) not in str(request.url) for request in fake.requests)
+        async with sessions() as session:
+            for model in (Steps, Distance, ScalarMetric):
+                rows = (await session.scalars(select(model))).all()
+                assert rows
+                for row in rows:
+                    expected = datetime.combine(DAY, datetime.min.time(), UTC) - timedelta(
+                        hours=hours or 0
+                    )
+                    assert as_utc(row.start_time) == expected
+                    assert as_utc(row.end_time) == expected + timedelta(days=1)
+                    assert row.source_timezone == (f"+0{hours}:00" if hours else None)
+            receipts = (
+                await session.scalars(
+                    select(GarminDayTime)
+                    .where(GarminDayTime.day == str(DAY))
+                    .order_by(GarminDayTime.id)
+                )
+            ).all()
+            assert len(receipts) == index + 1 - (index >= (3 if direction == -1 else 4))
+
+
+async def test_malformed_daily_keys_inside_window_remain_archived_without_time_choices(sessions):
+    await store_page(sessions, "steps", [daily_steps(DAY)], datetime(2026, 11, 8, tzinfo=UTC))
+    async with sessions.begin() as session:
+        session.add(raw("steps", f"{DAY}x", {"totalSteps": 1}))
+    async with sessions.begin() as session:
+        stats = await normalize_window(session, DAY, DAY + timedelta(days=1))
+        assert stats.inserted == 2
+    async with sessions() as session:
+        choices = (await session.scalars(select(GarminDayTime))).all()
+        assert len(choices) == 1 and choices[0].day == str(DAY)

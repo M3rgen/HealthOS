@@ -10,21 +10,37 @@ import httpx
 import pytest
 from garmin_records import TOKEN, hrv_summary
 from garmin_token_retries import RetryingGarmin
-from test_garmin_pagination import evidence
+from sqlalchemy import select
+from test_garmin_pagination import PATH as ACTIVITY_PATH
+from test_garmin_pagination import A, B, evidence
+from test_garmin_pagination import paginated as paginated
 from test_garmin_pull import KEY, TODAY, Clock, service
 from test_garmin_pull import key_file as key_file
 from test_garmin_response_limits import Handler, build
 
 from app.garmin import client as garmin
 from app.models.garmin import GarminApiResponse, GarminRawRecord, GarminRecordObservation
+from app.models.health import HeartRateVariability
 from app.services.providers.garmin_pull import BY_NAME
 
 ERROR = "Garmin response could not be decoded as JSON"
 PATH, _ = BY_NAME["hrv"].request(TODAY, TODAY)
+DUPLICATES = {
+    "duplicate": b'{"totalSteps":7000,"totalSteps":9000}',
+    "escaped-duplicate": b'{"totalSteps":7000,"total\\u0053teps":9000}',
+    "equal-duplicate": b'{"totalSteps":7000,"totalSteps":7000}',
+    "nested-duplicate": b'[{"details":{"totalSteps":7000,"totalSteps":9000}}]',
+}
 
 
-@pytest.fixture(params=["syntax", "encoding", "nesting", "escaped-quotes", "quote-recovery"])
+@pytest.fixture(
+    params=["syntax", "encoding", "nesting", "escaped-quotes", "quote-recovery", *DUPLICATES]
+)
 def bad_body(request):
+    if request.param in DUPLICATES:
+        healthy = json.dumps({**hrv_summary(TODAY), "lastNightAvg": 60}).encode()
+        raw = b'{"hrvSummary":%s,"debug":%s,"note":"synthetic-response"}'
+        return raw % (healthy, DUPLICATES[request.param]), None
     inner = b'"synthetic-response"'
     return {
         "syntax": (b'{"error":' + inner, json.JSONDecodeError),
@@ -44,8 +60,11 @@ async def test_client_decode_failure_is_safe_and_keeps_complete_capture(key_file
         raw = raw.replace(KEY.encode(), b"\\u0073" + KEY[1:].encode())
         raw = raw.replace(TOKEN.encode(), "".join(f"\\u{ord(c):04x}" for c in TOKEN).encode())
     assert len(raw) < min(garmin.MAX_WIRE_BYTES, garmin.MAX_DECODED_BYTES)
-    with pytest.raises(error_type):
-        json.loads(raw)  # Real decoder; no recursion-limit changes or mocked parser.
+    if error_type is None:
+        assert json.loads(raw)["hrvSummary"]["lastNightAvg"] == 60
+    else:
+        with pytest.raises(error_type):
+            json.loads(raw)  # Real decoder; no recursion-limit changes or mocked parser.
     handler = Handler(httpx.Response(200, content=raw))
     client, exchanges = build(key_file, handler), []
     try:
@@ -76,6 +95,9 @@ async def test_pull_decode_failure_archives_once_and_resumes(
     pull = service(sessions, fake, key_file, clock, garmin_lookback_days=1)
     try:
         assert not (await pull.run(["hrv"])).failed
+        async with sessions() as session:
+            normalized = (await session.execute(select(HeartRateVariability.__table__))).all()
+        assert len(normalized) == 1
         before, success = await evidence(sessions), clock.now.isoformat()
         clock.now += timedelta(minutes=1)
         raw, _ = bad_body
@@ -125,6 +147,10 @@ async def test_pull_decode_failure_archives_once_and_resumes(
         assert all(r.body == garmin.REDACTED_BODY for r in responses if r.method == "POST")
         for model in (GarminRawRecord, GarminRecordObservation):
             assert after[model] == before[model]
+        async with sessions() as session:
+            assert (
+                await session.execute(select(HeartRateVariability.__table__))
+            ).all() == normalized
         assert entry["error"] == ERROR and entry["records"] == entry["new_records"] == 0
         status = await pull.status()
         state = status["kinds"]["hrv"]
@@ -158,10 +184,83 @@ async def test_pull_decode_failure_archives_once_and_resumes(
         await pull.aclose()
 
 
+@pytest.mark.parametrize(
+    "encoding", ["utf-8", "utf-16", "utf-16-le", "utf-16-be", "utf-32", "utf-32-le", "utf-32-be"]
+)
+@pytest.mark.parametrize("raw", DUPLICATES.values())
+def test_duplicate_keys_in_supported_encodings_have_no_parser_chain(raw, encoding):
+    with pytest.raises(garmin.GarminResponseDecodeError, match=f"^{ERROR}$") as caught:
+        garmin.decode_response_body(raw.decode().encode(encoding))
+    assert caught.value.__cause__ is None and caught.value.__context__ is None
+    assert "totalSteps" not in "".join(traceback.format_exception(caught.value))
+
+
+@pytest.mark.parametrize("encoding", ["utf-8", "utf-16", "utf-32"])
+def test_keys_may_repeat_in_separate_objects(encoding):
+    raw = b'{"totalSteps":7000,"children":[{"totalSteps":9000},{"total\\u0053teps":7000}]}'
+    assert garmin.decode_response_body(raw.decode().encode(encoding)) == json.loads(raw)
+
+
+@pytest.mark.parametrize("backfill", [False, True])
+async def test_later_ambiguous_activity_page_preserves_committed_pages(
+    sessions, paginated, backfill
+):
+    pull, fake, clock = paginated
+    raw = b"[" + json.dumps(B[0]).encode()[:-1] + b',"activityId":9000}]'
+    fake.bodies[ACTIVITY_PATH] = lambda r: A if r.url.params["start"] == "0" else []
+    failing = True
+
+    def respond(request):
+        response = fake(request)
+        if failing and request.url.path == ACTIVITY_PATH and request.url.params["start"] == "2":
+            return httpx.Response(200, content=raw)
+        return response
+
+    await pull.client.http.aclose()
+    pull.client.http = httpx.AsyncClient(transport=httpx.MockTransport(respond))
+    report = (
+        await pull.backfill(TODAY, TODAY, kinds=["activities"])
+        if backfill
+        else (await pull.run(["activities"])).as_dict()
+    )
+    entry = report["kinds"]["activities"]
+    assert entry["error"] == ERROR and entry["records"] == entry["new_records"] == 2
+    kept = await evidence(sessions)
+    assert [r.body for r in kept[GarminRawRecord]] == A
+    responses = [r for r in kept[GarminApiResponse] if r.kind == "activities"]
+    assert len(responses) == 2 and responses[-1].body == raw
+    assert (responses[-1].body_size, responses[-1].body_sha256) == (
+        len(raw),
+        hashlib.sha256(raw).hexdigest(),
+    )
+    assert len(kept[GarminRecordObservation]) == 2
+    assert all(r.response_id == responses[0].id for r in kept[GarminRecordObservation])
+    state = (await pull.status())["kinds"]["activities"]
+    assert state["last_success_at"] is None
+    if backfill:
+        assert state["backfill"]["next"] == str(TODAY) and not state["backfill"]["complete"]
+    failing = False
+    clock.now += timedelta(minutes=1)
+    recovered = (
+        await pull.backfill(TODAY, TODAY, kinds=["activities"])
+        if backfill
+        else (await pull.run(["activities"])).as_dict()
+    )
+    assert recovered["kinds"]["activities"]["error"] is None
+    assert (await pull.status())["failing_kinds"] == []
+    assert (await pull.status())["kinds"]["activities"]["last_success_at"] > state["last_error_at"]
+    if backfill:
+        assert recovered["kinds"]["activities"]["complete"]
+    after = await evidence(sessions)
+    for model, rows in kept.items():
+        assert after[model][: len(rows)] == rows
+    assert after[GarminRawRecord] == kept[GarminRawRecord]
+
+
 @pytest.mark.parametrize("failure", [asyncio.CancelledError, TypeError, RuntimeError])
 @pytest.mark.parametrize("renew_token", [False, True])
 async def test_unrelated_failures_are_not_reclassified(key_file, monkeypatch, failure, renew_token):
-    def fail(*_):
+    def fail(*_, **__):
         raise failure("synthetic-programming-error")
 
     client = build(key_file, Handler(httpx.Response(200, content=b"{}")))

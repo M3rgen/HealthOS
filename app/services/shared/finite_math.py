@@ -1,6 +1,7 @@
 """Finite read-model arithmetic; retry overflowing intermediates without rounding bounds."""
 
 from collections.abc import Callable
+from dataclasses import dataclass
 from decimal import Decimal
 from fractions import Fraction
 from math import isfinite
@@ -64,22 +65,42 @@ def finite_sum(values: list[float]) -> float | None:
     return finite_calculation(sum(values), lambda: sum(map(Fraction, values), Fraction()))
 
 
-def finite_scaled_sum(terms: list[tuple[float, float, float]]) -> float | None:
-    """Sum proportions, retrying the entire expression before discarding any term.
+@dataclass(slots=True)
+class FiniteScaledSum:
+    """Stream proportions without retaining operands or rereading their source.
 
-    Keep the original operands: even an unrepresentable individual share can belong
-    to a representable total. Never restart a total after an overflowing contribution.
+    The compensated float path matches Python 3.12's sum, including the original
+    multiply-then-divide rounding. Only a zero/nonfinite result uses the exact sum;
+    even an unrepresentable share must participate in cancellation and underflow
+    recovery. Keep one Fraction, not a list of contributions, per accumulator.
+
+    Each add performs float operations and rational arithmetic. Rational storage
+    and arithmetic cost depend on numerator/denominator bit lengths: distinct
+    divisors can grow their common denominator, and totals can grow with count.
+    This bounds the number of retained objects, not their byte size or CPU cost.
     """
-    return finite_calculation(
-        sum(value * multiplier / divisor for value, multiplier, divisor in terms),
-        lambda: sum(
-            (
-                Fraction(value) * Fraction(multiplier) / Fraction(divisor)
-                for value, multiplier, divisor in terms
-            ),
-            Fraction(),
-        ),
-    )
+
+    _total: float = 0.0
+    _correction: float = 0.0
+    _exact: Fraction = Fraction()
+
+    def add(self, value: float, multiplier: float, divisor: float) -> None:
+        contribution = value * multiplier / divisor
+        combined = self._total + contribution
+        # Neumaier compensation, as used by sum on the supported Python runtime.
+        if abs(self._total) >= abs(contribution):
+            self._correction += (self._total - combined) + contribution
+        else:
+            self._correction += (contribution - combined) + self._total
+        self._total = combined
+        self._exact += Fraction(value) * Fraction(multiplier) / Fraction(divisor)
+
+    def result(self) -> float | None:
+        value = self._total
+        # A nonfinite correction must not turn sum's overflowing result into NaN.
+        if self._correction and isfinite(self._correction):
+            value += self._correction
+        return finite_calculation(value, lambda: self._exact)
 
 
 def finite_mean(values: list[float]) -> float | None:

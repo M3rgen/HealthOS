@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, readdirSync } from 'node:fs';
 import { expandBreakpoints } from '../../frontend/css-breakpoints.js';
-import { widths, heights, queries, JS_ONLY } from '../../frontend/src/breakpoints.js';
+import { widths, heights, queries } from '../../frontend/src/breakpoints.js';
 import { NARROW } from '../../frontend/src/overview-tabs.js';
 
 const SRC = new URL('../../frontend/src/', import.meta.url);
@@ -16,7 +16,7 @@ const cssConditions = new Set(sourceFiles('.css').flatMap(file => {
 
 test('shared JS and CSS queries expand to the existing em thresholds', () => {
   assert.deepEqual(queries, {
-    umayModal: '(max-width: 43.75em), (max-height: 30em)',
+    umayModal: '(max-width: 56.25em), (max-height: 30em)',
     besideCards: '(max-height: 30em) and (min-width: 35.5em)',
     shortScreen: '(max-height: 30em)',
     overviewTabs: '(max-width: 56.25em), (max-height: 30em)',
@@ -36,7 +36,9 @@ test('every stylesheet media width uses the central breakpoint table', () => {
   for (const file of readdirSync(root).filter(file => file.endsWith('.css'))) {
     const css = readFileSync(new URL(file, root), 'utf8');
     for (const [query] of css.matchAll(/@media[^\{]+/g)) {
-      assert.doesNotMatch(query, /(?:min|max)-width:\s*[\d.]/, file);
+      for (const [, value] of query.matchAll(/(?:min|max)-width:\s*([\d.]+em)/g)) {
+        assert.ok(Object.values(widths).includes(value), `${file}: unknown width ${value}`);
+      }
       for (const [, token] of query.matchAll(/bp\((\w+)\)/g)) used.add(token);
       assert.doesNotMatch(expandBreakpoints(query), /bp\(/);
     }
@@ -51,30 +53,16 @@ test('only breakpoints.js carries JS width or height query text, including neste
   assert.deepEqual(owners, ['breakpoints.js']);
 });
 
-test('every central query condition occurs in CSS media or the explicit JS-only list', () => {
+test('every central query condition occurs in CSS media', () => {
   const tables = { widths, heights };
   const source = readFileSync(new URL('breakpoints.js', SRC), 'utf8')
     .replace(/\$\{(widths|heights)\.(\w+)\}/g, (_match, table, key) => {
       assert.ok(Object.hasOwn(tables[table], key), `Unknown ${table}.${key}`);
       return tables[table][key];
     });
-  const exceptions = new Set(Object.values(JS_ONLY).flatMap(conditions));
   const all = conditions(source);
   assert.ok(all.length > 0);
   for (const condition of all) {
-    assert.ok(cssConditions.has(condition) || exceptions.has(condition), `Missing CSS media counterpart: ${condition}`);
-  }
-});
-
-test('JS-only exceptions cannot grow and must disappear when CSS gains their condition', () => {
-  const approved = {
-    umayModal: '(max-width: 43.75em)',
-  };
-  for (const [name, query] of Object.entries(JS_ONLY)) {
-    assert.equal(query, approved[name], `Unapproved JS-only condition: ${name}`);
-    for (const condition of conditions(query)) {
-      assert.equal(cssConditions.has(condition), false, `Remove ${condition} from JS_ONLY.${name}: CSS now covers it`);
-      assert.ok(conditions(queries[name]).includes(condition), `Unused JS-only condition: ${name}`);
-    }
+    assert.ok(cssConditions.has(condition), `Missing CSS media counterpart: ${condition}`);
   }
 });

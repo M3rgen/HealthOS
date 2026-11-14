@@ -1,6 +1,7 @@
 """Current Google exercise corrections through ingestion and the public workout API."""
 
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from uuid import UUID
 
 import httpx
@@ -8,7 +9,7 @@ import pytest
 from derived_records import snapshot, store
 from fastapi import FastAPI
 from sqlalchemy import select
-from support.workouts import START, exercise
+from support.workouts import METRIC_VALUES, OPTIONAL_METRICS, START, exercise
 
 from app.api.dashboard import router
 from app.db.session import get_session
@@ -65,6 +66,8 @@ BAD_NUMBERS = ["NaN", "Infinity", "-Infinity", "1e999999999999999999999"]
 OPTIONAL_OVERFLOWS = [
     *((key, "1e1000000") for key in ("activeDuration", "caloriesKcal", "distanceMillimeters")),
     ("activeDuration", "99999999999.9995s"),
+    *((key, value) for key in ("activeDuration", "duration") for value in ("-1e1000s", "1e1000s")),
+    ("duration", "99999999999.9995s"),
     ("caloriesKcal", "9999999999.99995"),
     ("caloriesKcal", "1e20"),
     ("distanceMillimeters", "999999999999999.95"),
@@ -148,16 +151,183 @@ async def test_optional_metric_overflow_keeps_the_correction_visible(api, sessio
     await store(sessions, "exercise", exercise())
     corrected = exercise(exerciseType="CYCLING")
     payload = corrected["exercise"]
-    (payload if field == "activeDuration" else payload["metricsSummary"])[field] = value
+    (payload if field in {"activeDuration", "duration"} else payload["metricsSummary"])[field] = (
+        value
+    )
+    if field == "duration":
+        payload.pop("activeDuration")
     stats = await store(sessions, "exercise", corrected)
     assert (stats.normalized, stats.normalization_skipped) == (1, 0)
     [row] = await read(api, sessions)
     expected = dict(zip(VALUES, ("CYCLING", 3500, 123, 4567), strict=True))
-    if field == "activeDuration":
+    if field in {"activeDuration", "duration"}:
         expected["duration_seconds"] = 3600  # An unstorable duration shows the interval.
     else:
         expected["calories_kcal" if field == "caloriesKcal" else "distance_meters"] = None
     assert {key: row[key] for key in VALUES} == expected
+
+
+@pytest.mark.parametrize("fields", [*((f,) for f in OPTIONAL_METRICS), tuple(OPTIONAL_METRICS)])
+@pytest.mark.parametrize("value", METRIC_VALUES)
+@pytest.mark.parametrize("corrected", [False, True], ids=["new", "correction"])
+async def test_optional_metric_sign_and_recovery(api, sessions, fields, value, corrected):
+    original = exercise()
+    history = []
+    if corrected:
+        await store(sessions, "exercise", original)
+        history.append(original)
+    previous = None
+    for selected in dict.fromkeys((value, "-0", "2345.5")):
+        metrics = {**original["exercise"]["metricsSummary"], **dict.fromkeys(fields, selected)}
+        current = exercise(metricsSummary=metrics)
+        stats = await store(sessions, "exercise", current)
+        assert stats.normalization_skipped == 0
+        [row] = await read(api, sessions)
+        expected = {
+            column: None if Decimal(str(metrics[field])) < 0 else float(metrics[field]) / divisor
+            for (field, column), divisor in zip(OPTIONAL_METRICS.items(), (1, 1000), strict=True)
+        }
+        assert {column: row[column] for column in OPTIONAL_METRICS.values()} == expected
+        if previous is not None:
+            assert row == {**previous, **expected}
+        assert row["exercise_type"] == "RUNNING" and row["duration_seconds"] == 3500
+        assert row["source_code"] == "FITBIT" and row["provider"] == "GOOGLE"
+        assert row["start_time"] == "2026-08-31T21:30:00Z"
+        assert row["end_time"] == "2026-08-31T22:30:00Z"
+        async with sessions() as session:
+            raw = await session.scalar(select(RawHealthData))
+            assert raw.raw_json == current
+            versions = (
+                await session.scalars(select(RawHealthDataVersion).order_by("version"))
+            ).all()
+            assert [(v.version, v.raw_json) for v in versions] == list(enumerate(history, 1))
+            normalized = await session.get(ExerciseSession, UUID(row["id"]))
+            # The read projection must not clear the stored negative/rounded measurement.
+            for field in fields:
+                stored = getattr(normalized, OPTIONAL_METRICS[field])
+                if Decimal(str(selected)) < 0:
+                    assert stored is None or stored <= 0
+        previous = row
+        if not history or current != history[-1]:
+            history.append(current)
+
+
+@pytest.mark.parametrize("field", ["activeDuration", "duration"])
+@pytest.mark.parametrize("corrected", [False, True], ids=["new", "correction"])
+@pytest.mark.parametrize("value", [-60, -0.0001, 7200, 3600.0001, 3600.001, -0.0, 0, 3500, 3600])
+@pytest.mark.parametrize("form", [float, str, "{}s".format], ids=["number", "text", "seconds"])
+async def test_selected_duration_bounds_and_recovery(api, sessions, field, corrected, value, form):
+    original = exercise()
+    if corrected:
+        await store(sessions, "exercise", original)
+        [initial] = await read(api, sessions)
+    current = exercise(**{field: form(value)})
+    if field == "duration":
+        current["exercise"].pop("activeDuration")
+    stats = await store(sessions, "exercise", current)
+    assert (stats.normalized, stats.normalization_skipped) == (
+        int(not corrected or current != original),
+        0,
+    )
+    [row] = await read(api, sessions)
+    expected = value if 0 <= value <= 3600 else None
+    assert row["duration_seconds"] == expected
+    if corrected:
+        assert row == {**initial, "duration_seconds": expected}
+    assert tuple(row[key] for key in ("exercise_type", "calories_kcal", "distance_meters")) == (
+        "RUNNING",
+        123,
+        4567,
+    )
+    assert row["start_time"] == "2026-08-31T21:30:00Z"
+    assert row["end_time"] == "2026-08-31T22:30:00Z"
+    assert row["source_code"] == "FITBIT" and row["provider"] == "GOOGLE"
+    async with sessions() as session:
+        raw = await session.scalar(select(RawHealthData))
+        assert raw.raw_json == current
+        normalized = await session.get(ExerciseSession, UUID(row["id"]))
+        assert normalized.duration_seconds == Decimal(str(value)).quantize(Decimal("0.001"))
+    recovery = exercise(activeDuration="0s")
+    await store(sessions, "exercise", recovery)
+    [recovered] = await read(api, sessions)
+    assert recovered == {**row, "duration_seconds": 0}
+    async with sessions() as session:
+        raw = await session.scalar(select(RawHealthData))
+        assert raw.raw_json == recovery
+        versions = (await session.scalars(select(RawHealthDataVersion).order_by("version"))).all()
+        # Identical refetches do not add archive versions.
+        previous = ([original] if corrected and original != current else []) + (
+            [current] if current != recovery else []
+        )
+        assert [(v.version, v.raw_json) for v in versions] == list(enumerate(previous, 1))
+
+
+@pytest.mark.parametrize("field", ["activeDuration", "duration"])
+@pytest.mark.parametrize("corrected", [False, True], ids=["new", "correction"])
+@pytest.mark.parametrize(
+    "boundary,above",
+    [
+        ("3600", "3600.0000000000000001"),
+        ("0.3", "0.30000000000000001"),
+        ("0.000001", "0.00000100000000000001"),
+        ("0.0006", "0.00060000000000000001"),
+        ("86400.000001", "86400.000001000000001"),
+        ("90000000000.000001", "90000000000.0000010001"),
+    ],
+)
+@pytest.mark.parametrize("selected", ["boundary", "above", "-1e-1000s", "-0s", "-0e-1000s"])
+async def test_duration_source_precision_and_recovery(
+    api, sessions, field, corrected, boundary, above, selected
+):
+    whole, _, fraction = boundary.partition(".")
+    interval = {
+        "startTime": START.isoformat(),
+        "endTime": (
+            START + timedelta(seconds=int(whole), microseconds=int(fraction.ljust(6, "0")))
+        ).isoformat(),
+    }
+    original = exercise(interval=interval, activeDuration="0s")
+    history = []
+    initial = None
+    if corrected:
+        await store(sessions, "exercise", original)
+        [initial] = await read(api, sessions)
+        history.append(original)
+    source = {"boundary": boundary + "s", "above": above + "s"}.get(selected, selected)
+    current = exercise(interval=interval, **{field: source})
+    if field == "duration":
+        current["exercise"].pop("activeDuration")
+    else:
+        current["exercise"]["duration"] = "0s"  # A valid alternative cannot rescue it.
+    previous = initial
+    for record in (current, original):
+        stats = await store(sessions, "exercise", record)
+        assert stats.normalization_skipped == 0
+        [row] = await read(api, sessions)  # Snapshots prove every read leaves all tables intact.
+        stored = Decimal(source[:-1]).quantize(Decimal("0.001")) if record == current else 0
+        expected = (
+            None if record == current and selected in {"above", "-1e-1000s"} else float(stored)
+        )
+        assert row["duration_seconds"] == expected
+        if previous is not None:
+            assert row == {**previous, "duration_seconds": expected}
+        assert tuple(row[key] for key in ("exercise_type", "calories_kcal", "distance_meters")) == (
+            "RUNNING",
+            123,
+            4567,
+        )
+        assert row["source_code"] == "FITBIT" and row["provider"] == "GOOGLE"
+        async with sessions() as session:
+            raw = await session.scalar(select(RawHealthData))
+            assert raw.raw_json == record
+            normalized = await session.get(ExerciseSession, UUID(row["id"]))
+            assert normalized.duration_seconds == stored
+            versions = (
+                await session.scalars(select(RawHealthDataVersion).order_by("version"))
+            ).all()
+            assert [v.raw_json for v in versions] == history
+        previous = row
+        history.append(record)
 
 
 @pytest.mark.parametrize(
@@ -165,6 +335,17 @@ async def test_optional_metric_overflow_keeps_the_correction_visible(api, sessio
     [
         ({"activeDuration": None}, ("RUNNING", 3600, 123, 4567)),
         ({"activeDuration": None, "duration": None}, ("RUNNING", 3600, 123, 4567)),
+        *(
+            ({"activeDuration": value, "duration": "1.2345s"}, ("RUNNING", 1.235, 123, 4567))
+            for value in (None, "broken", {}, [], True)
+        ),
+        *(
+            ({"activeDuration": "broken", "duration": value}, ("RUNNING", None, 123, 4567))
+            for value in ("-0.0001s", "-1e-1000s", "3600.0001s")
+        ),
+        ({"activeDuration": "-0s", "duration": "-1s"}, ("RUNNING", 0, 123, 4567)),
+        ({"activeDuration": "1.2345s", "duration": "broken"}, ("RUNNING", 1.235, 123, 4567)),
+        ({"activeDuration": "broken", "duration": "broken"}, ("RUNNING", 3600, 123, 4567)),
         (
             {"exerciseType": "", "displayName": "Walk", "metricsSummary": {}},
             ("Walk", 3500, None, None),

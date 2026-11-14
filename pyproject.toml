@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "healthos"
-version = "0.2.2.1"
+version = "0.2.3"
 description = "Self-hosted, raw-first archive of your own health data"
 readme = "README.md"
 requires-python = ">=3.12,<3.14"

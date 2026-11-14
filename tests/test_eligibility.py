@@ -348,6 +348,7 @@ async def two_bands(sessions) -> None:
 
 
 async def heart_counts(sessions, monkeypatch) -> dict[str, object]:
+    monkeypatch.setattr("app.services.readers.current_heart._HEART_BATCH", 1)
     async with sessions() as session:
         raw = await session.scalar(
             select(func.count())

@@ -12,15 +12,18 @@ from test_garmin_activity_results import snapshot
 from test_garmin_bounded import archive, heart_body
 from test_garmin_bounded import sessions as sessions
 from test_garmin_daily_projections import CASES, corrected
+from test_garmin_timezone import offset_heart
 
 from app.db.contracts import OwnershipLost
 from app.models.garmin import (
     GarminDailyProjection,
+    GarminDayTime,
     GarminHeartSet,
     GarminRawRecord,
     GarminRecordObservation,
+    GarminTimeEvidence,
 )
-from app.models.health import HeartRate, Steps
+from app.models.health import Distance, HeartRate, ScalarMetric, Steps
 from app.services.providers import garmin_bounded, garmin_normalize
 from app.services.providers.garmin_current import pending_daily_days
 from app.services.providers.garmin_kinds import BY_NAME
@@ -245,7 +248,8 @@ async def test_sparse_pending_days_do_not_reload_completed_or_raw_only_days(sess
         compiled = context.compiled
         if compiled is not None and compiled.statement.is_select:
             columns = [column.name for column in compiled.statement.selected_columns]
-            if "body" in columns:
+            # Count normalization inputs; adjacent offset streams select only key/body.
+            if "body" in columns and "kind" in columns:
                 loaded.append(statement)
 
     engine = sessions.kw["bind"].sync_engine
@@ -396,3 +400,152 @@ async def test_undated_and_malformed_keys_cannot_block_pending_calendar_days(ses
     )
     assert stats.inserted == 2
     assert await snapshot(sessions, (GarminRawRecord, GarminRecordObservation)) == before
+
+
+@pytest.mark.parametrize("failure", [OwnershipLost, asyncio.CancelledError, RuntimeError])
+@pytest.mark.parametrize("completed_chunks", [0, 1])
+async def test_time_dependency_recovery_is_atomic_bounded_and_preserves_unrelated_days(
+    sessions, tmp_path, monkeypatch, failure, completed_chunks
+):
+    from garmin_records import daily_summary
+
+    days = [DAY - timedelta(days=i) for i in range(4, 0, -1)]
+    adjacent, unrelated = DAY, DAY + timedelta(days=10)
+    monkeypatch.setattr(garmin_bounded, "CHUNK_DAYS", 2)
+    for day in [*days, unrelated]:
+        await store_page(sessions, "steps", [daily_steps(day)], NOW)
+        await store_page(sessions, "daily-summaries", [daily_summary(day)], NOW)
+    for day, hours in ((adjacent, 3), (unrelated, 1)):
+        await store_page(sessions, "heart-rate", [offset_heart(day, hours)], NOW)
+    fake = FakeGarmin()
+    runner = pull_at(sessions, tmp_path, fake, NOW + timedelta(days=30))
+    try:
+        await runner.run(["steps"])
+    finally:
+        await runner.aclose()
+    async with sessions.begin() as session:
+        await session.execute(
+            update(Steps)
+            .where(Steps.source_record_id == f"steps:{days[0]}")
+            .values(is_quarantined=True, quarantine_reason="Synthetic exclusion")
+        )
+    models = (*EVIDENCE, GarminDayTime, Steps, Distance, ScalarMetric, HeartRate)
+    before = await snapshot(sessions, models)
+    await store_page(sessions, "heart-rate", [offset_heart(adjacent, 2)], NOW)
+    raw = await snapshot(sessions, (GarminRawRecord, GarminRecordObservation))
+    original = garmin_normalize.write_daily_projections
+    groups = []
+
+    async def interrupted(session, record_ids, rows, **kwargs):
+        await original(session, record_ids, rows, **kwargs)
+        keys = {key for kind, key in record_ids}
+        if keys & {str(day) for day in days}:
+            groups.append(session)
+        if str(days[completed_chunks * 2]) in keys:
+            raise failure("synthetic interruption after dependent time publication")
+
+    runner = pull_at(sessions, tmp_path, fake, NOW + timedelta(days=31))
+    with monkeypatch.context() as patch:
+        patch.setattr(garmin_normalize, "write_daily_projections", interrupted)
+        try:
+            with pytest.raises(failure):
+                await runner.run(["steps"])
+        finally:
+            await runner.aclose()
+    assert max(groups.count(group) for group in groups) <= 2
+    partial = await snapshot(sessions, models)
+    for model in (Steps, Distance, ScalarMetric):
+        for old in before[model]:
+            new = next(row for row in partial[model] if row.id == old.id)
+            committed = old.source_record_id.split(":")[-1] in {
+                str(day) for day in days[: completed_chunks * 2]
+            }
+            if committed:
+                assert new.start_time == old.start_time + timedelta(hours=1)
+                assert new.end_time == old.end_time + timedelta(hours=1)
+                assert new.source_timezone == "+02:00"
+                assert new.is_quarantined == old.is_quarantined
+                assert new.quarantine_reason == old.quarantine_reason
+            else:
+                assert new == old
+    assert len(partial[GarminDayTime]) == len(before[GarminDayTime]) + completed_chunks * 2
+    for model in EVIDENCE:
+        assert partial[model] == (raw[model] if model in raw else before[model])
+    runner = pull_at(sessions, tmp_path, fake, NOW + timedelta(days=32))
+    try:
+        await runner.run(["steps"])
+        saved = await snapshot(sessions, models)
+        again = (await runner.run(["steps"])).normalized
+        assert again.inserted == again.updated == again.unchanged == 0
+        assert await snapshot(sessions, models) == saved
+    finally:
+        await runner.aclose()
+    assert await snapshot(sessions, (GarminRawRecord, GarminRecordObservation)) == raw
+    for model in (Steps, Distance, ScalarMetric):
+        assert [row for row in saved[model] if row.source_record_id.endswith(str(unrelated))] == [
+            row for row in before[model] if row.source_record_id.endswith(str(unrelated))
+        ]
+    async with sessions() as session:
+        assert list(await session.scalars(pending_daily_days())) == []
+        choices = (await session.scalars(select(GarminDayTime).order_by(GarminDayTime.id))).all()
+        for day in days:
+            states = [row for row in choices if row.day == str(day)]
+            assert len(states) == 2 and states[0].raw_record_id != states[1].raw_record_id
+    assert all(str(days[0]) not in str(request.url) for request in fake.requests)
+
+
+@pytest.mark.parametrize("loss", ["before", "inside"])
+async def test_time_evidence_index_is_bounded_owned_and_resumable(
+    sessions, tmp_path, monkeypatch, loss
+):
+    from app.services.providers import garmin_time
+
+    monkeypatch.setattr(garmin_bounded, "CHUNK_DAYS", 2)
+    days = [DAY - timedelta(days=i) for i in range(7)]
+    for day in days:
+        await store_page(sessions, "heart-rate", [{"calendarDate": str(day)}], NOW)
+    await store_page(sessions, "steps", [daily_steps(DAY)], NOW)
+    batches = []
+    original = garmin_time.cache_time_evidence
+
+    async def capture(session, rows):
+        rows = list(rows)
+        batches.append(len(rows))
+        await original(session, rows)
+        if loss == "inside" and len(batches) == 2:
+            raise OwnershipLost("synthetic lost owner during time evidence indexing")
+
+    begun = 0
+
+    async def boundary():
+        nonlocal begun
+        begun += 1
+        if loss == "before" and begun == 4:
+            raise OwnershipLost("synthetic lost owner before next evidence batch")
+
+    @asynccontextmanager
+    async def owner(kind):
+        yield CheckedSessions(sessions, boundary) if kind == "normalize" else sessions
+
+    runner = pull_at(sessions, tmp_path, FakeGarmin(), NOW + timedelta(days=30)).owned_by(owner)
+    with monkeypatch.context() as patch:
+        patch.setattr(garmin_time, "cache_time_evidence", capture)
+        try:
+            with pytest.raises(OwnershipLost):
+                await runner.run(["steps"])
+        finally:
+            await runner.aclose()
+    assert begun == 4
+    assert batches == ([2] if loss == "before" else [2, 2])
+    async with sessions() as session:
+        assert len((await session.scalars(select(GarminTimeEvidence))).all()) == 2
+        assert not (await session.scalars(select(GarminDayTime))).all()
+        assert not (await session.scalars(select(Steps))).all()
+    runner = pull_at(sessions, tmp_path, FakeGarmin(), NOW + timedelta(days=31))
+    try:
+        await runner.run(["steps"])
+    finally:
+        await runner.aclose()
+    async with sessions() as session:
+        assert len((await session.scalars(select(GarminTimeEvidence))).all()) == 7
+        assert list(await session.scalars(pending_daily_days())) == []

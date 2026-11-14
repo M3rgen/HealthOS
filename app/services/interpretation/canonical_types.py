@@ -6,7 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field, FiniteFloat, JsonValue
 
 Metric = Literal["steps", "sleep_seconds", "resting_bpm", "hrv_ms", "spo2"]
 # The day and every nested value share the same interpretation rules.
-DailyMethod = Literal["source-daily/6"]
+DailyMethod = Literal["source-daily/12"]
 
 
 class Observation(BaseModel):

@@ -45,6 +45,8 @@ The application layer has explicit module interfaces in each subpackage's `__ini
 not initialize unrelated services or the database stack. All implementation modules
 are retained; identity and source-chain modules remain separate.
 
+Service packages are ordered `umay > synchronization > dashboard_views > providers > interpretation > readers > archive > identities > shared > operations`: a package imports only packages to its right, including deferred imports inside functions; `TYPE_CHECKING` imports are exempt. `tests/test_service_package_edges.py` holds the same `ORDER`.
+
 | Service package | Responsibility |
 | --- | --- |
 | `app.services.archive` | Raw pages, versions, response evidence, normalization, source-deletion marks and manual-measurement flags |
@@ -104,7 +106,8 @@ guards below cover specific prohibitions rather than every possible edge:
   the import graph and `tests/test_private_imports.py` bounds imports of other modules' private names.
 
 The enforced import restrictions include `api|cli → models`, `parsers → models`,
-`services → api|sync|fastapi`, `models|google_health → services|sync|api` and `core → fastapi`.
+`services → api|sync|fastapi`, `db → fastapi|starlette`, `models|google_health → services|sync|api`
+and `core → fastapi`.
 Every layer's imports are checked against the May import column (`tests/test_api_boundaries.py`).
 
 ## Data flow
@@ -251,6 +254,10 @@ The application includes a Turkish dashboard at `http://healthos.localhost:8000/
 It displays real archived data, hourly step and heart-rate charts, daily sleep,
 7-day history, CSV export, synchronization status, and separate manual body
 measurements. The 3D mannequin is illustrative, not a biometric reconstruction.
+Overview, Measurements, System and Sports have their own addresses (`#/measurements`, `#/system`,
+`#/sports`), so Back, Forward and reload keep the page you were on. The interface is Turkish by
+default with a working English switch (**Sistem › Görünüm › Dil**, kept in that browser) and
+defaults to UTC.
 The dashboard includes a separate Codex conversation in an in-page panel. It uses
 your locally installed Codex CLI and ChatGPT subscription through an authenticated
 app-server bridge. Requested health data is sent to OpenAI for analysis. The
@@ -260,10 +267,15 @@ its data tools cannot modify the archive. Other desktop Codex chats are separate
 ### Source-separated daily foundation
 
 `health_archive daily` retains its legacy days/profile/charts and adds `derived` schema 1,
-method `source-daily/6`. Use the new streams for source-aware interpretation: the entire
+method `source-daily/12`. Use the new streams for source-aware interpretation: the entire
 `dataSource` identifies a stream; no phone/band preference or cross-source sum is produced.
 HRV average, RMSSD and deep-sleep RMSSD remain different definitions. Conflicting values
 retain their observations and uncertainty; arrival/last-seen time never ranks them.
+A negative or nonfinite field is not replaced by a later alias of its definition in the same
+record; only a missing or non-numeric field falls through to the alias.
+Google daily SpO₂ uses one `daily_average` definition, selecting
+`averagePercentage` → `percentage` → `average`, shared with the dashboard,
+coverage, Umay evidence and normalization (`app/parsers/google_daily.py`).
 Daily summaries retain their civil date; steps use real UTC duration within local days,
 and sleep belongs to the wake day. Intraday samples never become daily summaries.
 Sleep timelines support explicit `startTime`/`endTime` entries in `stages`/`sleepStages`

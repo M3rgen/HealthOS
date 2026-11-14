@@ -90,7 +90,7 @@ sys.path.insert(0, 'tests')
 from support.sqlite_database import install
 install()
 assert ddl('postgresql') == before
-assert sum(sql.startswith('CREATE TRIGGER') for sql in ddl('sqlite')) == 96  # + Apple's 4
+assert sum(sql.startswith('CREATE TRIGGER') for sql in ddl('sqlite')) == 100  # + Apple's 4
 """,
         ],
         capture_output=True,

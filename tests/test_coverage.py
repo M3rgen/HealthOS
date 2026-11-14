@@ -8,11 +8,13 @@ from datetime import date, timedelta
 import pytest
 from coverage_records import assert_sources
 from coverage_records import source_archive as source_archive
+from profile_records import CASES, measurement
 from pydantic import ValidationError
 from support.chat import RPC, Browser, take
 from support.coverage_fixtures import BAND, SEEN, at, coverage_of, daily, query, raw
+from support.coverage_fixtures import api as api
 from support.coverage_fixtures import archive as archive
-from weight_records import INVALID_FIELDS
+from weight_records import INVALID_FIELDS, NEGATIVE_GRAMS
 
 from app.models.health import HeartRateVariability, SleepSession, Steps, Weight
 from app.models.identity_tables import RawHealthDataSupersession
@@ -163,7 +165,7 @@ async def test_empty_archive_has_no_values_and_unknown_retrieval(sessions, archi
     weight = coverage_of(card, "weight")
     assert weight["exclusions"]["manually_excluded"] == 0
     assert "manual_exclusion_unavailable" not in weight["reason_codes"]
-    assert coverage_of(card, "steps")["exclusions"]["invalid_shape"] is None
+    assert coverage_of(card, "steps")["exclusions"]["invalid_shape"] == 0
 
 
 async def test_short_step_day_called_complete_is_presence_only(sessions, archive):
@@ -300,7 +302,7 @@ async def test_exclusions_are_counted_once_and_left_out(sessions, archive):
         "source_deleted": 1,
         "superseded": 1,
         "manually_excluded": 0,
-        "invalid_shape": None,
+        "invalid_shape": 0,
     }
     assert steps_coverage["value_days"] == 1  # only the live row and the holder's day
     assert steps_coverage["sampling"]["sample_count"] == 2
@@ -314,15 +316,18 @@ async def test_exclusions_are_counted_once_and_left_out(sessions, archive):
     assert "örtüşmez" in card["note"]
 
 
-async def test_a_flagged_manual_measurement_is_counted_apart_and_has_no_value(archive, sessions):
+@pytest.mark.parametrize("metric", ["weight", "height", "body_fat", "muscle"])
+async def test_a_flagged_manual_measurement_is_counted_apart_and_has_no_value(
+    archive, sessions, metric
+):
     first, second = date(2026, 9, 3), date(2026, 9, 5)
-    kept = ManualMeasurement(metric="weight", value=71, measured_at=at(first, 7))
-    flagged = ManualMeasurement(metric="weight", value=7.1, measured_at=at(second, 7))
+    kept = ManualMeasurement(metric=metric, value=71, measured_at=at(first, 7))
+    flagged = ManualMeasurement(metric=metric, value=7.1, measured_at=at(second, 7))
     await archive(kept, flagged)
     async with sessions() as session:
         assert await record_flag(session, flagged.id, "test", True)
         await session.commit()
-    weight = coverage_of(await read_health(sessions, query(first, second)), "weight")
+    weight = coverage_of(await read_health(sessions, query(first, second)), metric)
     assert weight["value_days"] == 1
     assert weight["exclusions"]["manually_excluded"] == 1
     assert "manual_exclusion_unavailable" not in weight["reason_codes"]
@@ -335,7 +340,7 @@ async def test_a_flagged_manual_measurement_is_counted_apart_and_has_no_value(ar
     async with sessions() as session:  # unflagging (another event) brings it back
         assert await record_flag(session, flagged.id, "test", False)
         await session.commit()
-    weight = coverage_of(await read_health(sessions, query(first, second)), "weight")
+    weight = coverage_of(await read_health(sessions, query(first, second)), metric)
     assert (weight["value_days"], weight["exclusions"]["manually_excluded"]) == (2, 0)
 
 
@@ -502,7 +507,7 @@ async def test_an_unknown_coverage_data_type_says_which_are_accepted(sessions, a
 @pytest.mark.parametrize(
     "zone, minutes", [("Europe/Paris", 1320), ("Asia/Kolkata", 1110), ("America/New_York", 240)]
 )
-@pytest.mark.parametrize("fields", INVALID_FIELDS)
+@pytest.mark.parametrize("fields", [*INVALID_FIELDS, *({"weightGrams": v} for v in NEGATIVE_GRAMS)])
 async def test_weight_value_days_follow_current_payload_across_midnight(
     archive, sessions, zone, minutes, fields
 ):
@@ -527,11 +532,67 @@ async def test_weight_value_days_follow_current_payload_across_midnight(
             )
             assert card["value_days"] == int(day == expected)
             assert card["sampling"]["sample_count"] == int(day == expected)
-            assert card["exclusions"]["invalid_shape"] is None  # schema-1 stays unknown
+            assert card["exclusions"]["invalid_shape"] == int(
+                expected is None and "sampleTime" not in fields and day == last
+            )
             assert len(card["source_regimes"]) == int(day == expected)
             if day == expected:
                 [stream] = card["source_regimes"]
                 assert stream["first_date"] == stream["last_date"] == str(day)
                 assert stream["record_count"] == 1
+        async with sessions() as session:
+            assert await snapshot(session) == before
+
+
+@pytest.mark.parametrize(
+    "kind,metric_key,field,raw_value,expected,negative",
+    [
+        (*case, negative)
+        for case in CASES
+        for negative in (NEGATIVE_GRAMS if case[0] == "weight" else [*NEGATIVE_GRAMS, "-1e999999"])
+    ],
+)
+@pytest.mark.parametrize("corrected", [False, True])
+async def test_negative_body_measurement_has_no_coverage_in_http_or_umay(
+    sessions, api, kind, metric_key, field, raw_value, expected, negative, corrected
+):
+    from derived_records import DAY, T0, snapshot, store
+    from support.coverage_fixtures import fetch
+
+    if corrected:
+        await store(sessions, kind, measurement(kind, field, "one", raw_value))
+    for value in (negative, 0, "0", "-0", raw_value):
+        await fetch(
+            sessions,
+            T0,
+            T0 + timedelta(days=1),
+            kind,
+            points=[measurement(kind, field, "one", value)],
+        )
+        async with sessions() as session:
+            before = await snapshot(session)
+        response = await api.get(
+            "/api/sync/coverage",
+            params={
+                "start_date": str(DAY),
+                "end_date": str(DAY),
+                "timezone": "UTC",
+                "data_type": kind,
+            },
+        )
+        assert response.status_code == 200, response.text
+        umay = await read_health(sessions, query(DAY, DAY, timezone="UTC", data_type=kind))
+        report = response.json()["types"][0]
+        assert report["days"][0]["has_value"] is (value != negative)
+        assert report["exclusions"]["invalid_shape"] == int(value == negative)
+        assert report["days"][0]["retrieval"] == "completed_with_records"
+        metric = coverage_of(umay, metric_key)
+        assert metric["value_days"] == metric["sampling"]["sample_count"] == int(value != negative)
+        assert metric["days_without_value"] == int(value == negative)
+        assert metric["source_regimes"] == report["source_regimes"]
+        assert len(metric["source_regimes"]) == int(value != negative)
+        assert metric["exclusions"]["invalid_shape"] == int(value == negative)
+        json.dumps(response.json(), allow_nan=False)
+        json.dumps(umay, allow_nan=False)
         async with sessions() as session:
             assert await snapshot(session) == before

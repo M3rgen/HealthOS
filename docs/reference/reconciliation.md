@@ -56,8 +56,8 @@ or change the Google subscriber. Set `AUTOMATIC_RECOVERY_ENABLED=false` to retai
 disabling automatic reconciliation.
 
 `GET /health` is the machine-readable status surface. It returns HTTP 503 only when PostgreSQL
-cannot be queried, allowing Docker to restart a genuinely unusable app without creating restart
-loops for upstream staleness. Otherwise it returns HTTP 200 with `status` equal to `healthy`,
+cannot be queried, including a read cancelled by `API_READ_STATEMENT_TIMEOUT_SECONDS`, allowing
+Docker to restart a genuinely unusable app without creating restart loops for upstream staleness. Otherwise it returns HTTP 200 with `status` equal to `healthy`,
 `degraded`, `stale`, or `failed`, plus database/scheduler/configuration state, webhook and sync
 timestamps, pending/failed counts, stale stream names, reasons, latest raw write, last successful
 reconciliation, and per-stream source freshness (with Garmin selected, also a

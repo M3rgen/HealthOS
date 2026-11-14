@@ -9,6 +9,7 @@ values; they never sum across providers. Read-only.
 from __future__ import annotations
 
 from collections.abc import Collection
+from contextlib import aclosing
 from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
 from typing import Any
@@ -23,19 +24,20 @@ from app.models.garmin import GarminPullState, GarminRawRecord
 from app.models.health import (
     ExerciseSession,
     HeartRate,
-    HeartRateVariability,
-    OxygenSaturation,
-    RestingHeartRate,
     SleepSession,
     Steps,
 )
-from app.services.interpretation.sleep_estimate import sleep_estimate
 from app.services.readers import HistoryMetric, checked_dates, daily_window
 from app.services.readers.dashboard_rows import DAILY_METRICS
 from app.services.readers.reading import ArchiveBounds, WorkoutRecord
 from app.services.shared.finite_math import finite_number
 
+from .garmin_daily_values import SCALARS, scalar_values
+from .garmin_heart_values import heart_values
+from .garmin_sleep_values import iter_sleep_days
+from .garmin_steps import step_values
 from .garmin_versions import current_row
+from .garmin_workout_values import workout_values
 
 
 def _float(value: Decimal | None) -> float | None:
@@ -73,64 +75,21 @@ async def daily_values(
         if day is not None and value is not None and first <= day <= last:
             days.setdefault(day, {})[metric] = value
 
-    low, high = f"steps:{first.isoformat()}", f"steps:{last.isoformat()}"
-    step_rows = (
-        (
-            await session.execute(
-                select(Steps.source_record_id, Steps.count).where(
-                    Steps.provider == provider,
-                    current_row(Steps),
-                    Steps.is_quarantined.is_(False),
-                    Steps.source_record_id >= low,
-                    Steps.source_record_id <= high,
-                )
-            )
-        ).tuples()
-        if "steps" in metrics
-        else ()
-    )
-    for key, count in step_rows:
-        put(_day_of(key), "steps", _float(count))
-    for model, metric, column, kind in (
-        (RestingHeartRate, "resting_bpm", RestingHeartRate.bpm, "resting-heart-rate"),
-        (HeartRateVariability, "hrv_ms", HeartRateVariability.rmssd, "hrv"),
-        (OxygenSaturation, "spo2", OxygenSaturation.spo2, "spo2"),
-    ):
-        if metric not in metrics:
-            continue
-        rows = await session.execute(
-            select(model.source_record_id, column).where(
-                model.provider == provider,
-                current_row(model),
-                model.is_quarantined.is_(False),
-                model.source_record_id >= f"{kind}:{first.isoformat()}",
-                model.source_record_id <= f"{kind}:{last.isoformat()}",
-            )
-        )
-        for key, value in rows.tuples():
-            put(_day_of(key), metric, _float(value))
+    if "steps" in metrics:
+        async for key, value in step_values(session, first, last, provider):
+            put(_day_of(key), "steps", value)
+    for metric in SCALARS:
+        if metric in metrics:
+            async for key, value in scalar_values(session, metric, first, last, provider):
+                put(_day_of(key), metric, value)
     if "sleep_seconds" not in metrics:
         return days
     # Sleep by wake-up day: the nights that end inside the window's civil days.
     start = datetime.combine(first, time.min, zone).astimezone(UTC)
     stop = datetime.combine(last + timedelta(days=1), time.min, zone).astimezone(UTC)
-    nights = (
-        await session.scalars(
-            select(SleepSession).where(
-                SleepSession.provider == provider,
-                current_row(SleepSession),
-                SleepSession.is_quarantined.is_(False),
-                SleepSession.end_time >= start,
-                SleepSession.end_time < stop,
-            )
-        )
-    ).all()
-
-    by_day: dict[date, list[SleepSession]] = {}
-    for night in nights:
-        by_day.setdefault(as_utc(night.end_time).astimezone(zone).date(), []).append(night)
-    for day, sessions in by_day.items():
-        put(day, "sleep_seconds", sleep_estimate([(row, None) for row in sessions]).seconds)
+    async with aclosing(iter_sleep_days(session, start, stop, zone, provider)) as values:
+        async for day, seconds in values:
+            put(day, "sleep_seconds", seconds)
     return days
 
 
@@ -138,23 +97,7 @@ async def heart_rate_samples(
     session: AsyncSession, start: datetime, stop: datetime, provider: str = GARMIN
 ) -> list[tuple[datetime, float]]:
     """Current Garmin samples in ``[start, stop)``, including daily set and FIT eligibility."""
-    rows = await session.execute(
-        select(HeartRate.timestamp, HeartRate.bpm)
-        .where(
-            HeartRate.provider == provider,
-            current_row(HeartRate),
-            HeartRate.is_quarantined.is_(False),
-            HeartRate.timestamp >= start,
-            HeartRate.timestamp < stop,
-        )
-        .order_by(HeartRate.timestamp)
-    )
-    found = []
-    for moment, bpm in rows.tuples():
-        value = _float(bpm)
-        if value is not None:
-            found.append((as_utc(moment), value))
-    return found
+    return await heart_values(session, start, stop, provider)
 
 
 async def workouts(
@@ -162,21 +105,8 @@ async def workouts(
 ) -> list[WorkoutRecord]:
     """Garmin's exercise sessions starting in ``[start, stop)`` as workout rows (the shape of
     ``app.services.readers.current_workouts.current_workout``, source ``GARMIN``)."""
-    rows = (
-        await session.scalars(
-            select(ExerciseSession)
-            .where(
-                ExerciseSession.provider == provider,
-                current_row(ExerciseSession),
-                ExerciseSession.is_quarantined.is_(False),
-                ExerciseSession.start_time >= start,
-                ExerciseSession.start_time < stop,
-            )
-            .order_by(ExerciseSession.start_time)
-        )
-    ).all()
     found: list[WorkoutRecord] = []
-    for row in rows:
+    async for row, calories, distance, duration in workout_values(session, start, stop, provider):
         begin, end = as_utc(row.start_time), as_utc(row.end_time)
         if end <= begin:
             continue
@@ -186,18 +116,38 @@ async def workouts(
                 "exercise_type": row.exercise_type,
                 "start_time": begin,
                 "end_time": end,
-                "duration_seconds": (
-                    _float(row.duration_seconds)
-                    if row.duration_seconds is not None
-                    else (end - begin).total_seconds()
-                ),
-                "calories_kcal": _float(row.calories_kcal),
-                "distance_meters": _float(row.distance_meters),
+                "duration_seconds": duration,
+                "calories_kcal": calories,
+                "distance_meters": distance,
                 "source_code": provider,
                 "provider": provider,
             }
         )
     return found
+
+
+async def activity_windows(
+    session: AsyncSession, start: datetime, stop: datetime, provider: str = GARMIN
+) -> list[tuple[datetime, datetime]]:
+    """Current positive exercise intervals overlapping ``[start, stop)`` for heart policy.
+
+    Sessions can span any number of days: select by intersection, independently of the
+    start-based sports list. Read only endpoints and apply the same provider, version,
+    quarantine and FIT eligibility rules as the workout reader.
+    """
+    rows = await session.execute(
+        select(ExerciseSession.start_time, ExerciseSession.end_time)
+        .where(
+            ExerciseSession.provider == provider,
+            current_row(ExerciseSession),
+            ExerciseSession.is_quarantined.is_(False),
+            ExerciseSession.start_time < stop,
+            ExerciseSession.end_time > start,
+            ExerciseSession.end_time > ExerciseSession.start_time,
+        )
+        .order_by(ExerciseSession.start_time)
+    )
+    return [(as_utc(begin), as_utc(end)) for begin, end in rows.tuples()]
 
 
 async def archive_summary(session: AsyncSession) -> dict[str, Any] | None:
@@ -245,37 +195,26 @@ async def archive_bounds(
     session: AsyncSession, metric: HistoryMetric, today: date, zone: ZoneInfo
 ) -> ArchiveBounds:
     """Aggregate only the selected metric's current, non-quarantined archive dates."""
-    if metric == "sleep":
-        stop = daily_window(today, 1, zone).stop
-        earliest, latest = (
-            await session.execute(
-                select(func.min(SleepSession.end_time), func.max(SleepSession.end_time)).where(
-                    SleepSession.provider == GARMIN,
-                    current_row(SleepSession),
-                    SleepSession.is_quarantined.is_(False),
-                    SleepSession.end_time > SleepSession.start_time,
-                    SleepSession.end_time < stop,
-                )
-            )
-        ).one()
-        with checked_dates():
-            return ArchiveBounds(
-                as_utc(earliest).astimezone(zone).date() if earliest else None,
-                as_utc(latest).astimezone(zone).date() if latest else None,
-            )
-    # Daily rows belong to the calendar date in their key, regardless of UTC offset.
-    model, kind = (
-        (Steps, "steps") if metric == "steps" else (RestingHeartRate, "resting-heart-rate")
-    )
-    earliest, latest = (
-        await session.execute(
-            select(func.min(model.source_record_id), func.max(model.source_record_id)).where(
-                model.provider == GARMIN,
-                current_row(model),
-                model.is_quarantined.is_(False),
-                model.source_record_id >= f"{kind}:{date.min.isoformat()}",
-                model.source_record_id <= f"{kind}:{today.isoformat()}",
-            )
+    if metric != "sleep":
+        first = last = None
+        values = (
+            step_values(session, date.min, today)
+            if metric == "steps"
+            else scalar_values(session, "resting_bpm", date.min, today)
         )
-    ).one()
-    return ArchiveBounds(_day_of(earliest), _day_of(latest))
+        async for key, _ in values:
+            day = _day_of(key)
+            if day is not None:
+                first = min(first, day) if first is not None else day
+                last = max(last, day) if last is not None else day
+        return ArchiveBounds(first, last)
+    stop = daily_window(today, 1, zone).stop
+    with checked_dates():
+        first = last = None
+        async with aclosing(
+            iter_sleep_days(session, datetime.min.replace(tzinfo=UTC), stop, zone)
+        ) as values:
+            async for day, _ in values:
+                first = min(first, day) if first is not None else day
+                last = max(last, day) if last is not None else day
+        return ArchiveBounds(first, last)

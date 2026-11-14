@@ -262,6 +262,9 @@ def _rechunk(chunks, size):
         yield bytes(buffer)
 
 
+# tracemalloc makes the 50 MB pass several times slower; on a slow shared runner it crossed the
+# default 60 s. The claim is the memory peak, not the duration.
+@pytest.mark.timeout(300)
 @pytest.mark.parametrize("kind", ["xml", "zip"])
 def test_a_50_mb_export_streams_in_constant_memory(kind):
     source = generated_export(RECORDS)

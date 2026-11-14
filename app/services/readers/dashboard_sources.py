@@ -5,10 +5,12 @@ from collections.abc import Collection
 from sqlalchemy import and_, or_, select
 
 from app.models.eligibility import normalized_counted, normalized_quarantined, raw_counted
+from app.models.health import HeartRate
 from app.models.identity_queries import held_elsewhere, holds_live, key_held_elsewhere, superseded
 from app.models.state import RawHealthData
 
 from .dashboard_rows import DAILY_METRICS
+from .heart_projection import default_filter
 
 
 class DashboardSources:
@@ -36,7 +38,10 @@ class DashboardSources:
 
     def normalized(self, model, data_type: str):
         if not self.include_source_deleted:
-            return normalized_counted(model, (data_type,))
+            predicate = normalized_counted(model, (data_type,))
+            if data_type == "heart-rate" and model is HeartRate:
+                return default_filter(predicate)
+            return predicate
         raw = select(RawHealthData.id).where(
             RawHealthData.data_type == data_type,
             RawHealthData.google_data_point_id == model.google_data_point_id,

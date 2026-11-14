@@ -3,6 +3,8 @@
 Unknown global messages, native fields and developer bytes are consumed using their
 local definitions. The original file is archived separately; only the activity profile
 fields needed by the importer are interpreted. Both FIT 1 and FIT 2 are accepted.
+Timestamp fields are shared decoding state: even an otherwise ignored message can
+set the base for a later compressed timestamp and must use the same wire contract.
 """
 
 import struct
@@ -41,7 +43,11 @@ class Definition:
     developer_size: int
 
 
-# Native projection fields -> (scalar byte size, FIT base type including endian flag).
+# Shared native fields -> (scalar byte size, FIT base type including endian flag).
+# These affect decoding regardless of whether the global message is projected.
+COMMON_FIELDS = {253: (4, 0x86)}  # timestamp: scalar uint32
+
+# Native projection fields use the same contracts as the shared fields above.
 # Other fields remain in the file archive without profile interpretation.
 PROFILE = {
     0: {  # file_id
@@ -59,9 +65,8 @@ PROFILE = {
         8: (4, 0x86),  # total_timer_time: uint32
         9: (4, 0x86),  # total_distance: uint32
         11: (2, 0x84),  # total_calories: uint16
-        253: (4, 0x86),  # timestamp: uint32
     },
-    20: {3: (1, 0x02), 253: (4, 0x86)},  # record: heart_rate uint8, timestamp uint32
+    20: {3: (1, 0x02)},  # record: heart_rate uint8
 }
 # Base id -> (struct code, invalid sentinel). Unknown base ids can still be skipped.
 BASE_TYPES = {
@@ -91,10 +96,16 @@ def _value(data: bytes, field: Field, endian: str) -> int | None:
 
 
 def _validate_profile(global_number: int, fields: tuple[Field, ...]) -> None:
-    """Reject incompatible definitions even if no data message follows them."""
+    """Validate shared decoding state as well as the activity projection.
+
+    Unknown globals can advance the compressed time base, so their timestamp
+    definitions must be checked even when no data message follows. Checking the
+    full base byte also rejects a missing endian flag; checking size excludes
+    arrays before scalar/sentinel decoding can silently ignore them.
+    """
     profile = PROFILE.get(global_number, {})
     for field in fields:
-        expected = profile.get(field.number)
+        expected = COMMON_FIELDS.get(field.number, profile.get(field.number))
         if expected is not None and (field.size, field.base) != expected:
             raise FitError("FIT alanının türü veya skaler boyutu geçersiz.")
 
@@ -137,7 +148,7 @@ class Reader:
 
     def values(self, definition: Definition, compressed: bool) -> dict[int, int | None]:
         values = {}
-        wanted = PROFILE.get(definition.global_number, {}).keys() | {253}
+        wanted = PROFILE.get(definition.global_number, {}).keys() | COMMON_FIELDS.keys()
         for field in definition.fields:
             if compressed and field.number == 253:
                 continue

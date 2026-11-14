@@ -230,6 +230,10 @@ def test_numeric_columns_reject_invalid_values_and_rounding_overflow(
             ):
                 value = (limit - offset) * sign * Decimal(str(multiplier))
                 result = normalize(spec, numeric_point(kind, path, str(value)))
+                if kind in {"sleep", "steps"} and value < 0:
+                    # Source durations/counts are invalid even when SQL can hold them.
+                    assert result is None, (kind, column, value)
+                    continue
                 # Only a required column's overflow rejects the record; optional is NULL.
                 assert (result is not None) == (accepted or optional), (kind, column, value)
                 if result is not None:

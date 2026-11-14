@@ -14,7 +14,8 @@ from app.parsers.common import (
     source_id,
     temporal,
 )
-from app.parsers.sleep import sleep_period_seconds, sleep_stages
+from app.parsers.google_daily import daily_spo2
+from app.parsers.sleep import nonnegative_sleep_duration, sleep_period_seconds, sleep_stages
 
 
 @dataclass(frozen=True)
@@ -115,7 +116,14 @@ def _heart_rate_variability(
 def _oxygen_saturation(
     kind: str, payload: dict, common: dict, start: datetime
 ) -> NormalizedRecord | None:
-    spo2 = numeric.first_number(payload, ("percentage", "spo2", "averagePercentage", "average"))
+    if kind == "daily-oxygen-saturation":
+        _, supplied = daily_spo2(payload)
+        # Validate before SQL rounding; a tiny negative must not become zero.
+        spo2 = numeric.number(supplied)
+        if spo2 is not None and spo2 < 0:
+            return None
+    else:
+        spo2 = numeric.first_number(payload, ("percentage", "spo2", "averagePercentage", "average"))
     return (
         NormalizedRecord("OxygenSaturation", {**common, "timestamp": start, "spo2": spo2})
         if spo2 is not None
@@ -125,14 +133,24 @@ def _oxygen_saturation(
 
 def _steps(payload: dict, common: dict, start: datetime, end: datetime) -> NormalizedRecord | None:
     count = numeric.first_number(payload, ("count", "countSum", "steps"))
-    return (
-        NormalizedRecord("Steps", {**common, "start_time": start, "end_time": end, "count": count})
-        if count is not None
-        else None
+    # Validate the selected Decimal before SQL scale rounding can turn a tiny
+    # negative into zero. Do not retry aliases; a correction may retain an old
+    # normalized row as evidence, but must not supply a new measurement.
+    if count is None:
+        return None
+    if count < 0:
+        return None
+    return NormalizedRecord(
+        "Steps", {**common, "start_time": start, "end_time": end, "count": count}
     )
 
 
 def _sleep(payload: dict, common: dict, start: datetime, end: datetime) -> NormalizedRecord | None:
+    summary = payload.get("summary")
+    if isinstance(summary, dict):
+        asleep = numeric.number(summary.get("minutesAsleep"))
+        if asleep is not None:
+            nonnegative_sleep_duration(asleep)
     stages = sleep_stages(payload, strict=True)
     return NormalizedRecord(
         "SleepSession",

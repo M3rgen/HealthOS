@@ -200,7 +200,7 @@ async def test_garmin_production_entry_points_use_injected_source(
                     ZoneInfo("UTC"),
                     DashboardSources(),
                 )
-            ).days[DAY]["steps"].value == daily_steps(DAY)["totalSteps"]
+            )[0].days[DAY]["steps"].value == daily_steps(DAY)["totalSteps"]
             assert await session.scalar(select(func.count()).select_from(RawHealthData)) == 0
             assert await session.scalar(select(func.count()).select_from(RawApiResponse)) == 0
             # The production read model consumes the same source catalog.

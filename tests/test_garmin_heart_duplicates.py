@@ -20,7 +20,16 @@ from app.services.providers.garmin_normalize import build_rows, normalize_window
 
 @pytest.mark.parametrize(
     "values, expected, skipped",
-    [([60, 60], 60, 0), ([60, 80], 60, 0), ([80, 60], 80, 0)]
+    [
+        ([60, 60], 60, 0),
+        ([60, 80], 60, 0),
+        ([80, 60], 80, 0),
+        ([-1, 60], -1, 0),
+        ([-0.0001, 60], 0, 0),
+        (["-1e-10000", 60], 0, 0),
+        ([60, -1], 60, 0),
+        (["-1e10000", 60], 60, 1),
+    ]
     + [([bad, 60, 80], 60, int(bad == 10**30)) for bad in (None, "bad", "NaN", 10**30)],
 )
 @pytest.mark.parametrize("correction", [False, True])

@@ -25,6 +25,11 @@ def heart(name="one", at=T0, source=PHONE, **values):
     )
 
 
+@pytest.fixture(autouse=True)
+def heart_batch(monkeypatch):
+    monkeypatch.setattr(current_heart, "_HEART_BATCH", 1)
+
+
 @pytest.fixture
 async def api(sessions, monkeypatch):
     app = FastAPI()
@@ -53,11 +58,11 @@ async def outputs(api, sessions, expected, timezone="UTC", first=DAY):
         query = dict(end_date=str(day), timezone=timezone)
         response = await api.get("/api/dashboard", params={**query, "days": 1})
         assert response.status_code == 200, response.text
-        assert response.json()["charts"]["heart_rate"] == chart
+        assert response.json()["charts"] == result["charts"]
         daily = await codex_health.read_health(
             sessions, {"action": "daily", "start_date": str(day), **query}
         )
-        assert daily["charts"]["heart_rate"] == chart
+        assert daily["charts"] == result["charts"]
     intraday = await codex_health.read_health(
         sessions, dict(action="intraday", data_type="heart-rate", start_date=str(first), **query)
     )
@@ -158,9 +163,12 @@ async def test_move_across_civil_day_boundaries(api, sessions, timezone, at, hou
 
 @pytest.mark.parametrize("state", ["deleted", "raw-quarantine", "normalized-quarantine"])
 async def test_source_filters_still_apply_to_current_samples(api, sessions, state):
-    original = heart(beatsPerMinute=77)
-    await store(sessions, "heart-rate", original)
-    await store(sessions, "heart-rate", heart(at=T0 + timedelta(hours=1), bpm=50))
+    await store(sessions, "heart-rate", *(heart(str(i), beatsPerMinute=77) for i in range(7)))
+    await store(
+        sessions,
+        "heart-rate",
+        *(heart(str(i), at=T0 + timedelta(hours=1), bpm=50) for i in range(7)),
+    )
     model = HeartRate if state == "normalized-quarantine" else RawHealthData
     values = {"source_deleted_at": T0} if state == "deleted" else {"is_quarantined": True}
     async with sessions() as session, session.begin():
@@ -197,3 +205,27 @@ async def test_read_window_uses_current_source_time(sessions, monkeypatch):
         assert parsed == []  # retained normalized time must not select this payload
         await dashboard_data(session, query=DashboardQuery(DAY + timedelta(days=1), 1, "UTC"))
         assert parsed == [corrected]
+
+
+@pytest.mark.parametrize("value", [-70, "-70", "-1e-1000", "-1e1000"])
+async def test_negative_correction_is_evidence_only_until_recovery(api, sessions, value):
+    records = [
+        heart(beatsPerMinute=77),
+        heart(at=T0 + timedelta(hours=1), beatsPerMinute=value, bpm=120, value=130),
+        heart(at=T0 + timedelta(hours=2), value=63),
+    ]
+    for index, (record, hours) in enumerate(zip(records, ({0: 77}, {}, {2: 63}), strict=True)):
+        await store(sessions, "heart-rate", record)
+        [evidence] = await outputs(api, sessions, [hours])
+        assert evidence["record"] == record["name"]
+        assert evidence["field"] == "beatsPerMinute"
+        assert evidence["value"] == (None if index == 1 else (77 if index == 0 else 63))
+        assert evidence["reason_codes"] == (["unsupported_or_missing_value"] if index == 1 else [])
+        async with sessions() as session:
+            [raw] = list(await session.scalars(select(RawHealthData)))
+            assert raw.raw_json == record
+            if index == 1 and value == "-1e1000":
+                assert await session.scalar(select(HeartRate.bpm)) == 77
+            versions = list(await session.scalars(select(RawHealthDataVersion).order_by("version")))
+            assert [v.raw_json for v in versions] == records[:index]
+            assert [v.version for v in versions] == list(range(1, index + 1))

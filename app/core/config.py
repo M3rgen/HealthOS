@@ -113,6 +113,7 @@ class Settings(BaseSettings):
     app_port: int = 8000
     log_level: str = "INFO"
     database_url: str = "postgresql+asyncpg://health:health@postgres:5432/health"
+    api_read_statement_timeout_seconds: int = Field(default=25, ge=0, le=2_147_483)
     codex_bridge_url: str = "wss://host.docker.internal:8766"
     codex_bridge_token: str | None = None
     # Single-user UI/API bearer token; empty is allowed only on loopback outside production.

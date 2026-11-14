@@ -11,6 +11,8 @@ def weight(name="one", grams=70000, at=T0, **fields):
     )
 
 
+NEGATIVE_GRAMS = [-70000, "-70000", -0.001, "-0.001", "-5e-324", "-1e-999999"]
+
 INVALID_FIELDS = [
     {"weightGrams": None},
     {"weightGrams": "broken"},

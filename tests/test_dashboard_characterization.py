@@ -18,7 +18,7 @@ from app.models.manual import ManualMeasurement
 from app.models.state import RawHealthData
 from app.services.dashboard_views import dashboard
 from app.services.identities.source_precedence import Policy
-from app.services.interpretation.canonical_daily import canonical_day
+from app.services.interpretation.canonical_daily import METHOD, canonical_day
 from app.services.interpretation.health_windows import bounds
 from app.services.readers.dashboard_queries import DashboardQuery
 
@@ -29,22 +29,23 @@ CASES = (
     ("autumn", date(2026, 10, 25), "Europe/Paris"),
     ("fractional", date(2026, 9, 29), "Asia/Kolkata"),
 )
+# Platform candidates and selected hourly evidence intentionally change these digests.
 EXPECTED = {
     ("empty", "live"): "d8657b0b1f1f8186877cda083a6f90c44213381d8d05746197c30998a02c8819",
-    ("ordinary", "live"): "547e941259f73a7d7d713d25c8178c51a575e356718c7e383cb35d3812265a49",
-    ("spring", "live"): "51caf1a298ba1923613fee8bfd38246bd473aa1c8676ecb69d46afd7d423a350",
-    ("autumn", "live"): "ce104f2032dbeec9a61a87a79eff85d6f17f06433acb415757d1ba06b8185d9a",
-    ("fractional", "live"): "e4c58f7fbcbdff028f6bb79db5fc19bc19906b2f59a34db8876248a6877553e7",
+    ("ordinary", "live"): "aca1c31618e8ea9a67c4708216b95967dfe4dca9701b079c2acced82d9992a65",
+    ("spring", "live"): "0643503e55754063a77a45b824c06fa41ddce66dbe596c54b4b123ae00c9d789",
+    ("autumn", "live"): "d9575d1ad92e8b0c96152c352f9c1afd5f02fbc8a67801092f15c1b96770bb61",
+    ("fractional", "live"): "073c4dd42b3e08967a88f9f489fdc2d4b17832bb32c7918bdb70bd842fdf009f",
     ("empty", "deleted"): "d8657b0b1f1f8186877cda083a6f90c44213381d8d05746197c30998a02c8819",
-    ("ordinary", "deleted"): "7c562d9bc02aea473b139e0c3be0a554aaf638b677df4647676e96c12beef653",
-    ("spring", "deleted"): "0578b92aa87a6f87e77b067c0fc6cb433dcf2c3ddcdcad66536cd6a28fd7cf52",
-    ("autumn", "deleted"): "3246022bd780924188826a0157c59caf36e6c351fcaa34ffbdb8918b7eb6ad86",
-    ("fractional", "deleted"): "e68d3030f4135e55b887728fb94ffc2a7f389e8da5ccc1dacfef6b2c5ddc2324",
+    ("ordinary", "deleted"): "c94f129cc5d695b4381a645f4e5ffc5274d797e5a049c0dfd0c37682afadf478",
+    ("spring", "deleted"): "f1ad6e5b687b2f76f98d993d9f50ccf20687129cf7806ec8b8961bd25350d512",
+    ("autumn", "deleted"): "8ef93655500570b07bca6c594ef05177e847be33f17304ba51d3d23e87941238",
+    ("fractional", "deleted"): "106fdc793953e6d527501c0245a69cb1a23bd6eb30798ea3874afb88b4502f36",
     ("empty", "valid"): "d8657b0b1f1f8186877cda083a6f90c44213381d8d05746197c30998a02c8819",
-    ("ordinary", "valid"): "547e941259f73a7d7d713d25c8178c51a575e356718c7e383cb35d3812265a49",
-    ("spring", "valid"): "51caf1a298ba1923613fee8bfd38246bd473aa1c8676ecb69d46afd7d423a350",
-    ("autumn", "valid"): "ce104f2032dbeec9a61a87a79eff85d6f17f06433acb415757d1ba06b8185d9a",
-    ("fractional", "valid"): "e4c58f7fbcbdff028f6bb79db5fc19bc19906b2f59a34db8876248a6877553e7",
+    ("ordinary", "valid"): "aca1c31618e8ea9a67c4708216b95967dfe4dca9701b079c2acced82d9992a65",
+    ("spring", "valid"): "0643503e55754063a77a45b824c06fa41ddce66dbe596c54b4b123ae00c9d789",
+    ("autumn", "valid"): "d9575d1ad92e8b0c96152c352f9c1afd5f02fbc8a67801092f15c1b96770bb61",
+    ("fractional", "valid"): "073c4dd42b3e08967a88f9f489fdc2d4b17832bb32c7918bdb70bd842fdf009f",
 }
 
 
@@ -137,6 +138,10 @@ async def test_frozen_dashboard_and_canonical_json(sessions, monkeypatch, name, 
         canonical = [
             await canonical_day(session, day - timedelta(days=offset), zone) for offset in (2, 1, 0)
         ]
+        assert all(day["method_version"] == METHOD for day in canonical)
         body = JSONResponse(jsonable_encoder({"dashboard": legacy, "canonical": canonical})).body
+        # Assert today's method above; keep the remaining bytes pinned to the /6 baseline.
+        assert b"source-daily/6" not in body
+        body = body.replace(METHOD.encode(), b"source-daily/6")
         assert sha256(body).hexdigest() == EXPECTED[name, mode]
         assert await snapshot(session) == before

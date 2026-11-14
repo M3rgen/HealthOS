@@ -113,7 +113,7 @@ async def test_health_reports_login_state_even_when_database_is_unavailable(
     inspect = AsyncMock(return_value=snapshot)
     if not database_available:
         inspect.side_effect = OSError("synthetic database failure")
-    runtime.pipeline_health = SimpleNamespace(inspect=inspect)
+    runtime.pipeline_health = SimpleNamespace(inspect=inspect, sessions=sessions)
     async with client(application) as http:
         response = await http.get(
             "/health", headers={"Authorization": f"Bearer {TOKEN}"} if token else {}

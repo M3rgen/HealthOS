@@ -113,7 +113,7 @@ async def test_deep_escaped_echo_keeps_masked_evidence_without_scanner_recursion
 ):
     escaped = "".join(f"\\u{ord(char):04x}" for char in credential).encode()
     raw = b"[" * depth + b'"' + escaped + b'"' + b"]" * depth
-    if depth == 0:  # The full decoder discards the first duplicate value.
+    if depth == 0:  # A duplicate is refused even when it hides an escaped credential.
         raw = b'{"debug":' + raw + b',"debug":null}'
     fake = FakeGarmin()
     garmin, exchanges = client(key_file, fake), []
@@ -124,7 +124,7 @@ async def test_deep_escaped_echo_keeps_masked_evidence_without_scanner_recursion
     await garmin.http.aclose()
     garmin.http = httpx.AsyncClient(transport=httpx.MockTransport(respond))
     try:
-        error = GarminResponseDecodeError if depth == 10000 else GarminCredentialEchoError
+        error = GarminResponseDecodeError if depth in (0, 10000) else GarminCredentialEchoError
         with pytest.raises(error) as caught:
             await garmin.get(PATH, kind="steps", exchanges=exchanges)
         assert caught.value.__cause__ is None and caught.value.__context__ is None

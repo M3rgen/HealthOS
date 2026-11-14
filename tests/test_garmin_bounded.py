@@ -576,11 +576,13 @@ async def test_heart_membership_uses_bounded_bulk_writes_and_constant_reader_que
         statements.clear()
         async with sessions() as session:
             assert len(await heart_rate_samples(session, start, start + timedelta(days=1))) == 2101
-        assert len(statements) == 1
+        assert len(statements) == 2  # normalized samples, then distinct published raw inputs
         assert (
             "garmin_raw_records" not in statements[0][0]
-            and "garmin_api_responses" not in statements[0][0]
+            and "garmin_raw_records.body ->" in statements[1][0]
+            and "garmin_heart_sets.raw_record_id" in statements[1][0]
         )
+        assert all("garmin_api_responses" not in sql for sql, _ in statements)
     finally:
         event.remove(engine, "before_cursor_execute", capture)
     body["heartRateValues"] = body["heartRateValues"][:1001]

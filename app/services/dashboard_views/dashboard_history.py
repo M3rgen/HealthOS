@@ -19,6 +19,7 @@ from app.services.readers import (
 )
 
 from .dashboard_daily import read_days
+from .history_bounds import read_bounds
 
 
 class HistoryPageNotFound(ValueError):
@@ -33,6 +34,7 @@ async def history_data(
     today: date,
     *,
     archives: Archives = ARCHIVES,
+    use_bounds_cache: bool = True,
 ) -> History:
     zone = ZoneInfo(timezone)
     with checked_dates():
@@ -40,15 +42,8 @@ async def history_data(
     # Even the oldest page is a full thirty-day window, not a clipped archive tail.
     window = daily_window(end_date, 30, zone)
     value_key = {"steps": "steps", "sleep": "sleep_seconds", "heart": "resting_bpm"}[metric]
-    bounds = [
-        await archive.archive_bounds(session, metric, today, zone)
-        for archive in archives
-        if archive.archive_bounds is not None
-    ]
-    earliest_date = min(
-        (item.earliest for item in bounds if item.earliest is not None), default=None
-    )
-    latest_date = max((item.latest for item in bounds if item.latest is not None), default=None)
+    bounds = await read_bounds(session, metric, today, zone, archives, use_cache=use_bounds_cache)
+    earliest_date, latest_date = bounds.earliest, bounds.latest
     total_pages = ((today - earliest_date).days // 30 + 1) if earliest_date else 1
     if page > total_pages:
         raise HistoryPageNotFound("Bu geçmiş sayfası bulunamadı.")

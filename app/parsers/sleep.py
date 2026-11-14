@@ -21,12 +21,27 @@ def _finite_seconds(value: Decimal) -> Decimal:
     return value
 
 
+def nonnegative_sleep_duration(value: Decimal) -> Decimal:
+    """Reject negative source evidence before summing or clamping estimates.
+
+    A subtraction may legitimately fall below zero and retain the existing clamp;
+    individual source durations cannot. Signed zero remains a measurement.
+    """
+    if value < 0:
+        raise InvalidOperation("Negative sleep duration")
+    return value
+
+
 def sleep_minutes_seconds(value: object) -> Decimal | None:
     """Scale in a bounded context, rejecting underflow as well as overflow."""
     with localcontext(Context()) as context:
         context.traps[Underflow] = True
         minutes = numeric.number(value)
-        return _finite_seconds(minutes * 60) if minutes is not None else None
+        return (
+            _finite_seconds(nonnegative_sleep_duration(minutes) * 60)
+            if minutes is not None
+            else None
+        )
 
 
 def sleep_stages(payload: dict, *, strict: bool = False) -> dict[str, Decimal]:
@@ -47,7 +62,7 @@ def sleep_stages(payload: dict, *, strict: bool = False) -> dict[str, Decimal]:
                 context.traps[Underflow] = True
                 duration = _stage_duration(entry, minutes)
                 if duration is not None:
-                    _finite_seconds(duration)
+                    _finite_seconds(nonnegative_sleep_duration(duration))
                     total = totals.get(name, Decimal(0)) + duration
                     totals[name] = _finite_seconds(total)
         except DecimalException:
@@ -93,8 +108,8 @@ def sleep_period_seconds(payload: dict, start: datetime, end: datetime) -> tuple
     """
     duration = numeric.duration_seconds(payload.get("duration"))
     if duration is not None:
-        return duration, True
-    return Decimal(str((end - start).total_seconds())), False
+        return nonnegative_sleep_duration(duration), True
+    return nonnegative_sleep_duration(Decimal(str((end - start).total_seconds()))), False
 
 
 @dataclass(frozen=True)

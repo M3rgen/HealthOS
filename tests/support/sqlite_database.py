@@ -11,7 +11,7 @@ from typing import Any
 
 from sqlalchemy import func, text
 from sqlalchemy.dialects.sqlite import insert
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession
 
 from app.db.dialect import DATABASES, PostgreSQL
 
@@ -43,11 +43,28 @@ class SQLite(PostgreSQL):
         # A savepoint's read snapshot cannot upgrade beside another SQLite writer.
         return 1, nullcontext
 
-    async def control(self, session: AsyncSession, statement, parameters=None) -> None:
+    async def control(
+        self, session: AsyncSession | AsyncConnection, statement, parameters=None
+    ) -> None:
         pass
 
     async def clock(self, session: AsyncSession) -> datetime:
         return datetime.now(UTC)
+
+    async def read_revision(self, session: AsyncSession) -> tuple[object, ...] | None:
+        connection = await session.connection()
+        raw = (await connection.get_raw_connection()).driver_connection
+        # total_changes does not rewind on rollback. Never publish uncommitted data.
+        if raw.in_transaction:
+            return None
+        identity = connection.info.setdefault("history_cache_identity", object())
+        version, changes = (
+            await session.execute(
+                text("SELECT data_version, total_changes() FROM pragma_data_version")
+            )
+        ).one()
+        # data_version detects other connections; total_changes detects this one.
+        return (identity, version, changes)
 
     async def credential_lock(self, session: AsyncSession, namespace: int) -> None:
         await session.execute(text("BEGIN IMMEDIATE"))

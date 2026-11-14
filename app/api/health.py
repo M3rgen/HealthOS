@@ -3,9 +3,10 @@ from __future__ import annotations
 import asyncio
 import logging
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 
+from app.api.read_limits import request_session
 from app.core.config import Settings
 from app.core.logging import event
 from app.core.sources import garmin_key_mode, not_installed_sources, permissive_key_mode
@@ -30,8 +31,18 @@ async def live() -> Live:
 
 
 @router.get("/api/status", response_model=Health)
+async def status(request: Request) -> Health | JSONResponse:
+    """The interface's status read: a cancelled read keeps the common HTTP 504."""
+    return await report(request, timeout_unavailable=False)
+
+
 @router.get("/health", response_model=Health)
 async def health(request: Request) -> Health | JSONResponse:
+    """Monitors and the container healthcheck: a cancelled read is an unavailable database."""
+    return await report(request, timeout_unavailable=True)
+
+
+async def report(request: Request, *, timeout_unavailable: bool) -> Health | JSONResponse:
     runtime: Runtime = request.app.state.runtime
     settings: Settings = request.app.state.settings
     scheduler_expected = runtime.scheduler_needed(settings)
@@ -52,11 +63,18 @@ async def health(request: Request) -> Health | JSONResponse:
         else "degraded"
     )
     try:
-        snapshot = await runtime.pipeline_health.inspect(
-            scheduler_running=not scheduler_expected or runtime.scheduler_running
-        )
+        async with request_session(runtime.pipeline_health.sessions, request) as session:
+            snapshot = await runtime.pipeline_health.inspect(
+                scheduler_running=not scheduler_expected or runtime.scheduler_running,
+                session=session,
+            )
     except Exception as exc:
-        event(logger, "HEALTH_DATABASE_UNAVAILABLE", error_type=type(exc).__name__)
+        # request_session has already rolled back, logged API_READ_TIMEOUT and raised its 504.
+        timed_out = isinstance(exc, HTTPException) and exc.status_code == 504
+        if isinstance(exc, HTTPException) and not (timed_out and timeout_unavailable):
+            raise
+        error_type = "read_timeout" if timed_out else type(exc).__name__
+        event(logger, "HEALTH_DATABASE_UNAVAILABLE", error_type=error_type)
         return JSONResponse(
             status_code=503,
             content={

@@ -135,10 +135,12 @@ class WebhookStatusService:
                 "Webhook diagnostics unavailable", extra={"event": "WEBHOOK_STATUS_WRITE_FAILED"}
             )
 
-    async def snapshot(self) -> WebhookStatus:
+    async def snapshot(self, *, session: AsyncSession | None = None) -> WebhookStatus:
+        if session is None:
+            async with self.sessions() as owned_session:
+                return await self.snapshot(session=owned_session)
         now = self.clock()
-        async with self.sessions() as session:
-            rows, archived, error = await _snapshot_data(session)
+        rows, archived, error = await _snapshot_data(session)
         counts = {reason: 0 for reason in REASONS}
         first, last = {}, {}
         for reason, count, earliest, latest in rows:

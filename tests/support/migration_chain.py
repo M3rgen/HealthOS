@@ -2,4 +2,4 @@
 
 from __future__ import annotations
 
-HEAD = "20261112_a004"  # Apple extension: merge of 20261112_a003 and 20261112_0034
+HEAD = "20261114_a005"  # Apple extension: merge of 20261112_a004 and 20261114_0036

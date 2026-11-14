@@ -20,7 +20,7 @@ do not reach it. Restoring a backup remains the way to go back on a live archive
   `alembic downgrade base` changes nothing. Tested on PostgreSQL in
   `tests/integration/test_pg_downgrade_refusal.py`.
 - Dropped even with rows, because they are rebuilt or are bookkeeping: `derived_days`,
-  `reliability_state`, `garmin_pull_state` and `display_preferences`.
+  `reliability_state`, `garmin_pull_state`, `display_preferences`, `google_heart_hours` and `google_heart_projection_state`.
 - The older per-revision consent flags still work, for their own tables only, and should follow a
   backup: `-x allow-version-loss=1` (`raw_api_responses`, `raw_health_data_events`,
   `raw_health_data_versions`), `-x allow-identity-loss=1` (the identity tables of `20261021_0012`) and
@@ -539,7 +539,7 @@ fails with nothing changed. Duration does not depend on the size of the archive.
 A merge revision with parents `20261108_0028` (installs of `main`) and `20261109_p001` (the bridge for
 v0.2.2 stamps). Its own identity is unchanged. It runs no SQL in either direction.
 `alembic upgrade head` from either line passes through it, and
-`alembic current` then prints the newest revision (`20261112_0034 (head)` when this was written).
+`alembic current` then prints `20261114_0036 (head)`: [Google heart projection](reference/heart-projection.md) documents its disposable packets and resumable fill; [Garmin time evidence](reference/garmin.md#time-evidence-and-recovery) documents the preceding `20261112_0035`.
 
 
 ## Garmin record observations — 20261111_0030
@@ -598,10 +598,11 @@ normalization attempt/success/error times and only the fixed `garmin_normalizati
 code; successful normalization clears the code. No existing row is rewritten and no prior
 normalization outcome is inferred. Raw archives and completed chunks remain untouched.
 
-## Apple extension merges — 20261111_a002, 20261112_a003, 20261112_a004
+## Apple extension merges — 20261111_a002, 20261112_a003, 20261112_a004, 20261114_a005
 
 Published release only (the GitHub-only Apple extension). Merge revisions that run no SQL: they
 join the extension's real `20261107_a001` (Apple raw tables, [Apple Health](reference/apple.md))
-to the main line, `20261111_a002` at `20261109_0029` `20261112_a003` at `20261111_0033` and `20261112_a004` at `20261112_0034`, so
+to the main line, `20261111_a002` at `20261109_0029`, `20261112_a003` at `20261111_0033`, `20261112_a004` at
+`20261112_0034` and `20261114_a005` at `20261114_0036`, so
 Alembic has one head. No parent's `down_revision` is edited; a later main-line revision gets
 another merge revision like these.

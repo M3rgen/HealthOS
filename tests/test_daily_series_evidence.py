@@ -275,3 +275,39 @@ async def test_collision_pages_budgets_and_append_only_decisions(sessions, monke
         "code"
     ] == "stale_cursor"
     assert (await call(sessions, action, limit=200, **args))["summaries"] == expected
+
+
+@pytest.mark.parametrize(
+    "kind,metric,field",
+    [
+        ("daily-resting-heart-rate", "resting_bpm", "beatsPerMinute"),
+        ("daily-heart-rate-variability", "hrv_ms", "rmssd"),
+        ("daily-oxygen-saturation", "spo2", "averagePercentage"),
+    ],
+)
+@pytest.mark.parametrize("negative", [-1, "-1e-999999", "-1e999999"])
+async def test_negative_daily_correction_cannot_enter_umay_statistics(
+    sessions, kind, metric, field, negative
+):
+    import json
+
+    tomorrow = DAY + timedelta(days=1)
+    await store(sessions, kind, summary(kind, "next", day=tomorrow, **{field: 70}))
+    for value in (60, negative, 0, "-0", "1e-100", "1e100"):
+        await store(sessions, kind, summary(kind, **{field: value}))
+        expected = None if value == negative else float(value)
+        async with sessions() as session:
+            before = await snapshot(session)
+        for action in ("baseline", "analyze"):
+            result = await call(sessions, action, metric=metric, end_date=str(tomorrow))
+            first, second = sorted(result["summaries"], key=lambda r: r["date"])
+            assert first["value"] == expected
+            assert first["evidence"][0]["value"] == expected
+            assert first["evidence"][0]["reason_codes"] == (
+                [f"negative_measurement:{field}"] if expected is None else []
+            )
+            assert second["statistics"]["count"] == int(expected is not None)
+            assert second["statistics"]["minimum"] == expected
+            json.dumps(result, allow_nan=False)
+        async with sessions() as session:
+            assert await snapshot(session) == before

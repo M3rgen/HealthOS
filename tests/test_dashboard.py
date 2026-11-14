@@ -14,6 +14,63 @@ from app.services.interpretation.sleep_estimate import sleep_total
 from app.services.readers.dashboard_queries import DashboardQuery
 
 
+@pytest.mark.parametrize("conflict", [False, True])
+async def test_google_profile_http_and_umay_share_conflicts_without_archive_writes(
+    sessions, conflict
+):
+    from derived_records import DAY, T0, manual, snapshot, store
+    from fastapi import FastAPI
+    from profile_records import CASES, measurement
+
+    from app.api.dashboard import router
+    from app.services.umay import codex_health
+
+    for kind, _, field, raw_value, _ in CASES:
+        await store(sessions, kind, measurement(kind, field, "a", raw_value))
+        await store(sessions, kind, measurement(kind, field, "b", raw_value + int(conflict)))
+    application = FastAPI()
+    application.include_router(router)
+
+    async def override_session():
+        async with sessions() as session:
+            yield session
+
+    application.dependency_overrides[get_session] = override_session
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(application), base_url="http://localhost"
+    ) as client:
+        for newer_manual in (False, True):
+            if newer_manual:
+                for _, metric, _, _, value in CASES:
+                    await manual(sessions, value - 1, at=T0 + timedelta(hours=1), metric=metric)
+            async with sessions() as session:
+                before = await snapshot(session)
+            response = await client.get("/api/dashboard", params={"end_date": str(DAY), "days": 1})
+            assert response.status_code == 200, response.text
+            daily = await codex_health.read_health(
+                sessions, {"action": "daily", "start_date": str(DAY), "end_date": str(DAY)}
+            )
+            profile = response.json()["profile"]
+            for output in (profile, daily["profile"]):
+                for item in output.values():
+                    item["measured_at"] = datetime.fromisoformat(item["measured_at"])
+            assert profile == daily["profile"]
+            for _, metric, _, _, value in CASES:
+                assert profile[metric] == {
+                    "metric": metric,
+                    "value": value - 1 if newer_manual else None if conflict else value,
+                    "measured_at": T0 + timedelta(hours=int(newer_manual)),
+                    "source": "Manuel" if newer_manual else "Google",
+                    **(
+                        {"uncertainties": ["conflicting_values"]}
+                        if conflict and not newer_manual
+                        else {}
+                    ),
+                }
+            async with sessions() as session:
+                assert await snapshot(session) == before
+
+
 def instant(value):
     return datetime.fromisoformat(value).replace(tzinfo=UTC)
 
@@ -281,7 +338,7 @@ async def test_weight_corrections_select_current_valid_profile(
         (0, 0),
         ("72500", 72.5),
         ("1e311", 1e308),
-        ("-1e311", -1e308),
+        ("-1e311", None),
         ("1e400", None),
         ("1e-400", None),
         ("1e2000000000", None),

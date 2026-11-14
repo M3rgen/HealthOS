@@ -175,3 +175,126 @@ async def test_exclusions_follow_the_current_interval_of_a_moved_correction(api,
         [kind] = response.json()["types"]
         assert kind["exclusions"]["quarantined"] == count, day
         assert kind["days"][0]["has_value"] is False
+
+
+@pytest.mark.parametrize("initial", [False, True])
+@pytest.mark.parametrize("field", ["count", "countSum", "steps", "count+alias", "countSum+alias"])
+@pytest.mark.parametrize("value", [-1, "-1", "-1e-1000"])
+async def test_negative_arrival_correction_and_recovery(api, sessions, initial, field, value):
+    negative = steps(count=value)
+    selected = field.split("+")[0]
+    negative["steps"][selected] = negative["steps"].pop("count")
+    if "+alias" in field:
+        negative["steps"]["steps"] = 900
+    original = steps(count=120) if initial else negative
+    sound = steps("phone", count=30, start=T0 + timedelta(days=2), source=PHONE)
+    records = [original, sound]
+    await Runner(sessions, "sync", "steps", T0, T0 + timedelta(days=3)).run(
+        Client(Page(records, None))
+    )
+    if initial:
+        await outputs(api, sessions, [120, None, 30])
+        stats = await store(sessions, "steps", negative)
+        assert stats.normalization_skipped == stats.updated == stats.versions_kept == 1
+    await outputs(api, sessions, [None, None, 30])
+    async with sessions() as session:
+        raw = await session.scalar(
+            select(RawHealthData).where(RawHealthData.google_data_point_id == original["name"])
+        )
+        retained = await session.scalar(
+            select(Steps).where(Steps.google_data_point_id == original["name"])
+        )
+        assert raw.raw_json == negative
+        assert (retained.count if retained else None) == (120 if initial else None)
+    for zero in (0, -0.0, "-0", "-0e-1000"):
+        recovery = steps(count=zero)
+        recovery["steps"][selected] = recovery["steps"].pop("count")
+        assert (await store(sessions, "steps", recovery)).normalization_skipped == 0
+        await outputs(api, sessions, [0, None, 30])
+    await store(sessions, "steps", steps(count=45))
+    await outputs(api, sessions, [45, None, 30])
+    async with sessions() as session:
+        versions = list(await session.scalars(select(RawHealthDataVersion).order_by("version")))
+        assert [row.raw_json for row in versions[: 1 + initial]] == (
+            [original, negative] if initial else [negative]
+        )
+
+
+@pytest.mark.parametrize(
+    "loss,counts",
+    [
+        (loss, None)
+        for loss in ("startTime", "endTime", "interval", "invalid-end", "equal", "reverse")
+    ]
+    + [
+        ("count", counts)
+        for counts in (
+            {},
+            {"count": None},
+            {"count": "invalid"},
+            {"count": True},
+            {"count": False},
+            {"count": "NaN"},
+            {"count": "sNaN"},
+            {"count": "Infinity"},
+            {"count": "-Infinity"},
+            {"count": "1e999999"},
+            {"count": "-1e1000"},
+            {"count": -1, "countSum": 900},
+            {"countSum": "-1e-999999", "steps": 900},
+            {"steps": "-1e-1000"},
+        )
+    ],
+)
+@pytest.mark.parametrize("sound", [False, True])
+async def test_invalid_old_measurement_cannot_expand_history(api, sessions, loss, counts, sound):
+    old = T0 - timedelta(days=65)
+    original = steps(start=old)
+    await store(sessions, "steps", original, *([steps("sound", start=T0)] if sound else []))
+
+    async def history(earliest, latest, pages):
+        async with sessions() as session:
+            before = await snapshot(session)
+        response = await api.get("/api/dashboard/history", params={"metric": "steps"})
+        assert response.status_code == 200, response.text
+        data = response.json()
+        assert (data["earliest_date"], data["latest_date"], data["total_pages"]) == (
+            earliest,
+            latest,
+            pages,
+        )
+        async with sessions() as session:
+            assert await snapshot(session) == before
+        if pages == 1:
+            response = await api.get(
+                "/api/dashboard/history", params={"metric": "steps", "page": 3}
+            )
+            assert response.status_code == 422
+            assert response.json()["detail"] == "Bu geçmiş sayfası bulunamadı."
+
+    await history(str(old.date()), str(DAY if sound else old.date()), 3)
+    corrected = steps(start=old)
+    interval = corrected["steps"]["interval"]
+    if loss == "count":
+        corrected["steps"] = {"interval": interval, **counts}
+    elif loss == "interval":
+        corrected["steps"].pop("interval")
+    elif loss in {"startTime", "endTime"}:
+        interval.pop(loss)
+    else:
+        interval["endTime"] = (
+            "invalid"
+            if loss == "invalid-end"
+            else (old - timedelta(hours=loss == "reverse")).isoformat()
+        )
+    await store(sessions, "steps", corrected)
+    await history(str(DAY) if sound else None, str(DAY) if sound else None, 1)
+    async with sessions() as session:
+        retained = await session.scalar(select(Steps).where(Steps.start_time < T0))
+        assert retained.start_time.date() == old.date() and retained.count == 120
+        assert list(await session.scalars(select(RawHealthDataVersion.raw_json))) == [original]
+    recovery = T0 - timedelta(days=35)
+    await store(sessions, "steps", steps(start=recovery, count=0))
+    await history(str(recovery.date()), str(DAY if sound else recovery.date()), 2)
+    page = (await api.get("/api/dashboard/history", params={"metric": "steps", "page": 2})).json()
+    assert next(row["value"] for row in page["days"] if row["date"] == str(recovery.date())) == 0

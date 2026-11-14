@@ -28,6 +28,7 @@ if TYPE_CHECKING:
         interpretation_types,
         sleep_estimate,
         sleep_timeline,
+        step_totals,
     )
 
 __all__ = [
@@ -53,6 +54,7 @@ __all__ = [
     "interpretation_types",
     "sleep_estimate",
     "sleep_timeline",
+    "step_totals",
 ]
 
 

@@ -60,8 +60,8 @@ def completed_activity_versions(identity: ColumnElement[str]):
     return select(ranked.c.identity, ranked.c.raw_id).where(ranked.c.position == 1).subquery()
 
 
-def activity_result_current(table: Table):
-    """Keep v1/v2 fallback until a completed conversion result exists for this source."""
+def activity_result_id(table: Table):
+    """Latest completed result for this exact identity, including legacy aliases."""
     states = GarminActivityResult.__table__
     raw = GarminRawRecord.__table__
     identifier = activity_identifier_sql(raw.c.body)
@@ -79,7 +79,7 @@ def activity_result_current(table: Table):
         ),
         table.c.source_record_id == "activities:" + identifier,
     )
-    latest = (
+    return (
         select(func.max(states.c.id))
         .select_from(states.join(raw, raw.c.id == states.c.raw_record_id))
         .where(
@@ -101,6 +101,12 @@ def activity_result_current(table: Table):
         .correlate(table)
         .scalar_subquery()
     )
+
+
+def activity_result_current(table: Table):
+    """Keep v1/v2 fallback until a completed conversion result exists for this source."""
+    states = GarminActivityResult.__table__
+    latest = activity_result_id(table)
     return or_(
         table.c.provider != GARMIN,
         latest.is_(None),

@@ -37,16 +37,33 @@ class DailyValue:
 
 @dataclass(frozen=True)
 class DailyRead:
+    """One source's daily observations and optional end-date step measurements.
+
+    ``step_hours`` belongs only to this read's steps observation on the requested
+    end date. ``None`` means the source has no hourly measurements; an empty
+    bucket is ``None`` and a measured zero stays zero.
+    """
+
     days: dict[date, dict[str, DailyValue]]
     step_hours: list[float | None] | None = None
 
 
 @dataclass(frozen=True)
 class HeartRead:
+    """An archive's samples, potentially from several source platforms.
+
+    Sample source tags name platforms, rather than readers. ``summary_source`` is
+    the legacy single-source label; projections resolving multiple platforms derive
+    their source and alternatives from the sample tags instead.
+
+    ``resolve_minutes`` requests minute selection even for a sole source (for example
+    to report workout windows); competing sample sources always require selection.
+    """
+
     samples: list[tuple[datetime, float, str]]
     summary_source: str | None
-    # Some archives provide workout windows for minute-level precedence. Without those
-    # observations a sole stream keeps its historical hourly aggregation and metadata.
+    # Without competing sources or a request for minute selection, retain historical
+    # hourly aggregation and metadata for a sole stream.
     resolve_minutes: bool = False
     activity_windows: list[tuple[datetime, datetime]] = field(
         default_factory=list[tuple[datetime, datetime]]
@@ -78,7 +95,9 @@ class DailyReader(Protocol):
         end_date: date,
         zone: ZoneInfo,
         sources: DashboardSources,
-    ) -> DailyRead: ...
+    ) -> Sequence[DailyRead]:
+        """Return separate reads for every source platform present in the archive."""
+        ...
 
 
 type HistoryMetric = Literal["steps", "sleep", "heart"]

@@ -69,7 +69,8 @@ def _application(monkeypatch, sessions, tmp_path, **overrides):
         webhook_status=SimpleNamespace(record=AsyncMock()),
         scheduler_needed=lambda _settings: False,
         scheduler_running=False,
-        pipeline_health=SimpleNamespace(inspect=_inspect),
+        # /health opens its read session from the pipeline's session factory.
+        pipeline_health=SimpleNamespace(inspect=_inspect, sessions=sessions),
     )
     monkeypatch.setattr(main, "get_settings", lambda: settings)
     monkeypatch.setattr(main, "build_runtime", lambda *_: runtime)

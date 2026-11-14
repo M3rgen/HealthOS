@@ -2,6 +2,7 @@
 
 import uuid
 from datetime import datetime
+from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import Select, func, select
@@ -38,6 +39,28 @@ def latest_measurements(metric: str, stop: datetime) -> Select[tuple[ManualMeasu
         .where(*valid, ManualMeasurement.measured_at == latest)
         .order_by(ManualMeasurement.created_at.desc())
     )
+
+
+async def latest_measurement_value(
+    session: AsyncSession, metric: str, stop: datetime
+) -> tuple[datetime, Decimal | None] | None:
+    """Summarize every eligible row at the latest time in constant result space.
+
+    Reuse the canonical query's eligibility and newest-group selection, but replace
+    its evidence projection with SQL aggregates. Empty groups have no timestamp;
+    unequal stored Numeric extrema signal a conflict before any float conversion.
+    The value column is non-nullable, so a missing value denotes only a conflict.
+    No row limit or entry-time tiebreaker may hide a different value in the group.
+    """
+    statement = latest_measurements(metric, stop).with_only_columns(
+        func.max(ManualMeasurement.measured_at),
+        func.min(ManualMeasurement.value),
+        func.max(ManualMeasurement.value),
+    )
+    measured_at, minimum, maximum = (await session.execute(statement.order_by(None))).one()
+    if measured_at is None:
+        return None
+    return measured_at, minimum if minimum == maximum else None
 
 
 async def create_measurement(session: AsyncSession, values: dict[str, Any]) -> Measurement:

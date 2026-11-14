@@ -106,12 +106,14 @@ async def _heart_chart(
     policy: Policy,
     archives: Sequence[ArchiveReaders],
 ) -> tuple[list[float | None], dict[str, Any]]:
-    """The day's hourly heart-rate means, one source per minute: inside a selected workout
-    window the activity policy picks (Garmin first), outside it the health policy (Fitbit
-    first); a source's samples are never averaged with another's. A source code read from a
-    later archive fills only the minutes an earlier archive left empty for that code (Apple's
-    HEALTH_KIT samples, which Google also relays, are not counted twice). Returns the 24 means
-    and the sources card (``source``, ``label``, ``alternatives``, ``activity_windows``)."""
+    """The day's hourly means of original samples selected per minute slice: inside a
+    selected workout window the activity policy picks (Garmin first), outside it the
+    health policy (Fitbit first). Exact window boundaries split minutes before selection;
+    hourly means use all surviving samples without first averaging sources or slices.
+    A source code read from a later archive fills only the minutes an earlier archive left
+    empty for that code (Apple's HEALTH_KIT samples, which Google also relays, are not
+    counted twice). Returns the 24 means and the sources card (``source``, ``label``,
+    ``alternatives``, ``activity_windows`` and ``minutes_by_source``)."""
     start = datetime.combine(day, time.min, zone).astimezone(UTC)
     stop = datetime.combine(day + timedelta(days=1), time.min, zone).astimezone(UTC)
     reads = []
@@ -120,17 +122,8 @@ async def _heart_chart(
             result = await archive.heart_rate(session, start, stop, source_filter)
             if result.samples:
                 reads.append(result)
-    if not reads or (len(reads) == 1 and not reads[0].resolve_minutes):
-        samples = reads[0].samples if reads else []
-        hours = hourly_means([(moment, bpm) for moment, bpm, _ in samples], zone)
-        source = reads[0].summary_source if reads else None
-        return hours, {
-            "source": source,
-            "label": _label(source),
-            "alternatives": [],
-            "activity_windows": None,
-        }
-    windows = [window for read in reads for window in read.activity_windows]
+    # Archive count is not source count: a single reader may carry several platforms.
+    # Build the source series before taking the historical single-source shortcut.
     series: dict[str, list[tuple[datetime, float]]] = {}
     for read in reads:
         earlier = {
@@ -142,6 +135,17 @@ async def _heart_chart(
                 series.setdefault(source, []).append((moment, bpm))
         for source in earlier.keys() & {source for _, _, source in read.samples}:
             series[source].sort()
+    if not reads or (len(reads) == 1 and len(series) == 1 and not reads[0].resolve_minutes):
+        samples = reads[0].samples if reads else []
+        hours = hourly_means([(moment, bpm) for moment, bpm, _ in samples], zone)
+        source = reads[0].summary_source if reads else None
+        return hours, {
+            "source": source,
+            "label": _label(source),
+            "alternatives": [],
+            "activity_windows": None,
+        }
+    windows = [window for read in reads for window in read.activity_windows]
     kept, chosen = resolve_samples(series, windows, policy)
     hours = hourly_means([(moment, bpm) for moment, bpm, _ in kept], zone)
     ranked = sorted(series, key=lambda code: (policy.rank(code, "health"), code))

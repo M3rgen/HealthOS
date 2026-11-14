@@ -1,9 +1,19 @@
 """Binary format boundaries and FIT units use only independently written synthetic bytes."""
 
 import struct
+from datetime import timedelta
 
 import pytest
-from fit_factory import STAMP, START, activity, activity_messages, checksum, definition, fit_file
+from fit_factory import (
+    STAMP,
+    START,
+    activity,
+    activity_messages,
+    checksum,
+    definition,
+    fit_file,
+    timestamp_message,
+)
 
 from app.core.fit import FIT_EXERCISE, FIT_HEART_RATE
 from app.services.providers import fit_decode, fit_records
@@ -47,6 +57,21 @@ def test_compressed_timestamp_rollover_and_definition_replacement():
     }
 
 
+@pytest.mark.parametrize("endian", ["<", ">"])
+@pytest.mark.parametrize("delta, advance", [(1, 1), (31, 1), (31, 0)])
+def test_unknown_timestamps_advance_shared_base_and_sentinel_preserves_it(endian, delta, advance):
+    data = activity_messages(endian=endian) + timestamp_message(STAMP + delta, endian=endian)
+    data += bytes([0xC0 | ((STAMP + delta + advance) & 31), 130])
+    # A compressed unknown message also advances the base, across the next 5-bit cycle.
+    data += bytes([0xE0 | ((STAMP + delta + advance + 31) & 31)])
+    data += b"\x03" + struct.pack(endian + "I", 0xFFFFFFFF)
+    data += bytes([0xC0 | ((STAMP + delta + advance + 32) & 31), 131])
+    points = parse_fit(fit_file(data)).records[FIT_HEART_RATE][-2:]
+    assert [point[FIT_HEART_RATE.json_key]["sampleTime"]["physicalTime"] for point in points] == [
+        (START + timedelta(seconds=delta + advance + extra)).isoformat() for extra in (0, 32)
+    ]
+
+
 def test_unknown_messages_native_arrays_and_developer_fields_stay_aligned():
     data = activity_messages(developer=True)
     # Local 15 unknown message and native fields of unknown base types/array sizes.
@@ -74,6 +99,9 @@ SCALARS = [
     (18, (253, 4, 0x86), 0xFFFFFFFF),
     (20, (3, 1, 0x02), 0xFF),
     (20, (253, 4, 0x86), 0xFFFFFFFF),
+    (0, (253, 4, 0x86), 0xFFFFFFFF),  # shared timestamp outside the file_id projection
+    (999, (253, 4, 0x86), 0xFFFFFFFF),
+    (65535, (253, 4, 0x86), 0xFFFFFFFF),
 ]
 
 
@@ -136,6 +164,8 @@ def test_unknown_fields_do_not_inherit_projection_contracts_and_stay_aligned():
         definition(0, 999, [], developer=[(0, 0, 0)]),
         definition(0, 999, [(0, 4, 0x86)]) + b"\x00\x01",  # truncated ignored field
         definition(0, 20, [(3, 1, 2)]) + b"\x80\x64",  # compressed without timestamp field
+        definition(3, 999, [(253, 1, 2)]),
+        definition(3, 999, [(253, 1, 2)]) + b"\x03\x01\xc2\x82",  # time-base corruption
     ],
 )
 def test_malformed_message_definitions_and_truncated_fields(tail):
@@ -143,8 +173,9 @@ def test_malformed_message_definitions_and_truncated_fields(tail):
         parse_fit(fit_file(activity_messages() + tail))
 
 
-def test_compressed_timestamp_requires_a_previous_full_timestamp():
-    data = definition(0, 20, [(253, 4, 0x86), (3, 1, 2)]) + b"\x80\x64"
+@pytest.mark.parametrize("prefix", [b"", timestamp_message(0xFFFFFFFF)])
+def test_compressed_timestamp_requires_a_previous_full_timestamp(prefix):
+    data = prefix + definition(0, 20, [(253, 4, 0x86), (3, 1, 2)]) + b"\x80\x64"
     with pytest.raises(FitError, match="zaman damgası"):
         parse_fit(fit_file(data))
 

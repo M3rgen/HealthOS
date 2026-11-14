@@ -18,6 +18,8 @@ if TYPE_CHECKING:
         dashboard_rows,
         dashboard_sources,
         dashboard_window,
+        heart_maintenance,
+        heart_projection,
         manual_validation,
         measurement_windows,
         reading,
@@ -29,6 +31,7 @@ if TYPE_CHECKING:
     from .dashboard_window import DashboardWindow as DashboardWindow
     from .dashboard_window import checked_dates as checked_dates
     from .dashboard_window import daily_window as daily_window
+    from .heart_maintenance import refresh_heart_hours as refresh_heart_hours
     from .reading import ArchiveReaders as ArchiveReaders
     from .reading import Archives as Archives
     from .reading import DailyRead as DailyRead
@@ -36,6 +39,8 @@ if TYPE_CHECKING:
 
 __all__ = [
     "current_heart",
+    "heart_projection",
+    "heart_maintenance",
     "current_sleep",
     "current_steps",
     "current_weight",
@@ -52,6 +57,7 @@ __all__ = [
 # Names at least three modules outside this package import, mapped to their module. Names with
 # fewer importers are imported from their module: each name here is an explicit re-export.
 _CONTRACT = {
+    "refresh_heart_hours": "heart_maintenance",
     "ArchiveReaders": "reading",
     "Archives": "reading",
     "CalendarRead": "dashboard_queries",

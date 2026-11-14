@@ -1,16 +1,19 @@
 """Duration-aware intraday cells and existing, evidence-only sleep sessions."""
 
-from collections import defaultdict
+from bisect import bisect_left, bisect_right
+from collections import OrderedDict, defaultdict
+from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from fractions import Fraction
 from itertools import pairwise
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from app.core.normalization import first_number
 from app.core.records import RecordType
 from app.core.timeutil import as_utc
 from app.models.state import RawHealthData
-from app.parsers.common import payload_for
+from app.parsers.common import number, payload_for
 from app.services.shared.finite_math import finite_calculation, finite_scale
 
 from .archive_query import ArchiveQuery
@@ -27,6 +30,16 @@ from .interpretation_stats import statistics, statistics_reasons
 from .interpretation_types import Intraday, SleepSummary
 
 MAX_HEART_GAP_SECONDS = 300
+
+
+@dataclass
+class _Candidate:
+    raw: RawHealthData
+    start: datetime
+    end: datetime | None
+    value: float | None
+    field: str
+    codes: list[str]
 
 
 def sleep_summaries(derived: dict[str, Any], first: date, last: date) -> list[SleepSummary]:
@@ -95,13 +108,64 @@ def _intraday_plans(inputs: Inputs, query: ArchiveQuery, budget: IntradayBudget)
         key = (kind, source, method)
         groups[key].append(raw)
     plans = []
+    windows = [
+        bounds(first + timedelta(days=offset), query.timezone)
+        for offset in range((last - first).days + 1)
+    ]
+    starts, stops = zip(*windows, strict=True)
     for (kind, source, method), rows in sorted(groups.items()):
-        for offset in range((last - first).days + 1):
+        for offset, candidates in _candidate_days(kind, rows, starts, stops):
             day = first + timedelta(days=offset)
-            left, stop, plan, reasons = _day_plan(kind, rows, day, query.timezone, budget)
-            if plan.observations:
-                plans.append((kind, source, method, rows[0], day, left, stop, plan, reasons))
+            left, stop, plan, reasons = _day_plan(kind, candidates, day, query.timezone, budget)
+            plans.append((kind, source, method, rows[0], day, left, stop, plan, reasons))
     return plans
+
+
+def _candidate_days(
+    kind: str, rows: list[RawHealthData], starts: tuple[datetime, ...], stops: tuple[datetime, ...]
+):
+    # Index each selected record once. Two events per record keep memory bounded
+    # even for long intervals; evidence amplification is charged by _day_plan.
+    events: dict[int, list[tuple[int, _Candidate | None]]] = defaultdict(list)
+    margin = timedelta(seconds=MAX_HEART_GAP_SECONDS)
+    for order, raw in enumerate(rows):
+        a, b = as_utc(raw.source_start_time), as_utc(raw.source_end_time)
+        if a is None:
+            continue
+        if kind == "heart-rate":
+            # left - 300 <= sample < stop + 300 (inclusive on the left only).
+            # Reject distant read-window neighbors before shifting a timestamp
+            # that could be at datetime.min. Query bounds already allow this margin.
+            if not starts[0] - margin <= a < stops[-1] + margin:
+                continue
+            first = bisect_right(stops, a - margin)
+            stop = bisect_right(starts, a + margin)
+        elif b is not None and b > a:
+            first, stop = bisect_right(stops, a), bisect_left(starts, b)
+        else:
+            continue
+        if first >= stop:
+            continue
+        value, field, codes = _intraday_measurement(
+            kind, payload_for(RecordType(kind), raw.raw_json)
+        )
+        events[first].append((order, _Candidate(raw, a, b, value, field, codes)))
+        events[stop].append((order, None))
+
+    active: OrderedDict[int, _Candidate] = OrderedDict()
+    for first, stop in pairwise(sorted(events)):
+        for order, candidate in events[first]:
+            if candidate is None:
+                del active[order]
+            else:
+                active[order] = candidate
+        if not active:
+            continue
+        # Restore input order for evidence, statistics and floating-point sums.
+        # Reuse it until membership changes; skip empty date ranges altogether.
+        candidates = [active[order] for order in sorted(active)]
+        for offset in range(first, stop):
+            yield offset, candidates
 
 
 def intraday_summaries(
@@ -184,47 +248,47 @@ def intraday_summaries(
     return results
 
 
-def _day_plan(
-    kind: str, rows: list[RawHealthData], day: date, timezone: str, budget: IntradayBudget
-):
+def _intraday_measurement(kind: str, payload: dict) -> tuple[float | None, str, list[str]]:
+    """Select a parsed field before checking whether it is a usable measurement.
+
+    Match the current step/heart readers: missing, text and boolean fields can
+    fall through, but a parsed NaN, infinity or float overflow cannot borrow an
+    alias. Retained normalized columns are never measurement fallbacks.
+    Keep null evidence for an invalid value; heart samples must still interrupt
+    interpolation, while step intervals must not become supported movement.
+    """
+    fields = (
+        ("count", "countSum", "steps") if kind == "steps" else ("beatsPerMinute", "bpm", "value")
+    )
+    parsed = first_number(payload, fields, parse=number)
+    # Counts and heart rates must be nonnegative. Check the selected Decimal before
+    # float conversion so tiny negatives cannot become measured signed zero.
+    # Keep null evidence and its timestamp to interrupt heart interpolation on both
+    # sides; a positive alias must not hide this invalid sample.
+    if parsed is not None and parsed.is_finite() and parsed < 0:
+        parsed = None
+    value = finite(parsed)
+    codes = ["unsupported_or_missing_value"] if value is None else []
+    # Preserve the canonical evidence field, including when an alias supplies zero.
+    return value, fields[0], codes
+
+
+def _day_plan(kind: str, rows: list[_Candidate], day: date, timezone: str, budget: IntradayBudget):
     left, stop = bounds(day, timezone)
     plan, samples = CellPlan(left, stop, budget), []
     reasons = ["coverage_is_not_retrieval_completeness"]
-    for raw in rows:
-        a, b = as_utc(raw.source_start_time), as_utc(raw.source_end_time)
-        if a is None:
-            continue
-        payload = payload_for(RecordType(kind), raw.raw_json)
-        fields = (
-            ("count", "countSum", "steps")
-            if kind == "steps"
-            else ("beatsPerMinute", "bpm", "value")
-        )
-        value = next(
-            (finite(payload[field]) for field in fields if finite(payload.get(field)) is not None),
-            None,
-        )
+    for candidate in rows:
+        raw, a, b = candidate.raw, candidate.start, candidate.end
+        value, field, codes = candidate.value, candidate.field, list(candidate.codes)
         if kind == "heart-rate":
-            if (
-                left - timedelta(seconds=MAX_HEART_GAP_SECONDS)
-                <= a
-                < stop + timedelta(seconds=MAX_HEART_GAP_SECONDS)
-            ):
-                plan.observe(
-                    raw,
-                    a.astimezone(ZoneInfo(timezone)).date(),
-                    value,
-                    "beatsPerMinute",
-                    ["unsupported_or_missing_value"] if value is None else [],
-                )
-                samples.append((a, value))
-        elif b is not None and b > a and a < stop and b > left:
+            plan.observe(raw, a.astimezone(ZoneInfo(timezone)).date(), value, field, codes)
+            samples.append((a, value))
+        elif b is not None:
             rate = finite_scale(value, 1, (b - a).total_seconds()) if value is not None else None
-            codes = ["unsupported_or_missing_value"] if value is None else []
             if value is not None and rate is None:
                 codes.append("numeric_overflow:interval_rate")
             reasons.extend(codes)
-            plan.observe(raw, day, value, fields[0], codes)
+            plan.observe(raw, day, value, field, codes)
             plan.add_span(max(a, left), min(b, stop), rate)
     if kind == "heart-rate":
         _interpolate_samples(samples, left, stop, plan, reasons)

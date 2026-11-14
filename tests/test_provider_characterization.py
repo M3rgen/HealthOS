@@ -27,73 +27,74 @@ from app.services.identities.source_precedence import Policy
 from app.services.providers.garmin_normalize import normalize_window
 from app.services.readers.dashboard_queries import DashboardQuery
 
+# Platform candidates and selected hourly evidence intentionally change these digests.
 EXPECTED = {
-    ("UTC", False, "live"): "4a86c344c27afa223ebb4f491adbe6e8a3b3ddddfa4012820a16f67d4052fb72",
+    ("UTC", False, "live"): "d61e0fd1a3a9b342ea1ff7a0d16e70100528e57e267c8cfea05e1af37ad4f985",
     (
         "Europe/Paris",
         False,
         "live",
-    ): "b2c5641816dd226f4dd56fd3d7f273fd851b881d02bb0640ee033340f8e8b436",
+    ): "d25ac5f34b1b352e2e61e2c22d22de18b5d7d8e38b54e5516bed8542e6affaae",
     (
         "America/New_York",
         False,
         "live",
-    ): "13848dcde9bdb97db8139c46149a856ecf6d0cd8f0807a1c3d24a15f87de522e",
-    ("UTC", True, "live"): "7e9b3c0c5cf25ec9d5f34ba63be46d25ba5a386cd584e051ff40bcfefa3e0aea",
+    ): "56e85c43a3369e26c9fb8dbec2dc4ad0b3f8592bc9c6122e07f26163ca23d3b0",
+    ("UTC", True, "live"): "d3dac45e6bd1ac0bbcff58e9c226d488cf569bcce37466d5b45b04b16313bedc",
     (
         "Europe/Paris",
         True,
         "live",
-    ): "242240373ca4b3c30da67d5481a6d2871acbceacbf9dde7e6633644af265e15a",
+    ): "7c55a60142f0cb37b4e30be8fb40c9b992b439c82fcc057a333c288399784958",
     (
         "America/New_York",
         True,
         "live",
-    ): "da41ebe21187126168c04673bd741da5b8d9e096e352bbf6fae6d7d83996ee82",
-    ("UTC", False, "deleted"): "47bc65938056ab7b9652dd35674697924d0ab823f8be14c7a97ad6653c925967",
+    ): "940cdcc07d10241f6ff2c0565f1da298f7595cb04ec2997c68c720a99c4189a2",
+    ("UTC", False, "deleted"): "b9c45e8ea05c78b3f78a7192c7fc018ecd69e0ee7e5e2fb1edfd369d85555f9c",
     (
         "Europe/Paris",
         False,
         "deleted",
-    ): "c9cd88bc1ca576ece4edbecfa151968c908f14b84d20fd7fc50075bac7c0a19b",
+    ): "52cbec2446f69057c4b9cda3211cc30ff9bc273a943f41bac75dbca23582de09",
     (
         "America/New_York",
         False,
         "deleted",
-    ): "fe973665005e3df672b98d8b9c8768af84e1cce97ff6c72e546f96a52b15b914",
-    ("UTC", True, "deleted"): "75ece28ea0f2682bd9b5552600ffa12bc78c282e6cc985a935c8ccc523140c14",
+    ): "98612b65cf4bad971a836144c757115bec65f144997ebdb8817171cc532cacdc",
+    ("UTC", True, "deleted"): "141bb62ba76faa684ab0f4a594b1514b1ea879d8a2ae4741a21eb8cd4f198099",
     (
         "Europe/Paris",
         True,
         "deleted",
-    ): "514a21186aa3fc6b93c15f02401a709764cfd0e573116448a5fbca421b6c2098",
+    ): "d000b1b360b06e19c78764e58497f17f36efc4406bba76893648a57b27d7e787",
     (
         "America/New_York",
         True,
         "deleted",
-    ): "56b2a16a27735d66cf3e33d72c9752f39acf3ce667dff7d50fc4d8eb1331c211",
-    ("UTC", False, "valid"): "4a86c344c27afa223ebb4f491adbe6e8a3b3ddddfa4012820a16f67d4052fb72",
+    ): "e5eb714016bf1d05f594fc8b40262a82de73a8dad9a3123a1c8331c56e283326",
+    ("UTC", False, "valid"): "d61e0fd1a3a9b342ea1ff7a0d16e70100528e57e267c8cfea05e1af37ad4f985",
     (
         "Europe/Paris",
         False,
         "valid",
-    ): "b2c5641816dd226f4dd56fd3d7f273fd851b881d02bb0640ee033340f8e8b436",
+    ): "d25ac5f34b1b352e2e61e2c22d22de18b5d7d8e38b54e5516bed8542e6affaae",
     (
         "America/New_York",
         False,
         "valid",
-    ): "13848dcde9bdb97db8139c46149a856ecf6d0cd8f0807a1c3d24a15f87de522e",
-    ("UTC", True, "valid"): "7e9b3c0c5cf25ec9d5f34ba63be46d25ba5a386cd584e051ff40bcfefa3e0aea",
+    ): "56e85c43a3369e26c9fb8dbec2dc4ad0b3f8592bc9c6122e07f26163ca23d3b0",
+    ("UTC", True, "valid"): "d3dac45e6bd1ac0bbcff58e9c226d488cf569bcce37466d5b45b04b16313bedc",
     (
         "Europe/Paris",
         True,
         "valid",
-    ): "242240373ca4b3c30da67d5481a6d2871acbceacbf9dde7e6633644af265e15a",
+    ): "7c55a60142f0cb37b4e30be8fb40c9b992b439c82fcc057a333c288399784958",
     (
         "America/New_York",
         True,
         "valid",
-    ): "da41ebe21187126168c04673bd741da5b8d9e096e352bbf6fae6d7d83996ee82",
+    ): "940cdcc07d10241f6ff2c0565f1da298f7595cb04ec2997c68c720a99c4189a2",
 }
 
 

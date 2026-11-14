@@ -115,3 +115,12 @@ def activity_messages(
 
 def activity(**kwargs):
     return fit_file(activity_messages(**kwargs))
+
+
+def timestamp_message(timestamp, *, endian="<"):
+    """An unprojected global message that still updates the shared time base."""
+    return (
+        definition(3, 999, [(253, 4, 0x86)], endian=endian)
+        + b"\x03"
+        + struct.pack(endian + "I", timestamp)
+    )

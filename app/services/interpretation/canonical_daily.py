@@ -5,7 +5,7 @@ from datetime import date, datetime
 from itertools import pairwise
 from typing import Any, cast
 
-from sqlalchemy import select
+from sqlalchemy import Row, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
@@ -13,8 +13,10 @@ from app.core.records import RecordType
 from app.core.timeutil import as_utc
 from app.models.eligibility import raw_counted
 from app.models.health import SleepSession, Steps
+from app.models.manual import ManualMeasurement
 from app.models.state import RawHealthData
-from app.parsers.common import parse_date, payload_for, payload_hash
+from app.parsers.common import number, parse_date, payload_for, payload_hash
+from app.parsers.google_daily import DAILY_SPO2_FIELDS, daily_spo2
 from app.services.readers.dashboard_manual import latest_measurements
 from app.services.readers.measurement_windows import (
     interval_window,
@@ -23,14 +25,22 @@ from app.services.readers.measurement_windows import (
 )
 from app.services.shared.finite_math import finite_number, finite_scale, finite_sum
 
-from .canonical_sleep import sleep_evidence
+from .canonical_sleep import SleepEvidenceAccumulator
 from .canonical_types import CanonicalDay
 from .health_windows import bounds as bounds
 from .interpretation_data import Group, Groups
+from .sleep_estimate import sleep_estimate
 
-# Interpret date components losslessly. Older cached days stay under their original
-# method; rebuilding must revalidate the raw date without rewriting archived evidence.
-METHOD = "source-daily/6"
+# Reject negative daily heart/HRV/oxygen summaries on their source Decimal, and let
+# no alias rescue a rejected (negative or nonfinite) field of the same definition.
+# Older cached days stay under their original method; rebuilding revalidates the
+# raw payload without rewriting archived evidence or previous method results.
+METHOD = "source-daily/12"
+
+# Bound decoded raw documents, not the complete observation/timeline output.
+_RAW_BATCH = 100
+# Bound input rows independently of the required complete manual evidence output.
+_MANUAL_BATCH = 1000
 DAILY_FIELDS = {
     "daily-resting-heart-rate": ("resting_bpm", "bpm", {"beatsPerMinute": "daily_resting"}),
     "daily-heart-rate-variability": (
@@ -46,16 +56,12 @@ DAILY_FIELDS = {
     "daily-oxygen-saturation": (
         "spo2",
         "%",
-        {
-            "averagePercentage": "daily_average",
-            "average": "daily_average",
-            "percentage": "daily_percentage",
-        },
+        dict.fromkeys(DAILY_SPO2_FIELDS, "daily_average"),
     ),
 }
 
 
-def _base(raw: RawHealthData, metric: str, unit: str, definition: str, basis: str) -> Group:
+def _base(raw: Row[Any], metric: str, unit: str, definition: str, basis: str) -> Group:
     source = raw.raw_json.get("dataSource")
     known = isinstance(source, dict) and bool(source)
     # An absent source is not evidence that unrelated records share a stream.
@@ -76,7 +82,7 @@ def _base(raw: RawHealthData, metric: str, unit: str, definition: str, basis: st
     }
 
 
-def _observation(raw: RawHealthData, value: float | None, **extra: Any) -> dict[str, Any]:
+def _observation(raw: Row[Any], value: float | None, **extra: Any) -> dict[str, Any]:
     return {
         "record": raw.google_data_point_id,
         "value": value,
@@ -93,37 +99,78 @@ def finite(value: object) -> float | None:
     return finite_number(value)
 
 
+def _summary_value(payload: dict, field: str) -> tuple[float | None, list[str], bool]:
+    """Validate each definition independently, preserving rejected field evidence.
+
+    SQL rounding and float underflow must not turn a tiny negative into zero.
+    The flag marks a rejected number: negative, NaN, infinite or beyond float
+    range. The caller then skips the definition's later aliases in that record,
+    as the dashboard and coverage readers select the first numeric field before
+    validating it (maintainer, 2026-11-13). A non-numeric field selects nothing.
+    """
+    supplied = number(payload.get(field))
+    if supplied is not None and supplied.is_finite() and supplied < 0:
+        return None, [f"negative_measurement:{field}"], True
+    value = finite(supplied)
+    return value, [], supplied is not None and value is None
+
+
 async def _summaries(session: AsyncSession, day: date, groups: Groups):
     first, stop = bounds(day, "UTC")  # payload date is a civil date, not a UTC instant
-    rows = await session.scalars(
-        select(RawHealthData).where(
+    rows = await session.stream(
+        select(
+            RawHealthData.data_type,
+            RawHealthData.google_data_point_id,
+            RawHealthData.raw_json,
+            RawHealthData.source_start_time,
+            RawHealthData.source_end_time,
+            RawHealthData.source_timezone,
+        ).where(
             RawHealthData.data_type.in_(DAILY_FIELDS),
             RawHealthData.source_start_time >= first,
             RawHealthData.source_start_time < stop,
             raw_counted(data_types=tuple(DAILY_FIELDS)),
-        )
+        ),
+        execution_options={"yield_per": _RAW_BATCH},
     )
-    for raw in rows:
-        payload = payload_for(RecordType(raw.data_type), raw.raw_json)
-        if parse_date(payload.get("date")) != day:
-            continue
-        metric, unit, fields = DAILY_FIELDS[raw.data_type]
-        for field, definition in fields.items():
-            value = finite(payload.get(field))
-            # Keep an explicitly missing definition visible without inventing a zero.
-            if field not in payload:
+    try:
+        async for raw in rows:
+            payload = payload_for(RecordType(raw.data_type), raw.raw_json)
+            if parse_date(payload.get("date")) != day:
                 continue
-            base = _base(raw, metric, unit, definition, "civil_day_summary")
-            metadata = payload.get("dailyRestingHeartRateMetadata")
-            if metadata:
-                base["measurement_metadata"] = metadata
-                # Distinct calculation methods must not be silently made equivalent.
-                base["definition"] += ":" + payload_hash(metadata)
-            key = (metric, base["source"], base["definition"])
-            group = groups.setdefault(key, base)
-            group["observations"].append(
-                _observation(raw, value, source_day=day.isoformat(), field=field)
-            )
+            metric, unit, fields = DAILY_FIELDS[raw.data_type]
+            if metric == "spo2":
+                field, _ = daily_spo2(payload)
+                # One definition and one selected alias per daily oxygen record.
+                fields = {field: fields[field]} if field is not None else {}
+            rejected = set()
+            for field, definition in fields.items():
+                # Keep an explicitly missing definition visible without inventing a zero.
+                if field not in payload or definition in rejected:
+                    continue
+                value, reasons, invalid = _summary_value(payload, field)
+                if invalid:
+                    rejected.add(definition)
+                base = _base(raw, metric, unit, definition, "civil_day_summary")
+                metadata = payload.get("dailyRestingHeartRateMetadata")
+                if metadata:
+                    base["measurement_metadata"] = metadata
+                    # Distinct calculation methods must not be silently made equivalent.
+                    base["definition"] += ":" + payload_hash(metadata)
+                key = (metric, base["source"], base["definition"])
+                group = groups.setdefault(key, base)
+                group["uncertainties"].extend(reasons)
+                group["observations"].append(
+                    _observation(
+                        raw,
+                        value,
+                        source_day=day.isoformat(),
+                        field=field,
+                        **({"assumptions": reasons} if reasons else {}),
+                    )
+                )
+    finally:
+        await rows.close()
     for group in groups.values():
         values = {item["value"] for item in group["observations"] if item["value"] is not None}
         if any(item["value"] is None for item in group["observations"]):
@@ -159,8 +206,14 @@ async def _interval_records(
         .where(*interval_window(kind, model.start_time, model.end_time, first, stop))
         .union(source_candidates)
     ).subquery()
-    return await session.scalars(
-        select(raw)
+    return await session.stream(
+        select(
+            raw.google_data_point_id,
+            raw.raw_json,
+            raw.source_start_time,
+            raw.source_end_time,
+            raw.source_timezone,
+        )
         .join(candidates, raw.google_data_point_id == candidates.c.google_data_point_id)
         .where(
             raw.data_type == kind,
@@ -168,12 +221,13 @@ async def _interval_records(
             # Retained normalized evidence cannot supply missing current dates.
             raw.source_start_time.is_not(None),
             raw.source_end_time.is_not(None),
-        )
+        ),
+        execution_options={"yield_per": _RAW_BATCH},
     )
 
 
 def _step_observation(
-    record: RawHealthData,
+    record: Row[Any],
     first: datetime,
     stop: datetime,
     groups: Groups,
@@ -216,11 +270,11 @@ def _step_observation(
 
 
 def _sleep_observation(
-    record: RawHealthData,
+    record: Row[Any],
     first: datetime,
     stop: datetime,
     groups: Groups,
-    spans: dict[tuple[str, str, str], list[tuple[SleepSession, dict[str, Any]]]],
+    spans: dict[tuple[str, str, str], SleepEvidenceAccumulator],
 ):
     measurement = sleep_window(record.raw_json, first, stop, identifier=record.google_data_point_id)
     if measurement is None:
@@ -230,8 +284,8 @@ def _sleep_observation(
     base = _base(record, "sleep_seconds", "s", definition, "wake_day")
     key = ("sleep_seconds", base["source"], definition)
     group = groups.setdefault(key, base)
-    spans[key].append((item, payload))
-    estimate, _ = sleep_evidence([(item, payload)])
+    spans[key].add(item, payload)
+    estimate = sleep_estimate([(item, payload)])
     group["observations"].append(
         _observation(
             record,
@@ -243,15 +297,8 @@ def _sleep_observation(
     )
 
 
-def _finish_sleep(group: Group, values: list[tuple[SleepSession, dict[str, Any]]]):
-    values.sort(
-        key=lambda pair: (
-            as_utc(pair[0].start_time),
-            as_utc(pair[0].end_time),
-            pair[0].google_data_point_id,
-        )
-    )
-    estimate, timeline = sleep_evidence(values)
+def _finish_sleep(group: Group, values: SleepEvidenceAccumulator):
+    estimate, timeline = values.result()
     group.update(value=estimate.seconds, sleep=timeline)
     group["uncertainties"].extend(estimate.assumptions)
     timed = group["sleep"].get("timeline_stage_seconds")
@@ -288,34 +335,69 @@ def _finish_steps(group: Group, values: list[tuple[datetime, datetime, float | N
 
 async def _intervals(session: AsyncSession, day: date, timezone: str, groups: Groups):
     first, stop = bounds(day, timezone)
-    for model, kind, observe, finish in (
-        (Steps, "steps", _step_observation, _finish_steps),
-        (SleepSession, "sleep", _sleep_observation, _finish_sleep),
-    ):
-        spans = defaultdict(list)
-        for record in await _interval_records(session, model, kind, first, stop):
-            observe(record, first, stop, groups, spans)
-        for key, values in spans.items():
-            finish(groups[key], values)
+    step_spans = defaultdict(list)
+    records = await _interval_records(session, Steps, "steps", first, stop)
+    try:
+        async for record in records:
+            _step_observation(record, first, stop, groups, step_spans)
+    finally:
+        await records.close()
+    for key, values in step_spans.items():
+        _finish_steps(groups[key], values)
+
+    sleep_spans = defaultdict(SleepEvidenceAccumulator)
+    records = await _interval_records(session, SleepSession, "sleep", first, stop)
+    try:
+        async for record in records:
+            _sleep_observation(record, first, stop, groups, sleep_spans)
+    finally:
+        await records.close()
+    for key, accumulator in sleep_spans.items():
+        _finish_sleep(groups[key], accumulator)
 
 
-async def _manual_profile(session: AsyncSession, stop: datetime):
-    result = []
-    for metric in ("weight", "height", "body_fat", "muscle"):
-        rows = await session.scalars(latest_measurements(metric, stop))
-        observations = sorted(
-            [
+async def _manual_observations(session: AsyncSession, metric: str, stop: datetime):
+    """Retain all latest evidence, with only a fixed batch of projected input rows.
+
+    UUID order agrees with the canonical string order. Replace entry-time ordering
+    in SQL so the output needs neither an ORM input list nor a second sorted list.
+    Eligibility and latest-time selection stay with the shared measurement query.
+    """
+    statement = (
+        latest_measurements(metric, stop)
+        .with_only_columns(
+            ManualMeasurement.id, ManualMeasurement.value, ManualMeasurement.measured_at
+        )
+        .order_by(None)
+        .order_by(ManualMeasurement.id)
+    )
+    rows = await session.stream(statement, execution_options={"yield_per": _MANUAL_BATCH})
+    observations = []
+    try:
+        async for row in rows:
+            observations.append(
                 {
                     "record": str(row.id),
                     "value": float(row.value),
                     "measured_at": as_utc(row.measured_at).isoformat(),
                 }
-                for row in rows
-            ],
-            key=lambda item: item["record"],
-        )
+            )
+    finally:
+        await rows.close()
+    return observations
+
+
+async def _manual_profile(session: AsyncSession, stop: datetime):
+    result = []
+    for metric in ("weight", "height", "body_fat", "muscle"):
+        observations = await _manual_observations(session, metric, stop)
         if observations:
-            values = {item["value"] for item in observations}
+            # Two distinct float values prove a conflict; retain no growing value set.
+            values = set()
+            for item in observations:
+                values.add(item["value"])
+                if len(values) > 1:
+                    break
             result.append(
                 {
                     "metric": metric,

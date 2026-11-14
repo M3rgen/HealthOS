@@ -8,7 +8,7 @@ by step. People installing by hand should read [docs/INSTALL.md](INSTALL.md) (En
 The user typically started you with a prompt like:
 
 > Install HealthOS on this computer by following
-> https://raw.githubusercontent.com/M3rgen/HealthOS/v0.2.2.1/docs/AI_INSTALL.md — ask me before any
+> https://raw.githubusercontent.com/M3rgen/HealthOS/v0.2.3/docs/AI_INSTALL.md — ask me before any
 > step that needs admin rights or my accounts, and never delete data.
 
 **Language.** Talk to the user in the language they wrote to you in. If they write Turkish, ask
@@ -330,16 +330,16 @@ touch it: ask the user for another `--dir`. If `~/healtos` (the old name) is a c
 clone and run the installer there.
 
 ```sh
-git clone --branch v0.2.2.1 https://github.com/M3rgen/HealthOS.git ~/healthos
+git clone --branch v0.2.3 https://github.com/M3rgen/HealthOS.git ~/healthos
 cd ~/healthos
 ```
 
 ```powershell
-git clone --branch v0.2.2.1 https://github.com/M3rgen/HealthOS.git "$env:USERPROFILE\healthos"
+git clone --branch v0.2.3 https://github.com/M3rgen/HealthOS.git "$env:USERPROFILE\healthos"
 Set-Location "$env:USERPROFILE\healthos"
 ```
 
-The clone is pinned to the release (`--branch v0.2.2.1`), the same tag the installer clones by
+The clone is pinned to the release (`--branch v0.2.3`), the same tag the installer clones by
 itself (its default `--ref` / `-Ref` is its own release tag; `main` only with `--ref main`). Running the installer from inside the
 checkout is preferred over the `curl … | bash` and `irm … | iex` one-liners because you can read
 the script first.

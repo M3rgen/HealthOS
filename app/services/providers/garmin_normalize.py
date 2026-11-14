@@ -80,8 +80,10 @@ from .garmin_normalize_types import NormalizeStats as NormalizeStats
 from .garmin_normalize_writing import unique_heart_rows, write_rows
 from .garmin_time import (
     adjacent_hearts,
+    cache_time_evidence,
     day_zones,
     heart_zone,
+    nearest_evidence,
     nearest_zone,
     zone_label,
 )
@@ -517,9 +519,12 @@ async def normalize_window(
     latest = await newest_records(
         session, kinds, start, end, seen_since=seen_since, record_ids=record_ids
     )
+    time_ids = {
+        pair: identifier for pair, identifier in record_ids.items() if pair[0] == "heart-rate"
+    }
     if any(kind != "activities" for kind, _ in record_ids):
         latest["heart-rate"] = {
-            **await adjacent_hearts(session, start, end),
+            **await adjacent_hearts(session, start, end, record_ids=time_ids),
             **latest["heart-rate"],
         }
     activity_results: dict[str, str | None] = {}
@@ -533,7 +538,28 @@ async def normalize_window(
         inserted, updated, unchanged = await write_rows(session, model, model_rows)
         stats.note(model.__tablename__, inserted, updated, unchanged)
     await write_heart_sets(session, record_ids, rows.get(HeartRate, []))
-    await write_daily_projections(session, record_ids, rows)
+    await cache_time_evidence(
+        session,
+        (
+            (identifier, key, latest["heart-rate"][key])
+            for (kind, key), identifier in time_ids.items()
+            if kind == "heart-rate"
+        ),
+    )
+    zones = day_zones(latest.get("heart-rate", {}))
+    time_keys = {
+        day: key
+        for key, body in latest.get("heart-rate", {}).items()
+        for day, _ in day_zones({key: body})
+    }
+    time_choices = {}
+    for key in {key for kind, key in record_ids if kind != "activities"}:
+        day = _day(key)
+        if day is None or str(day) != key:
+            continue
+        selected = nearest_evidence(day, zones)
+        time_choices[key] = time_ids["heart-rate", time_keys[selected[0]]] if selected else None
+    await write_daily_projections(session, record_ids, rows, time_choices=time_choices)
     await write_activity_results(session, record_ids, activity_results)
     event(
         logger,

@@ -8,7 +8,6 @@ export const widths = /** @type {const} */ ({
   w540: '33.75em',
   w567: '35.4375em',
   w568: '35.5em',
-  w700: '43.75em',
   w704: '44em',
   w760: '47.5em',
   w900: '56.25em',
@@ -22,15 +21,9 @@ export const heights = /** @type {const} */ ({
   h560: '35em',
 });
 
-// Deliberately JS-only: Umay's modal state switches at 700 px, a width with no
-// stylesheet counterpart. Its height and the system tabs' height use existing CSS
-// thresholds. Keep this list shrinking when CSS gains an approved condition.
-export const JS_ONLY = /** @type {const} */ ({
-  umayModal: '(max-width: 43.75em)',
-});
-
+// Every query condition has a stylesheet counterpart; Umay shares the 900 px layout boundary.
 export const queries = /** @type {const} */ ({
-  umayModal: `(max-width: ${widths.w700}), (max-height: ${heights.h480})`,
+  umayModal: `(max-width: ${widths.w900}), (max-height: ${heights.h480})`,
   besideCards: `(max-height: ${heights.h480}) and (min-width: ${widths.w568})`,
   shortScreen: `(max-height: ${heights.h480})`,
   overviewTabs: `(max-width: ${widths.w900}), (max-height: ${heights.h480})`,

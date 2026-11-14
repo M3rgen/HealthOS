@@ -50,8 +50,9 @@ from .coverage_reading import (
     google_streams,
     metric_exclusions,
     source_regime,
-    stream_of,
 )
+from .coverage_sleep import sleep_value_days
+from .coverage_sources import source_streams
 
 MAX_RECEIPTS = 2000
 MAX_EVENTS = 5000
@@ -414,8 +415,7 @@ async def presence(session: AsyncSession, spec: DataTypeSpec, window: Window):
                 Raw.source_start_time < upper,
             )
         elif metric.read == "sleep":
-            # Match the wake-date candidates read by _google_streams, including a
-            # missing-start correction and excluding a retained, obsolete wake date.
+            # Current wake dates, including missing starts; never retained old dates.
             model = Raw
             bounds = (
                 Raw.data_type == spec.name,
@@ -448,16 +448,15 @@ async def presence(session: AsyncSession, spec: DataTypeSpec, window: Window):
             # Only the source member. JSON `->` returns JSON,
             # so a boolean source keeps its own hash; scalar extraction would make it 0/1.
             source = Raw.raw_json.op("->", return_type=RawJSON)("dataSource")
-            rows = await session.execute(
-                select(source, column).where(*condition, raw_counted(data_types=(spec.name,)))
+            streams = await source_streams(
+                session,
+                select(source, column).where(*condition, raw_counted(data_types=(spec.name,))),
+                spec,
+                window,
             )
-            for data_source, stamp in rows:
-                day = as_utc(stamp).date() if spec.kind == RecordKind.daily else window.local(stamp)
-                if window.first <= day <= window.end:
-                    stream = stream_of(data_source, streams)
-                    stream.records += 1
-                    stream.days.add(day)
     values = set().union(*(stream.days for stream in streams.values()))
+    if spec.name == "sleep":
+        values = await sleep_value_days(session, window)
     regimes = [
         regime.model_dump(mode="json")
         for stream in streams.values()

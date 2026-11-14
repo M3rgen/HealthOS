@@ -2,6 +2,7 @@
 
 # pyright: strict
 
+from collections.abc import Sequence
 from datetime import UTC, date, datetime, timedelta
 from typing import assert_type
 from zoneinfo import ZoneInfo
@@ -10,6 +11,8 @@ import pytest
 from sqlalchemy import true
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql.elements import ColumnElement
+from test_heart_corrections import heart as heart_record
+from test_heart_corrections import heart_batch as heart_batch
 
 from app.db.contracts import SessionFactory
 from app.google_health.data_types import REGISTRY
@@ -18,7 +21,7 @@ from app.services.dashboard_views.dashboard import dashboard_data
 from app.services.dashboard_views.dashboard_history import history_data
 from app.services.dashboard_views.dashboard_workouts import list_workouts
 from app.services.identities.source_precedence import Policy
-from app.services.providers.ingestion_readers import ARCHIVES
+from app.services.providers.ingestion_readers import ARCHIVES, google_heart
 from app.services.readers.dashboard_queries import DashboardQuery
 from app.services.readers.dashboard_sources import DashboardSources
 from app.services.readers.dashboard_window import DashboardWindow, daily_window
@@ -35,6 +38,38 @@ from app.services.readers.reading import (
 DAY = date(2026, 11, 6)
 START = datetime(2026, 11, 6, 10, tzinfo=UTC)
 STOP = START + timedelta(hours=1)
+
+
+@pytest.mark.parametrize(
+    "platforms,codes",
+    [
+        ([], []),
+        (["FITBIT", "FITBIT"], ["FITBIT", "FITBIT"]),
+        ([" fitbit ", "FITBIT"], ["FITBIT", "FITBIT"]),
+        ([None, ""], ["GOOGLE", "GOOGLE"]),
+        (["FITBIT", "HEALTH_KIT"], ["FITBIT", "HEALTH_KIT"]),
+    ],
+)
+async def test_google_heart_preserves_samples_and_reports_competing_platforms(
+    sessions: SessionFactory, platforms: list[str | None], codes: list[str]
+) -> None:
+    async with sessions.begin() as session:
+        await store_records(
+            session,
+            REGISTRY["heart-rate"],
+            [
+                heart_record(str(index), START, {"platform": platform}, beatsPerMinute=60 + index)
+                for index, platform in enumerate(platforms)
+            ],
+        )
+    async with sessions() as session:
+        read = await google_heart(session, START, STOP, true())
+    assert read.samples == [(START, 60 + index, code) for index, code in enumerate(codes)]
+    assert read.resolve_minutes == (len(set(codes)) > 1)
+    assert read.summary_source == (
+        codes[0] if len(set(codes)) == 1 else "GOOGLE" if codes else None
+    )
+    assert read.activity_windows == [] and read.activity_source is None
 
 
 class SyntheticArchive:
@@ -55,17 +90,19 @@ class SyntheticArchive:
         end_date: date,
         zone: ZoneInfo,
         sources: DashboardSources,
-    ) -> DailyRead:
+    ) -> tuple[DailyRead, ...]:
         self.calls.append("daily")
         assert window.first == end_date == DAY and zone.key == "UTC"
-        return DailyRead(
-            {
-                DAY: {
-                    "steps": DailyValue(456, "SYNTHETIC", "SYNTHETIC"),
-                    "sleep_seconds": DailyValue(3600, "SYNTHETIC", "SYNTHETIC", ("synthetic",)),
-                }
-            },
-            [456.0] + [None] * 23,
+        return (
+            DailyRead(
+                {
+                    DAY: {
+                        "steps": DailyValue(456, "SYNTHETIC", "SYNTHETIC"),
+                        "sleep_seconds": DailyValue(3600, "SYNTHETIC", "SYNTHETIC", ("synthetic",)),
+                    }
+                },
+                [456.0] + [None] * 23,
+            ),
         )
 
     async def heart_rate(
@@ -186,6 +223,56 @@ async def test_absent_read_capabilities_are_empty(sessions: SessionFactory) -> N
         assert all(row["value"] is None for row in history["days"])
 
 
+@pytest.mark.parametrize("reverse", [False, True])
+@pytest.mark.parametrize(
+    "bounds,means,counts",
+    [((30, 90), (106.7, 100.4), (2, 2)), ((20, 50), (84.7, 122.4), (2, 1))],
+)
+async def test_heart_chart_averages_original_samples_across_exact_workout_boundaries(
+    sessions: SessionFactory,
+    reverse: bool,
+    bounds: tuple[int, int],
+    means: tuple[float, float],
+    counts: tuple[int, int],
+) -> None:
+    windows = [(START + timedelta(seconds=bounds[0]), START + timedelta(seconds=bounds[1]))]
+
+    def archive(source: str, values: list[float]) -> ArchiveReaders:
+        async def heart(
+            session: AsyncSession,
+            start: datetime,
+            stop: datetime,
+            source_filter: ColumnElement[bool],
+        ) -> HeartRead:
+            samples = [
+                (START + timedelta(seconds=offset), bpm, source)
+                for offset, bpm in zip((15, 30, 45, 59, 75, 90, 105), values, strict=True)
+            ]
+            return HeartRead(samples, source, True, windows if source == "GARMIN" else [], "GARMIN")
+
+        return ArchiveReaders(source, heart_rate=heart)
+
+    policy = (
+        Policy(activity=("FITBIT", "GARMIN"), health=("GARMIN", "FITBIT")) if reverse else Policy()
+    )
+    async with sessions() as session:
+        data = await dashboard_data(
+            session,
+            archives=(
+                archive("FITBIT", [60, 61, 66, 67, 69, 72, 75]),
+                archive("GARMIN", [100, 120, 130, 140, 150, 160, 180]),
+            ),
+            policy=policy,
+            query=DashboardQuery(DAY, 1, "UTC"),
+        )
+    assert data["charts"]["heart_rate"] == [None] * 10 + [means[reverse]] + [None] * 13
+    health, activity = policy.health[0], policy.activity[0]
+    assert data["charts"]["sources"]["heart_rate"]["minutes_by_source"] == {
+        health: counts[0],
+        activity: counts[1],
+    }
+
+
 async def test_reader_signatures_keep_result_types(sessions: SessionFactory) -> None:
     fake = SyntheticArchive()
     readers = ArchiveReaders("typed", fake.heart_rate, fake.workouts, fake.daily, fake.bounds)
@@ -205,7 +292,7 @@ async def test_reader_signatures_keep_result_types(sessions: SessionFactory) -> 
                 ZoneInfo("UTC"),
                 DashboardSources(),
             ),
-            DailyRead,
+            Sequence[DailyRead],
         )
 
 
@@ -225,11 +312,11 @@ async def test_history_uses_third_archive_bounds_and_skips_absent_capabilities(
         end_date: date,
         zone: ZoneInfo,
         sources: DashboardSources,
-    ) -> DailyRead:
+    ) -> tuple[DailyRead, ...]:
         assert sources.metrics == (key,)
         assert window.first <= oldest <= end_date and zone.key == "UTC"
         fake.calls.append("daily")
-        return DailyRead({oldest: {key: DailyValue(123, "SYNTHETIC", "SYNTHETIC")}})
+        return (DailyRead({oldest: {key: DailyValue(123, "SYNTHETIC", "SYNTHETIC")}}),)
 
     supported = ArchiveReaders("unknown", daily=daily, archive_bounds=fake.bounds)
     archives = (*ARCHIVES, supported) if alongside_existing else (supported,)
@@ -350,3 +437,100 @@ async def test_empty_daily_set_preserves_google_and_fit_readings(sessions: Sessi
             )
             google = await google_heart(session, FIT_START, stop, true())
             assert google.samples == [(FIT_START, 80, "FITBIT")]
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+@pytest.mark.parametrize("preferred", ["FITBIT", "GARMIN"])
+@pytest.mark.parametrize("count", [456, 0])
+@pytest.mark.parametrize("age", [0, 1])
+async def test_step_chart_tracks_normalized_daily_selection_without_writes(
+    sessions: SessionFactory, reverse: bool, preferred: str, count: int, age: int
+) -> None:
+    from derived_records import steps
+    from garmin_records import daily_steps, store_page
+    from sqlalchemy import select
+
+    from app.db.base import Base
+    from app.services.providers.garmin_normalize import normalize_window
+
+    day = DAY - timedelta(days=age)
+    start = START - timedelta(days=age)
+    async with sessions.begin() as session:
+        await store_records(
+            session,
+            REGISTRY["steps"],
+            [steps(count=123, start=start), steps("zero", 0, start + timedelta(hours=1))],
+        )
+    await store_page(sessions, "steps", [daily_steps(day, steps=count)], STOP)
+    async with sessions.begin() as session:
+        await normalize_window(session, day, day)
+    policy = Policy(health=(preferred, "GARMIN" if preferred == "FITBIT" else "FITBIT"))
+    archives = tuple(reversed(ARCHIVES)) if reverse else ARCHIVES
+    async with sessions() as session:
+        before = [
+            (await session.execute(select(table).order_by(*table.primary_key))).all()
+            for table in Base.metadata.tables.values()
+        ]
+        data = await dashboard_data(
+            session, archives=archives, policy=policy, query=DashboardQuery(DAY, 2, "UTC")
+        )
+        assert not session.new and not session.dirty and not session.deleted
+        assert before == [
+            (await session.execute(select(table).order_by(*table.primary_key))).all()
+            for table in Base.metadata.tables.values()
+        ]
+    assert data["days"][age]["steps"] == (123 if preferred == "FITBIT" else count)
+    assert data["days"][age]["sources"]["steps"]["source"] == preferred
+    source = None if age else preferred
+    assert data["charts"]["sources"]["steps"]["source"] == source
+    assert data["charts"]["sources"]["steps"]["label"] == (
+        None if age else "Fitbit" if preferred == "FITBIT" else "Garmin"
+    )
+    assert data["charts"]["steps"] == (
+        [None] * 10 + [123.0, 0.0] + [None] * 12
+        if not age and preferred == "FITBIT"
+        else [None] * 24
+    )
+    if age:
+        assert data["days"][0]["steps"] is None
+
+
+@pytest.mark.parametrize(
+    "first_value,second_value,first_hours,expected",
+    [
+        (None, 456, [123.0] + [None] * 23, [456.0] + [None] * 23),
+        (None, 0, [123.0] + [None] * 23, [0.0] + [None] * 23),
+        (456, 456, None, [None] * 24),
+        (None, None, [123.0] + [None] * 23, [None] * 24),
+    ],
+)
+async def test_step_hours_belong_to_observation_even_when_source_codes_match(
+    sessions: SessionFactory,
+    first_value: float | None,
+    second_value: float | None,
+    first_hours: list[float | None] | None,
+    expected: list[float | None],
+) -> None:
+    def archive(provider: str, value: float | None, hours: list[float | None] | None):
+        async def daily(
+            session: AsyncSession,
+            window: DashboardWindow,
+            end_date: date,
+            zone: ZoneInfo,
+            sources: DashboardSources,
+        ) -> tuple[DailyRead, ...]:
+            return (DailyRead({DAY: {"steps": DailyValue(value, "SAME", provider)}}, hours),)
+
+        return ArchiveReaders(provider, daily=daily)
+
+    async with sessions() as session:
+        data = await dashboard_data(
+            session,
+            archives=(
+                archive("FIRST", first_value, first_hours),
+                archive("SECOND", second_value, [second_value] + [None] * 23),
+            ),
+            query=DashboardQuery(DAY, 1, "UTC"),
+        )
+    assert data["charts"]["steps"] == expected
+    assert data["days"][0]["steps"] == (first_value if first_value is not None else second_value)

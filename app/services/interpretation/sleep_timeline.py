@@ -2,6 +2,7 @@
 
 from collections import defaultdict
 from collections.abc import Sequence
+from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import DecimalException
 from itertools import pairwise
@@ -16,6 +17,31 @@ from app.services.shared.finite_math import finite_difference, finite_number, fi
 STAGES = {"awake", "wake", "restless", "asleep", "light", "deep", "rem"}
 
 
+@dataclass
+class SleepTimelineAccumulator:
+    """Retain parsed clock evidence and supplied totals, never sessions or payloads."""
+
+    spans: list[tuple[datetime, datetime]] = field(default_factory=list)
+    stages: list[tuple[datetime, datetime, str]] = field(default_factory=list)
+    details: list[tuple[str, dict[str, Any]]] = field(default_factory=list)
+    reasons: set[str] = field(default_factory=set)
+
+    def add(
+        self, row: SleepSession, payload: dict[str, Any] | None, *, tie_breaker: str = ""
+    ) -> None:
+        spans, stages, details, reasons = _session_evidence([(row, payload)])
+        self.spans.extend(spans)
+        self.stages.extend(stages)
+        self.details.extend((tie_breaker, detail) for detail in details)
+        self.reasons.update(reasons)
+
+    def result(self) -> dict[str, Any]:
+        # Canonical days previously sorted sessions by interval and record ID before
+        # the stable detail sort. Preserve that tie order without retaining records.
+        details = [detail for _, detail in sorted(self.details, key=lambda item: item[0])]
+        return _finish_timeline(self.spans, self.stages, details, self.reasons.copy())
+
+
 def sleep_timeline(
     sessions: Sequence[tuple[SleepSession, dict[str, Any] | None]],
 ) -> dict[str, Any]:
@@ -28,9 +54,19 @@ def sleep_timeline(
     Boundary events take O((n+m) log(n+m)) time and O(n+m) space for n sessions
     and m stages. Per-cell work depends only on the fixed stage vocabulary.
     """
-    episodes = []
+    accumulator = SleepTimelineAccumulator()
+    for row, payload in sessions:
+        accumulator.add(row, payload)
+    return accumulator.result()
 
-    spans, stages, details, reasons = _session_evidence(sessions)
+
+def _finish_timeline(
+    spans: list[tuple[datetime, datetime]],
+    stages: list[tuple[datetime, datetime, str]],
+    details: list[dict[str, Any]],
+    reasons: set[str],
+) -> dict[str, Any]:
+    episodes = []
     spans.sort()
     for left, right in spans:
         if episodes and left <= episodes[-1][1]:
@@ -81,6 +117,8 @@ def _session_evidence(sessions: Sequence[tuple[SleepSession, dict[str, Any] | No
 
     def supplied_number(value: object, field: str):
         result = finite_number(value)
+        if result is not None and result < 0:
+            result = None
         if value is not None and result is None:
             reasons.add("unsupported_or_missing_value:" + field)
         return result

@@ -6,6 +6,8 @@ import re
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from derived_records import sleep, steps, store, summary
+from history_cache_archive import REVISION_READS
 from sqlalchemy import event
 from test_garmin_normalize import DAY, archive_day
 from test_metric_history import garmin_records, records
@@ -67,15 +69,54 @@ async def test_a_page_is_the_dashboard_for_its_metric(archive, metric, timezone)
 @pytest.mark.parametrize("metric", METRICS)
 @pytest.mark.parametrize("archive_days", [0, 100])
 async def test_a_page_reads_its_metric_alone(archive, metric, archive_days):
+    if metric == "steps":
+        for offset in range(archive_days):
+            start = datetime.combine(TODAY, datetime.min.time(), UTC) - timedelta(days=offset + 31)
+            await store(
+                archive, "steps", steps(str(offset), start=start, end=start + timedelta(days=2))
+            )
+    if metric == "heart":
+        await store(
+            archive,
+            "daily-resting-heart-rate",
+            *(
+                summary(
+                    "daily-resting-heart-rate",
+                    str(offset),
+                    TODAY - timedelta(days=offset),
+                    beatsPerMinute=60,
+                )
+                for offset in range(31, 31 + archive_days)
+            ),
+        )
+    if metric == "sleep":
+        await store(
+            archive,
+            "sleep",
+            *(
+                sleep(
+                    str(offset),
+                    start=datetime.combine(TODAY, datetime.min.time(), UTC)
+                    - timedelta(days=offset, hours=8),
+                    end=datetime.combine(TODAY, datetime.min.time(), UTC) - timedelta(days=offset),
+                )
+                for offset in range(31, 31 + archive_days)
+            ),
+        )
     async with archive.begin() as session:
         for offset in range(31, 31 + archive_days):
             session.add_all(garmin_records(metric, TODAY - timedelta(days=offset)))
     engine = archive.kw["bind"].sync_engine
     statements: list[str] = []
+    revisions: list[str] = []
+    batch_sizes: list[int | None] = []
 
     def record(connection, cursor, statement, parameters, context, many):
-        if statement.lstrip().upper().startswith("SELECT"):
+        if statement in REVISION_READS:
+            revisions.append(statement)
+        elif statement.lstrip().upper().startswith("SELECT"):
             statements.append(statement)
+            batch_sizes.append(context.execution_options.get("yield_per"))
 
     event.listen(engine, "before_cursor_execute", record)
     try:
@@ -89,14 +130,51 @@ async def test_a_page_reads_its_metric_alone(archive, metric, archive_days):
         for table in re.findall(r"(?:FROM|JOIN)\s+(\w+)", statement)
     }
     assert not read & ELSEWHERE[metric], read
-    # Boundary aggregates (Google, Garmin, Apple), then one page read per archive: Google, Garmin,
+    assert len(revisions) == 2  # Before and after the unchanged bounded streaming miss.
+    # Boundary reads (Google, Garmin, Apple), then one page read per archive: Google, Garmin,
     # sample data and the GitHub-only Apple extension.
     assert len(statements) == 7, statements
     assert len(statements) <= 8, statements
-    # Both boundary queries aggregate in SQL; only the selected page loads payloads.
-    for statement in statements[:2]:
-        assert "min(" in statement and "max(" in statement
-        assert "raw_json" not in statement
+    # Apple's boundary query aggregates in SQL and loads no payload.
+    assert "min(" in statements[2] and "max(" in statements[2]
+    assert "raw_json" not in statements[2]
+    # Google bounds validate current payloads in bounded batches.
+    if metric == "sleep":
+        assert (
+            "raw_json" in statements[0]
+            and "ORDER BY raw_health_data_1.source_end_time" in statements[0]
+        )
+        assert batch_sizes[0] == 100
+    elif metric == "heart":
+        assert statements[0].startswith(
+            "SELECT raw_health_data.data_type, raw_health_data.raw_json"
+        )
+        assert (
+            "ORDER BY raw_health_data.source_start_time, raw_health_data.last_seen_at"
+            in statements[0]
+        )
+        assert batch_sizes[0] == 1000
+    if metric == "steps":
+        assert statements[0].startswith("SELECT raw_health_data.raw_json")
+        assert "source_end_time > raw_health_data.source_start_time" in statements[0]
+        assert batch_sizes[0] == 1000
+        fields = statements[1].split("\nFROM", 1)[0]
+        assert fields.startswith("SELECT steps.source_record_id, steps.count, ")
+        assert "garmin_raw_records.body -> " in fields
+        assert batch_sizes[1] == 1000
+    if metric == "sleep":
+        for index in (1, 4, 5):  # Garmin bounds, Garmin page, DEMO page.
+            fields = statements[index].split("\nFROM", 1)[0]
+            assert fields.count(".body -> ") == 4
+            assert "sleep.body," not in fields and "sleep_summaries.body," not in fields
+            assert batch_sizes[index] == 1000
+    if metric == "heart":
+        fields = statements[1].split("\nFROM", 1)[0]
+        assert fields.startswith(
+            "SELECT resting_heart_rate.source_record_id, resting_heart_rate.bpm, "
+        )
+        assert fields.count(".body -> ") == 2
+        assert batch_sizes[1] == 1000
     assert all(
         "heart_rate_variability" not in statement
         and "oxygen_saturation" not in statement

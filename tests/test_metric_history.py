@@ -1,22 +1,115 @@
 from datetime import UTC, date, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 import garmin_records as garmin_payloads
 import httpx
 import pytest
 import pytest_asyncio
-from derived_records import sleep, steps
+from derived_records import sleep, snapshot, steps, store
 from fastapi import FastAPI
+from history_cache_archive import REVISION_READS
+from numeric_records import store_read_correction
 
 import app.api.dashboard as dashboard_api
 import app.services.dashboard_views.dashboard as dashboard_service
 from app.db.session import get_session
 from app.models.health import SleepSession, Steps
 from app.models.state import RawHealthData
+from app.services.dashboard_views.dashboard_history import history_data
 
 GARMIN_STEPS = garmin_payloads.daily_steps(date(2000, 1, 1))["totalSteps"]
 GARMIN_HEART = garmin_payloads.heart_rate(date(2000, 1, 1))["restingHeartRate"]
 GARMIN_SLEEP = garmin_payloads.sleep(date(2000, 1, 1))
 GARMIN_ASLEEP = GARMIN_SLEEP["sleepTimeSeconds"] - GARMIN_SLEEP["awakeSleepSeconds"]
+
+
+@pytest.mark.parametrize("sound", [False, True])
+async def test_overflowing_step_day_does_not_expand_history(client, sessions, sound):
+    old = datetime(2026, 7, 1, tzinfo=UTC)
+    await store_read_correction(sessions, "steps", steps("a", 1e308, old), steps("b", 1e308, old))
+    if sound:
+        await store(sessions, "steps", steps("recent", start=old + timedelta(days=90)))
+    async with sessions() as session:
+        before = await snapshot(session)
+    response = await client.get("/api/dashboard/history", params={"metric": "steps"})
+    assert response.status_code == 200
+    data = response.json()
+    expected = "2026-09-29" if sound else None
+    assert (data["earliest_date"], data["latest_date"], data["total_pages"]) == (
+        expected,
+        expected,
+        1,
+    )
+    response = await client.get("/api/dashboard/history", params={"metric": "steps", "page": 2})
+    assert response.status_code == 422
+    async with sessions() as session:
+        assert await snapshot(session) == before
+
+
+@pytest.mark.parametrize(
+    "zone,left,right,today,expected",
+    [
+        ("UTC", "09-28T23:00", "09-29T01:00", "09-30", [("09-28", 60), ("09-29", 60)]),
+        ("UTC", "09-28T00:00", "09-30T00:00", "09-30", [("09-28", 1440), ("09-29", 1440)]),
+        ("UTC", "09-28T23:59:59.999999", "09-29T00:00", "09-30", [("09-28", 0)]),
+        (
+            "UTC",
+            "09-28T23:59:59.999999",
+            "09-29T00:00:00.000001",
+            "09-30",
+            [("09-28", 0), ("09-29", 0)],
+        ),
+        (
+            "UTC",
+            "09-28T23:00",
+            "10-02T00:00",
+            "09-30",
+            [("09-28", 60), ("09-29", 1440), ("09-30", 1440)],
+        ),
+        (
+            "America/Los_Angeles",
+            "09-29T06:00",
+            "09-29T08:00",
+            "09-30",
+            [("09-28", 60), ("09-29", 60)],
+        ),
+        ("America/Los_Angeles", "09-29T06:00", "09-29T07:00", "09-30", [("09-28", 60)]),
+        ("Europe/Brussels", "03-28T23:00", "03-29T22:00", "03-30", [("03-29", 1380)]),
+        ("Europe/Brussels", "10-24T22:00", "10-25T23:00", "10-26", [("10-25", 1500)]),
+    ],
+)
+@pytest.mark.parametrize(
+    "counts",
+    [None, {"count": 0, "countSum": 900}, {"countSum": "-0", "steps": 900}, {"steps": "-0e-1000"}],
+)
+async def test_step_bounds_match_ingested_contribution_days(
+    sessions, zone, left, right, today, expected, counts
+):
+    start, end = (datetime.fromisoformat(f"2026-{stamp}+00:00") for stamp in (left, right))
+    tomorrow = datetime.combine(
+        date.fromisoformat(f"2026-{today}") + timedelta(days=1), datetime.min.time(), ZoneInfo(zone)
+    ).astimezone(UTC)
+    record = steps(count=(end - start).total_seconds() / 60, start=start, end=end)
+    if counts is not None:
+        record["steps"] = {"interval": record["steps"]["interval"], **counts}
+    await store(
+        sessions,
+        "steps",
+        record,
+        steps("future", start=tomorrow),
+    )
+    async with sessions() as session:
+        before = await snapshot(session)
+        page = await history_data(session, "steps", 1, zone, date.fromisoformat(f"2026-{today}"))
+        values = {
+            str(row["date"]): row["value"] for row in page["days"] if row["value"] is not None
+        }
+        assert values == {
+            f"2026-{day}": 0 if counts is not None else value for day, value in expected
+        }
+        assert str(page["earliest_date"]) == min(values)
+        assert str(page["latest_date"]) == max(values)
+        assert await snapshot(session) == before
 
 
 class FixedDateTime(datetime):
@@ -145,6 +238,36 @@ async def test_empty_archive_has_one_full_empty_page(client, metric):
     assert all(row["value"] is None for row in data["days"])
 
 
+@pytest.mark.parametrize(
+    "counts,value",
+    [
+        ({"count": "bad", "countSum": 7, "steps": 9}, 7),
+        ({"count": True, "countSum": None, "steps": 9}, 9),
+        ({"count": 0, "countSum": -1, "steps": 9}, 0),
+        ({"countSum": "-0", "steps": -1}, 0),
+        ({"count": "NaN", "countSum": 7}, None),
+        ({"count": "-1e-999999", "countSum": 7}, None),
+    ],
+)
+async def test_corrected_latest_step_uses_first_parseable_count(client, sessions, counts, value):
+    latest = datetime(2026, 9, 29, tzinfo=UTC)
+    middle = latest - timedelta(days=3)
+    await store(sessions, "steps", steps("middle", start=middle), steps("latest", start=latest))
+    corrected = steps("latest", start=latest)
+    corrected["steps"] = {"interval": corrected["steps"]["interval"], **counts}
+    await store(sessions, "steps", corrected)
+    async with sessions() as session:
+        before = await snapshot(session)
+    response = await client.get("/api/dashboard/history", params={"metric": "steps"})
+    assert response.status_code == 200, response.text
+    page = response.json()
+    assert page["earliest_date"] == str(middle.date())
+    assert page["latest_date"] == str((latest if value is not None else middle).date())
+    assert page["days"][1]["value"] == value
+    async with sessions() as session:
+        assert await snapshot(session) == before
+
+
 @pytest.mark.parametrize("metric", ["steps", "sleep"])
 async def test_normalized_quarantine_does_not_expand_or_pollute_history(client, sessions, metric):
     async with sessions() as session:
@@ -238,7 +361,9 @@ async def test_history_archive_date_conversion_overflow(dashboard_dates, monkeyp
         "/api/dashboard/history", params={"metric": metric, "timezone": "Etc/GMT+12"}
     )
     assert response.status_code == 422, response.text
-    assert len(statements) == 1  # Only archive bounds; no payload/normalized/manual reads.
+    assert len(statements) == 2  # One visibility probe, then the original failing bounds read.
+    assert statements[0] in REVISION_READS
+    assert "raw_health_data" in statements[1]
     assert response.json() == {"detail": "Seçilen tarih aralığı bu saat diliminde hesaplanamıyor."}
 
 
@@ -334,6 +459,22 @@ async def test_garmin_only_archive_exposes_every_page(client, sessions, metric, 
 async def test_union_bounds_keep_same_day_source_precedence(client, sessions, metric, expected):
     today = date(2026, 9, 30)
     oldest, middle = today - timedelta(days=65), today - timedelta(days=10)
+    if metric == "steps":
+        # Valid ingestion followed by invalid counts at both archive edges must
+        # leave Garmin's bounds intact, despite the retained Google Steps rows.
+        for name, start in (("invalid-old", oldest - timedelta(days=30)), ("invalid-new", today)):
+            start = datetime.combine(start, datetime.min.time(), UTC)
+            await store(sessions, "steps", steps(name, start=start))
+            await store(sessions, "steps", steps(name, count=-1, start=start))
+    if metric == "sleep":
+        for name, day in (("invalid-old", oldest - timedelta(days=30)), ("invalid-new", today)):
+            start = datetime.combine(day, datetime.min.time(), UTC)
+            await store(sessions, "sleep", sleep(name, start=start, end=start + timedelta(hours=8)))
+            await store(
+                sessions,
+                "sleep",
+                sleep(name, start=start, end=start + timedelta(hours=8), duration="-1s"),
+            )
     async with sessions.begin() as session:
         google = records(metric, middle, "google")
         google[0].raw_json = {**google[0].raw_json, "dataSource": {"platform": "FITBIT"}}

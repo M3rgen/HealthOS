@@ -1,4 +1,4 @@
-"""Service subpackages follow ORDER; edges against it (BACK_EDGES) only shrink."""
+"""Service subpackages follow ORDER: a package imports only packages to its right."""
 
 import ast
 from collections import Counter
@@ -21,9 +21,6 @@ ORDER = (
     "shared",
     "operations",
 )
-# Sıranın tersine giden bugünkü kenarlar ve içe aktarma ifadesi sayıları. Yalnız küçülür:
-# yeni geri kenar ya da sayısı artan geri kenar testi kırar; azalan sayı buraya işlenir.
-BACK_EDGES: dict[tuple[str, str], int] = {}
 
 
 def runtime_imports(node: ast.AST):
@@ -110,26 +107,31 @@ def test_every_service_package_has_a_place_in_the_order():
     assert not packages - set(ORDER), f"ORDER'a yerleştirin: {sorted(packages - set(ORDER))}"
 
 
-def test_service_package_edges_follow_the_order_and_back_edges_only_shrink():
+def test_service_package_edges_follow_the_order():
     back = back_edges(measured_edges())
-    grown = {
-        edge: (BACK_EDGES.get(edge, 0), count)
-        for edge, count in back.items()
-        if count > BACK_EDGES.get(edge, 0)
-    }
-    assert not grown, "\n".join(
-        f"sıraya aykırı alt paket bağımlılığı: {source} -> {target} ({before} -> {after})"
-        for (source, target), (before, after) in sorted(grown.items())
+    assert not back, "\n".join(
+        f"sıraya aykırı alt paket bağımlılığı: {source} -> {target} ({count})"
+        for (source, target), count in sorted(back.items())
     )
-    shrunk = {
-        edge: (count, back.get(edge, 0))
-        for edge, count in BACK_EDGES.items()
-        if back.get(edge, 0) < count
-    }
-    assert not shrunk, "BACK_EDGES'i küçültün: " + ", ".join(
-        f"{source} -> {target}: {before} -> {after}"
-        for (source, target), (before, after) in sorted(shrunk.items())
-    )
+
+
+def test_service_package_graph_has_no_cycles():
+    graph: dict[str, set[str]] = {}
+    for source, target in measured_edges():
+        graph.setdefault(source, set()).add(target)
+    state: dict[str, int] = {}
+
+    def visit(package, path):
+        state[package] = 1
+        for target in sorted(graph.get(package, ())):
+            assert state.get(target) != 1, "alt paket döngüsü: " + " -> ".join([*path, target])
+            if target not in state:
+                visit(target, [*path, target])
+        state[package] = 2
+
+    for package in sorted(graph):
+        if package not in state:
+            visit(package, [package])
 
 
 @pytest.mark.parametrize(

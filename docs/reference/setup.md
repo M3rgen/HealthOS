@@ -9,6 +9,22 @@ Part of the [technical reference](../REFERENCE.md).
 - A Google Cloud project with Google Health API access, only for the Google source (not needed for Garmin, development or tests)
 - For webhooks: a domain/public HTTPS URL that routes to `/webhooks/google-health`
 
+By setup:
+
+| Setup | Requirements |
+| --- | --- |
+| **Recommended: Docker** | Git, Docker Engine or Docker Desktop, Docker Compose v2, and a modern browser with WebGL. Docker builds the frontend, so the host needs no Node.js. |
+| **Backups** | Python 3.11+ on the host for `make backup` and the backup timer. |
+| **Native development** | `uv` 0.13.6, PostgreSQL, and Node.js 24 for frontend builds ([Development](../DEVELOPMENT.md)). The shipped Compose stack uses PostgreSQL 17. |
+| **Garmin** | A Garmin Connect account and a Personal API key ([Garmin](garmin.md#garmin-connect-personal-api)). |
+| **Google synchronization** | An eligible Google Cloud project, Google Health API access, an OAuth web client, and a linked Google Health account. |
+| **Server deployment** | A Linux server (Debian is documented) with Docker Engine; see [Deployment](../DEPLOYMENT.md). |
+| **Optional webhooks** | A public HTTPS endpoint that forwards only `/webhooks/google-health`; the documented setup uses a Cloudflare Tunnel. |
+| **Optional Umay** | Codex CLI 0.161.0 exactly (the bridge refuses other releases) and an authenticated ChatGPT account on the Docker host; the bridge launcher supports Linux, macOS and Windows. |
+
+Internet access is needed to build images and to reach Garmin or Google; Umay also needs access to
+OpenAI. Storage depends on how much history you archive.
+
 ## Docker setup
 
 Copy `.env.example` to the ignored `.env` and set a strong `POSTGRES_PASSWORD`,
@@ -24,7 +40,38 @@ Google OAuth client, `GOOGLE_TOKEN_ENCRYPTION_KEY`, an HTTPS `GOOGLE_HEALTH_WEBH
 and a `GOOGLE_HEALTH_WEBHOOK_AUTHORIZATION` that passes the same check; with `garmin` a readable `GARMIN_API_KEY_FILE`. The full
 production setup is in [DEPLOYMENT.md](../DEPLOYMENT.md).
 
-If `.env` does not exist, run `make env` to generate its three secrets with mode 600.
+If `.env` does not exist, run `make env` to generate its three secrets with mode 600 (Python
+3.9+); it refuses to replace an existing file. By hand, `cp .env.example .env && chmod 600 .env`,
+then set:
+
+- `POSTGRES_PASSWORD`: a long random value. A hexadecimal password avoids URL-escaping issues in
+  the Compose database URL.
+- `POSTGRES_APP_PASSWORD`: the password of the non-superuser role the app connects with
+  (`POSTGRES_APP_USER`, `healthos_app` in the template). The schema stays owned by the migration
+  role, so the app cannot disable the append-only triggers. Hexadecimal too; without it
+  `provision-app-role` stops and the app does not start.
+- `APP_UI_TOKEN`: the access key for the dashboard and API, 32 to 512 printable characters without
+  spaces, and not guessable ([what production refuses](config.md#secret-strength)). You type it
+  once on the login page; scripts send it as `Authorization: Bearer <token>`.
+
+```sh
+python3 -c "import secrets; print(secrets.token_hex(32))"        # POSTGRES_PASSWORD, POSTGRES_APP_PASSWORD (run once each)
+python3 -c "import secrets; print(secrets.token_urlsafe(32))"    # APP_UI_TOKEN
+```
+
+Store the results only in `.env`, which Git ignores; `.env.example` has blank secret fields and
+sets `HEALTHOS_SOURCES=none`, so nothing else is needed to start. Create `backup-status`
+(`install -d -m 755 backup-status`) before the first `docker compose up`, so the host user owns it
+instead of Docker creating it as root.
+
+After `docker compose up -d --build`, open `http://healthos.localhost:8000` and enter
+`APP_UI_TOKEN`. The session lasts 30 days there or over HTTPS; plain `localhost` and `127.0.0.1`
+redirect there before showing the login form ([why](../UI_AUTH.md#session-lifetime)). The first
+build downloads dependencies and takes a few minutes; the one-shot `migrate` and
+`provision-app-role` services apply migrations and create the app's role before the app starts.
+You get an empty archive, the dashboard and manual entries, in production mode. After logging in,
+`http://healthos.localhost:8000/health` shows pipeline status. Interactive API documentation
+(`/docs`) is off in production.
 
 For development, add the override, which sets `APP_ENV=development` and also publishes PostgreSQL
 on `127.0.0.1:5432`. First create `.env` and fill in the three values as described in
@@ -134,3 +181,64 @@ Use this to confirm the account is linked, Fitbit data is visible, and the confi
 healthos sync steps
 healthos status
 ```
+
+## Google Health with Docker
+
+The README's quickstart path for Google, in full. Only with a project that already has API access.
+Add `google` to `HEALTHOS_SOURCES` once the values below are in `.env`: in production the app
+refuses to start without them.
+
+1. Follow Google's [Cloud and OAuth setup guide](https://developers.google.com/health/setup). Link
+   your account in the Google Health mobile app first.
+2. Create a **Web application** OAuth client and register the default redirect URI in Google Cloud
+   Console before connecting: `http://healthos.localhost:8000/auth/google/callback` (use your
+   installation's port). It must exactly match `GOOGLE_REDIRECT_URI`, or Google returns
+   `redirect_uri_mismatch`. Existing installations may keep an explicit
+   `http://localhost:8000/auth/google/callback` in `.env`; the single-use handoff from
+   `healthos.localhost` still avoids a second UI login on `localhost`. If the variable is absent,
+   register the new default before upgrading or explicitly keep the old value.
+3. Configure the required **read-only** scopes. Optionally narrow the mirrored types with
+   `ENABLED_DATA_TYPES`; see the [configuration reference](config.md#configuration).
+4. Put `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` in `.env`. Generate a Fernet key with the
+   built image and save it as `GOOGLE_TOKEN_ENCRYPTION_KEY`:
+
+   ```sh
+   docker compose run --rm --no-deps app python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+   ```
+
+5. Set `HEALTHOS_SOURCES=google` (or `garmin,google`). Production also requires the webhook values
+   described below (a `GOOGLE_HEALTH_WEBHOOK_AUTHORIZATION` that passes the
+   [strength check](config.md#secret-strength)), so until they are set, run with the development
+   override, then visit `http://healthos.localhost:8000/auth/google/start` and complete consent:
+
+   ```sh
+   compose_files="$(docker compose config --environment | sed -n 's/^COMPOSE_FILE=//p')"; COMPOSE_FILE="${compose_files:-docker-compose.yml}${COMPOSE_PATH_SEPARATOR:-:}docker-compose.dev.yml" docker compose up -d --force-recreate app
+   ```
+
+6. Check access, then synchronize a small dataset:
+
+   ```sh
+   docker compose exec app healthos probe --days 30
+   docker compose exec app healthos sync steps
+   docker compose exec app healthos status
+   ```
+
+For unattended Google synchronization, run the plain `docker compose up -d` (production mode). With
+`google` selected it also requires an HTTPS `GOOGLE_HEALTH_WEBHOOK_ENDPOINT_URI` and a
+`GOOGLE_HEALTH_WEBHOOK_AUTHORIZATION` value; the [deployment guide](../DEPLOYMENT.md) walks through a
+server setup with the dashboard behind an SSH tunnel and a webhook-only Cloudflare Tunnel. Google's
+Testing-mode refresh tokens expire after seven days; see
+[OAuth and Google Health setup](#oauth-and-google-health-setup) above.
+
+**Google history.** Set `BACKFILL_START_DATE` in `.env` to the earliest date you want to attempt,
+recreate the app to apply it, then run:
+
+```sh
+docker compose exec app healthos backfill --data-type steps
+# All configured data types; this can take time:
+docker compose exec app healthos backfill
+```
+
+Backfills save progress by type and time window; rerun an interrupted backfill to resume it.
+Reconciliation and incremental synchronization pick up late-arriving records. For Garmin history,
+use `healthos garmin-backfill` ([Garmin](garmin.md#garmin-connect-personal-api)).

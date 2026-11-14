@@ -3,12 +3,12 @@
 import hashlib
 import json
 import logging
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
-from sqlalchemy import Table, insert, select
+from sqlalchemy import Table, insert, select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings
@@ -41,6 +41,10 @@ logger = logging.getLogger(__name__)
 # Per date chunk, independent of an optional caller budget. At 100 activities per
 # page this bounds a broken search to 100,000 returned records.
 MAX_ACTIVITY_PAGES = 1000
+
+# Two parameters per version plus kind: 801 binds, below the historical 999-variable
+# limit and PostgreSQL/asyncpg's 32767-parameter limit, including legacy aliases.
+_VERSION_BATCH = 400
 
 
 class GarminPaginationError(GarminError):
@@ -266,16 +270,7 @@ class GarminSource(IngestionSource[GarminPage]):
             raise ValueError("Garmin record observations require a response")
         if kind.name == "activities":
             rows = await _reuse_activity_versions(session, rows)
-        keys = sorted({key for key, _ in rows})
-        existing = set(
-            (
-                await session.execute(
-                    select(GarminRawRecord.key, GarminRawRecord.body_sha256).where(
-                        GarminRawRecord.kind == kind.name, GarminRawRecord.key.in_(keys)
-                    )
-                )
-            ).tuples()
-        )
+        existing = await _version_ids(session, kind.name, rows)
         new_rows = [row for pair, row in rows.items() if pair not in existing]
         if new_rows:
             statement = dialect_insert(session, GarminRawRecord.__table__)
@@ -302,16 +297,7 @@ async def _reuse_activity_versions(
             aliases[pair] = (identifier[:64], pair[1])
     if not aliases:
         return rows
-    keys = {key for key, _ in (*aliases, *aliases.values())}
-    existing = set(
-        (
-            await session.execute(
-                select(GarminRawRecord.key, GarminRawRecord.body_sha256).where(
-                    GarminRawRecord.kind == "activities", GarminRawRecord.key.in_(keys)
-                )
-            )
-        ).tuples()
-    )
+    existing = await _version_ids(session, "activities", (*aliases, *aliases.values()))
     reused = {}
     for pair, row in rows.items():
         legacy = aliases.get(pair)
@@ -328,13 +314,7 @@ async def _observe_records(
     observed_at: datetime,
 ) -> None:
     """Append sightings even for deduplicated versions, in the caller's page transaction."""
-    records = await session.execute(
-        select(GarminRawRecord.id, GarminRawRecord.key, GarminRawRecord.body_sha256).where(
-            GarminRawRecord.kind == kind,
-            GarminRawRecord.key.in_(sorted({key for key, _ in rows})),
-        )
-    )
-    identifiers = {(key, digest): identifier for identifier, key, digest in records}
+    identifiers = await _version_ids(session, kind, rows)
     await session.execute(
         insert(GarminRecordObservation),
         [
@@ -346,6 +326,30 @@ async def _observe_records(
             for pair in rows
         ],
     )
+
+
+async def _version_ids(
+    session: AsyncSession, kind: str, pairs: Iterable[tuple[str, str]]
+) -> dict[tuple[str, str], int]:
+    """Read only page-requested versions using the unique (kind, key, digest) index.
+
+    Both the result and intermediate collections are bounded by the incoming page,
+    regardless of how often its keys were corrected in the archive. Deduplicate
+    aliases before batching so shared prefixes do not cause redundant lookups.
+    """
+    requested = sorted(set(pairs))
+    identifiers: dict[tuple[str, str], int] = {}
+    for offset in range(0, len(requested), _VERSION_BATCH):
+        records = await session.execute(
+            select(GarminRawRecord.id, GarminRawRecord.key, GarminRawRecord.body_sha256).where(
+                GarminRawRecord.kind == kind,
+                tuple_(GarminRawRecord.key, GarminRawRecord.body_sha256).in_(
+                    requested[offset : offset + _VERSION_BATCH]
+                ),
+            )
+        )
+        identifiers.update({(key, digest): identifier for identifier, key, digest in records})
+    return identifiers
 
 
 async def _insert_exchanges(session: AsyncSession, exchanges: list[GarminExchange]) -> int | None:

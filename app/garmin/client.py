@@ -24,9 +24,8 @@ paths. Behaviour:
   sent, so the row stays evidence of the exchange without being a usable credential.
 * A response is read under byte budgets (:mod:`app.core.bounded_http`); one over them is
   refused, archived as incomplete and never parsed.
-* A fully read response that cannot be decoded as JSON raises
-  :class:`GarminResponseDecodeError`. Its captured bytes, size and digest stay available
-  to the caller's error-archiving path, under the same credential masking rules.
+* Invalid or ambiguous JSON raises :class:`GarminResponseDecodeError`. Captured bytes,
+  size and digest stay available to error archival under the same credential masking rules.
 * GET transport failures retry without retaining the HTTP exception or its request,
   which may carry the bearer token. Diagnostics keep the exception class; exhaustion
   raises :class:`GarminUnavailableError` with the path and no transport cause or context.
@@ -55,6 +54,7 @@ from app.core import http_retry
 from app.core.bounded_http import ACCEPT_ENCODING, ReadBody, read_bounded
 from app.core.logging import event
 from app.garmin import header_credentials, secret_scan
+from app.garmin.response_json import unique_object
 
 logger = logging.getLogger(__name__)
 
@@ -315,14 +315,14 @@ def redacted_headers(headers: Mapping[str, str], secrets: Sequence[str] = ()) ->
 def decode_response_body(body: bytes) -> Any:
     """Decode only after capture, preserving the existing empty-response contract.
 
-    ValueError includes invalid JSON, invalid byte encoding and integer limits;
-    RecursionError covers nesting beyond the runtime decoder's capacity. Catch
-    these only at the decoder boundary, so unrelated failures still propagate.
+    ValueError includes duplicate keys, invalid JSON/encoding and integer limits.
+    RecursionError covers excessive nesting. Catch only at the decoder boundary
+    so unrelated failures still propagate.
     """
     if not body.strip():
         return None
     try:
-        return json.loads(body)
+        return json.loads(body, object_pairs_hook=unique_object)
     except (ValueError, RecursionError):
         pass
     # Raise outside the handler: even implicit exception context may hold body

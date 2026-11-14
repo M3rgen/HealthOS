@@ -9,6 +9,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from app.api.deps import bounded_body, require_webhook_budget
 from app.api.deps import runtime as runtime_dep
 from app.api.deps import settings as settings_dep
+from app.api.read_limits import request_session
 from app.core.config import Settings
 from app.core.logging import event
 from app.google_health.webhook import ReplayWindow, WebhookVerificationError
@@ -33,7 +34,8 @@ async def webhook_status(
 ) -> WebhookStatus:
     response.headers["Cache-Control"] = "no-store"
     try:
-        status = await runtime.webhook_status.snapshot()
+        async with request_session(runtime.webhook_status.sessions, request) as session:
+            status = await runtime.webhook_status.snapshot(session=session)
     except SQLAlchemyError as exc:
         raise HTTPException(503, "Webhook status unavailable") from exc
     # Rate-limit refusals never reach the database; this process counts them in memory.

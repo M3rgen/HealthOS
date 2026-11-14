@@ -2,7 +2,7 @@
 
 from typing import cast
 
-from sqlalchemy import Table, and_, exists, or_, select
+from sqlalchemy import ColumnElement, Table, and_, exists, or_, select
 from sqlalchemy.orm import DeclarativeBase
 
 from app.core.fit import FIT_EXERCISE, FIT_HEART_RATE, FIT_RECORD_PREFIX
@@ -15,7 +15,9 @@ from .garmin_membership import heart_set_current
 VERSION = "v2"
 
 
-def current_row(model: type[DeclarativeBase]):
+def current_row(
+    model: type[DeclarativeBase], *, activity_current: ColumnElement[bool] | None = None
+):
     """Keep a legacy row readable until its v2 counterpart exists, then select only v2."""
     table = cast(Table, model.__table__)
     newer = table.alias("garmin_v2")
@@ -30,7 +32,10 @@ def current_row(model: type[DeclarativeBase]):
     if table.name == "heart_rate":
         version_current = and_(version_current, heart_set_current(table))
     if table.name == "exercise_sessions":
-        version_current = and_(version_current, activity_result_current(table))
+        version_current = and_(
+            version_current,
+            activity_result_current(table) if activity_current is None else activity_current,
+        )
 
     fit_type = {"exercise_sessions": FIT_EXERCISE.name, "heart_rate": FIT_HEART_RATE.name}.get(
         table.name

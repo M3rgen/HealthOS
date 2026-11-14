@@ -27,6 +27,7 @@ from .garmin_activity_state import inherit_activity_quarantine, write_activity_r
 from .garmin_current import activity_identity, current_record_ids, pending_daily_days
 from .garmin_normalize import build_activity_rows, normalize_window, write_rows
 from .garmin_normalize_types import NormalizeStats
+from .garmin_time import index_time_evidence
 
 CHUNK_DAYS = 7
 ACTIVITIES_PER_TRANSACTION = 500
@@ -157,11 +158,18 @@ async def recover_daily(
     heart membership use the same converter and ownership fence as the normal window.
     Explicit normalization/backfills keep their requested range; periodic pulls alone
     drain this backlog, even when all subsequent HTTP responses contain no records.
+    Index current heart offset eligibility first, in separate owned bounded transactions;
+    candidate selection then compares completed time choices without loading raw bodies.
     """
     total = NormalizeStats()
     after = ""
+    indexed = False
     while True:
         async with sessions.begin() as session:
+            if not indexed:
+                if await index_time_evidence(session, CHUNK_DAYS):
+                    continue
+                indexed = True
             keys = list(
                 await session.scalars(
                     pending_daily_days(

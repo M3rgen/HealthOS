@@ -4,7 +4,7 @@ Garmin is the second source next to Google Health and gets its own tables, apart
 ``raw_health_data`` and ``raw_api_responses``: those hold what Google returned, their readers
 (deletion marking, coverage, identity, derived days, freshness) assume Google's record shape,
 and a Garmin row under a Google data type would be marked source-deleted by the next complete
-Google fetch of its window. Seven append-only tables (UPDATE/DELETE and PostgreSQL TRUNCATE are
+Google fetch of its window. Nine append-only tables (UPDATE/DELETE and PostgreSQL TRUNCATE are
 refused, also for replica sessions) and separate bookkeeping tables:
 
 * ``garmin_api_responses``: one row per HTTP exchange with ``personal.connectapi.garmin.com``
@@ -29,6 +29,10 @@ refused, also for replica sessions) and separate bookkeeping tables:
   missing inputs alone publish nothing, and pre-evidence v1/v2 archives remain readable.
 * ``garmin_activity_results``: completed activity conversion keys (NULL when invalid),
   committed with normalized values and linked to the selected immutable raw record.
+* ``garmin_time_evidence``: immutable offset eligibility per raw heart version, including
+  invalid evidence; built in bounded transactions for legacy archives.
+* ``garmin_day_times``: the actual selected raw time evidence (NULL when unknown), committed
+  with daily values; changed current evidence makes completed dependent days pending again.
 * ``garmin_pull_state``: per kind, when the last pull was tried and succeeded, its last error
   and the backfill checkpoint (``backfill_next``: the next day not fetched yet).
 * ``garmin_normalization_state``: normalization success and unresolved failure, independent
@@ -68,6 +72,8 @@ HEART_SETS = "garmin_heart_sets"
 HEART_MEMBERS = "garmin_heart_members"
 DAILY_PROJECTIONS = "garmin_daily_projections"
 ACTIVITY_RESULTS = "garmin_activity_results"
+TIME_EVIDENCE = "garmin_time_evidence"
+DAY_TIMES = "garmin_day_times"
 STATE = "garmin_pull_state"
 NORMALIZATION_STATE = "garmin_normalization_state"
 # The append-only tables (the evidence); the state table is bookkeeping.
@@ -79,6 +85,8 @@ TABLES = (
     HEART_MEMBERS,
     DAILY_PROJECTIONS,
     ACTIVITY_RESULTS,
+    TIME_EVIDENCE,
+    DAY_TIMES,
 )
 _ID = BigInteger()
 
@@ -184,6 +192,28 @@ class GarminActivityResult(Base):
     source_record_id: Mapped[str] = mapped_column(String(160), nullable=False)
     raw_record_id: Mapped[int] = mapped_column(_ID, ForeignKey(f"{RECORDS}.id"), nullable=False)
     normalized_key: Mapped[str | None] = mapped_column(String(255))
+
+
+class GarminTimeEvidence(Base):
+    """Offset eligibility cached once per immutable raw heart version, including invalidity."""
+
+    __tablename__ = TIME_EVIDENCE
+
+    raw_record_id: Mapped[int] = mapped_column(_ID, ForeignKey(f"{RECORDS}.id"), primary_key=True)
+    day_ordinal: Mapped[int | None] = mapped_column(Integer)
+    offset_minutes: Mapped[int | None] = mapped_column(Integer)
+
+
+class GarminDayTime(Base):
+    """The selected time evidence of a completed day; NULL explicitly means unknown."""
+
+    __tablename__ = DAY_TIMES
+    __table_args__ = (Index("ix_garmin_day_times_day_id", "day", "id"),)
+
+    id: Mapped[int] = mapped_column(_ID, primary_key=True, autoincrement=True)
+    day: Mapped[str] = mapped_column(String(10), nullable=False)
+    day_ordinal: Mapped[int] = mapped_column(Integer, nullable=False)
+    raw_record_id: Mapped[int | None] = mapped_column(_ID, ForeignKey(f"{RECORDS}.id"))
 
 
 class GarminPullState(Base):

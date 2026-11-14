@@ -3,35 +3,44 @@
 Reading an archive never constructs an HTTP client or requires credentials.
 """
 
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql.elements import ColumnElement
 
 from app.core.providers import APPLE, DEMO, FIT
-from app.core.timeutil import as_utc
 from app.services.identities.source_precedence import GARMIN, google_source_of
 from app.services.interpretation.google_daily_readers import archive_bounds as google_bounds
 from app.services.interpretation.google_daily_readers import daily_values as google_days
 from app.services.readers import ArchiveReaders, DailyRead, DashboardSources, DashboardWindow
-from app.services.readers.current_heart import heart_rate_samples
+from app.services.readers.current_heart import chart_heart_rate_samples as heart_rate_samples
 from app.services.readers.current_workouts import current_workouts
 from app.services.readers.reading import BoundsReader, DailyValue, HeartRead, WorkoutRecord
 
 from . import apple_readers
+from .garmin_readers import activity_windows, daily_values, workouts
 from .garmin_readers import archive_bounds as garmin_bounds
-from .garmin_readers import daily_values, workouts
 from .garmin_readers import heart_rate_samples as provider_heart
 
 
 async def google_heart(
     session: AsyncSession, start: datetime, stop: datetime, source_filter: ColumnElement[bool]
 ) -> HeartRead:
-    samples = await heart_rate_samples(session, start, stop, source_filter)
+    """Keep each platform's samples intact for the projection's minute selection.
+
+    Google is one archive, but it can deliver several competing source platforms.
+    A genuinely single-platform read retains its historical hourly aggregation.
+    """
+    samples = [
+        (moment, bpm, google_source_of((platform,)))
+        for moment, bpm, platform in await heart_rate_samples(session, start, stop, source_filter)
+    ]
+    platforms = {source for _, _, source in samples}
     return HeartRead(
-        [(moment, bpm, google_source_of((platform,))) for moment, bpm, platform in samples],
-        google_source_of(platform for _, _, platform in samples) if samples else None,
+        samples,
+        google_source_of(platforms) if samples else None,
+        resolve_minutes=len(platforms) > 1,
     )
 
 
@@ -52,14 +61,7 @@ def provider_archive(
         session: AsyncSession, start: datetime, stop: datetime, source_filter: ColumnElement[bool]
     ) -> HeartRead:
         found = await provider_heart(session, start, stop, provider)
-        windows = (
-            [
-                (as_utc(row["start_time"]), as_utc(row["end_time"]))
-                for row in await provider_workouts(session, start - timedelta(days=1), stop)
-            ]
-            if found
-            else []
-        )
+        windows = await activity_windows(session, start, stop, provider) if found else []
         return HeartRead(
             [(moment, bpm, provider) for moment, bpm in found],
             provider if found else None,
@@ -74,23 +76,25 @@ def provider_archive(
         end_date: date,
         zone: ZoneInfo,
         sources: DashboardSources,
-    ) -> DailyRead:
+    ) -> tuple[DailyRead, ...]:
         values = await daily_values(
             session, window.first, end_date, zone, metrics=sources.metrics, provider=provider
         )
-        return DailyRead(
-            {
-                day: {
-                    metric: DailyValue(
-                        value,
-                        provider,
-                        provider,
-                        ("from_normalized_columns",) if metric == "sleep_seconds" else (),
-                    )
-                    for metric, value in metrics.items()
+        return (
+            DailyRead(
+                {
+                    day: {
+                        metric: DailyValue(
+                            value,
+                            provider,
+                            provider,
+                            ("from_normalized_columns",) if metric == "sleep_seconds" else (),
+                        )
+                        for metric, value in metrics.items()
+                    }
+                    for day, metrics in values.items()
                 }
-                for day, metrics in values.items()
-            }
+            ),
         )
 
     return ArchiveReaders(name, samples, provider_workouts, days if daily else None, bounds)
@@ -115,25 +119,27 @@ async def apple_days(
     end_date: date,
     zone: ZoneInfo,
     sources: DashboardSources,
-) -> DailyRead:
+) -> tuple[DailyRead, ...]:
     """Apple's day values under ``HEALTH_KIT`` with provider ``APPLE``: on a day Google relays
     the same Apple data, Google's value comes first and Apple's stays its alternative."""
     days = await apple_readers.daily_values(
         session, window.first, end_date, zone, metrics=sources.metrics
     )
-    return DailyRead(
-        {
-            day: {
-                metric: DailyValue(
-                    value,
-                    apple_readers.HEALTH_KIT,
-                    APPLE,
-                    ("from_normalized_columns",) if metric == "sleep_seconds" else (),
-                )
-                for metric, value in values.items()
+    return (
+        DailyRead(
+            {
+                day: {
+                    metric: DailyValue(
+                        value,
+                        apple_readers.HEALTH_KIT,
+                        APPLE,
+                        ("from_normalized_columns",) if metric == "sleep_seconds" else (),
+                    )
+                    for metric, value in values.items()
+                }
+                for day, values in days.items()
             }
-            for day, values in days.items()
-        }
+        ),
     )
 
 

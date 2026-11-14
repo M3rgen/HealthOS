@@ -372,7 +372,7 @@ def test_real_dashboard_prefix_is_covered():
 # Database role
 
 
-async def _health(risk, *, production=True):
+async def _health(risk, sessions, *, production=True):
     settings = SimpleNamespace(
         production=production,
         healthos_sources=["none"],
@@ -381,29 +381,33 @@ async def _health(risk, *, production=True):
         app_ui_token="x",
         watchdog_enabled=False,
         backup_status_file=None,
+        api_read_statement_timeout_seconds=25,
     )
     snapshot = SimpleNamespace(as_dict=lambda **_: {"status": "healthy", "reasons": []})
     runtime = SimpleNamespace(
         scheduler_needed=lambda _settings: False,
         scheduler_running=False,
-        pipeline_health=SimpleNamespace(inspect=AsyncMock(return_value=snapshot)),
+        pipeline_health=SimpleNamespace(
+            inspect=AsyncMock(return_value=snapshot), sessions=sessions
+        ),
     )
     request = SimpleNamespace(
+        method="GET",
         app=SimpleNamespace(
             state=SimpleNamespace(runtime=runtime, settings=settings, database_role_risk=risk)
-        )
+        ),
     )
     return await health_api.health(request)
 
 
-async def test_health_names_an_unrestricted_database_role_without_failing():
-    payload = await _health("superuser")
+async def test_health_names_an_unrestricted_database_role_without_failing(sessions):
+    payload = await _health("superuser", sessions)
     assert payload["status"] == "healthy"
     assert payload["reasons"] == ["database_role_superuser"]
 
 
-async def test_health_is_quiet_for_a_restricted_role():
-    assert (await _health(None))["reasons"] == []
+async def test_health_is_quiet_for_a_restricted_role(sessions):
+    assert (await _health(None, sessions))["reasons"] == []
 
 
 async def test_startup_warns_about_a_superuser_role_inside_its_grace(monkeypatch):

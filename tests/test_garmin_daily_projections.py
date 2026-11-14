@@ -67,7 +67,14 @@ def corrected(body, path, replacement):
     if replacement == "missing":
         target.pop(path[-1])
     else:
-        target[path[-1]] = {"null": None, "invalid": True, "overflow": 10**30}[replacement]
+        target[path[-1]] = {
+            "null": None,
+            "invalid": True,
+            "overflow": 10**30,
+            "negative": -1,
+            "tiny-negative": -0.0001,
+            "underflow": "-1e-10000",
+        }[replacement]
     return result
 
 
@@ -147,14 +154,21 @@ async def test_numeric_preparation_can_invalidate_a_daily_projection(
 
 
 @pytest.mark.parametrize(
-    "kind,model,body,path,metric", [c for c in CASES if c[1] is not SleepSession]
+    "kind,model,body,path,metric,zero",
+    [c + (0,) for c in CASES if c[1] is not SleepSession]
+    + [
+        c + (zero,)
+        for c in CASES
+        if c[-1] in ("resting_bpm", "hrv_ms", "spo2")
+        for zero in (-0.0, "-0e-10000")
+    ],
 )
-async def test_daily_zero_is_valid(sessions, kind, model, body, path, metric):
+async def test_daily_zero_is_valid(sessions, kind, model, body, path, metric, zero):
     payload = deepcopy(body)
     target = payload
     for name in path[:-1]:
         target = target[name]
-    target[path[-1]] = 0
+    target[path[-1]] = zero
     payload["calendarDate"] = str(DAY)
     await garmin_records.store_page(sessions, kind, [payload], NOW)
     async with sessions.begin() as session:

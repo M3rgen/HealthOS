@@ -589,10 +589,11 @@ async def test_amounts_with_different_interval_scopes_are_separate(sessions):
                         "startTime": T0.isoformat(),
                         "endTime": (T0 + timedelta(hours=hours)).isoformat(),
                     },
-                    "kcal": 100,
+                    **dict.fromkeys(("kcal", "kcalSum"), 100),
                 },
             ),
         )
     rows = (await call(sessions, "longitudinal", data_type="active-energy-burned"))["summaries"]
-    assert len(rows) == 2 and {r["interval_seconds"] for r in rows} == {3600, 7200}
+    assert len(rows) == 4 and {r["interval_seconds"] for r in rows} == {3600, 7200}
+    assert {r["evidence"][0]["field"] for r in rows} == {"kcal", "kcalSum"}
     assert all(r["statistics"]["count"] == 1 and r["change"] is None for r in rows)

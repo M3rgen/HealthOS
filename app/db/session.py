@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from app.core.config import Settings
 from app.db.engine import create_shared_engine
+from app.db.request_sessions import limited_session, read_limit
 
 SessionLocal = async_sessionmaker(expire_on_commit=False)
 
@@ -43,5 +44,6 @@ async def database_lifespan(settings: Settings, sessions: async_sessionmaker):
 
 
 async def get_session() -> AsyncIterator[AsyncSession]:
-    async with SessionLocal() as session:
+    """FastAPI's request session, limited as the API layer set ``read_limit`` for the request."""
+    async with limited_session(SessionLocal, read_limit.get()) as session:
         yield session

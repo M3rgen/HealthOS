@@ -17,9 +17,14 @@ def current_steps(record: dict) -> tuple[datetime, datetime, float] | None:
     caller's query; this function only establishes whether a measurement exists.
     """
     spec = RecordType("steps")
-    count = finite_number(
-        first_number(payload_for(spec, record), ("count", "countSum", "steps"), parse=number)
-    )
+    parsed = first_number(payload_for(spec, record), ("count", "countSum", "steps"), parse=number)
+    # Check the source Decimal before float conversion and independently of the
+    # retained SQL count. Signed zero is valid; negative aliases never fall through.
+    if parsed is None or not parsed.is_finite():
+        return None
+    if parsed < 0:
+        return None
+    count = finite_number(parsed)
     left, right, _ = temporal(spec, record)
     if count is None or left is None or right is None or right <= left:
         return None

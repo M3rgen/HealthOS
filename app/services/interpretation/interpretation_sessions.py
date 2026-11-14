@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from collections import OrderedDict
 from collections.abc import Iterator, Mapping
-from datetime import datetime
+from datetime import datetime, timedelta
+from decimal import Decimal
 from heapq import heappop, heappush
 from typing import TYPE_CHECKING
 from zoneinfo import ZoneInfo
@@ -14,6 +15,7 @@ from app.core.timeutil import as_utc
 from app.models.health import ExerciseSession
 from app.parsers.common import duration_seconds, payload_for
 from app.parsers.text import optional_column_text
+from app.services import readers
 
 from .canonical_daily import bounds, finite
 from .interpretation_inputs import (
@@ -44,6 +46,22 @@ def _exercise_type(payload: Mapping[str, object]) -> str | None:
     return optional_column_text(ExerciseSession, "exercise_type", selected)
 
 
+def _reported_active_duration(value: object, delta: timedelta) -> tuple[float | None, list[str]]:
+    """Check source precision before float rounding or underflow can hide invalidity.
+
+    Only activeDuration supplies this measurement. Missing, malformed and nonfinite
+    inputs retain the existing absent result, without a normalized/interval fallback.
+    Build the physical limit from integer components, never float total_seconds().
+    """
+    active = duration_seconds(value)
+    if active is not None and active.is_finite():
+        seconds = delta.days * 86400 + delta.seconds
+        interval = Decimal(f"{seconds}.{delta.microseconds:06d}")
+        if not 0 <= active <= interval:
+            return None, ["invalid_reported_active_duration"]
+    return finite(active), []
+
+
 def _session_rows(inputs: Inputs, left: datetime, stop: datetime, timezone: str) -> Iterator[dict]:
     """Yield original intervals that intersect the requested window.
 
@@ -57,11 +75,16 @@ def _session_rows(inputs: Inputs, left: datetime, stop: datetime, timezone: str)
         if start is None or end is None or end <= start or start >= stop or end <= left:
             continue
         payload = payload_for(RecordType("exercise"), raw.raw_json)
-        metrics = payload.get("metricsSummary")
-        metrics = metrics if isinstance(metrics, dict) else {}
-        active = duration_seconds(payload.get("activeDuration"))
-        active = finite(active)
+        metrics, metric_reasons = readers.current_workouts.nonnegative_metrics(
+            payload.get("metricsSummary")
+        )
+        active, active_reasons = _reported_active_duration(
+            payload.get("activeDuration"), end - start
+        )
         distance, distance_reasons = scaled_measurement(metrics.get("distanceMillimeters"), 1, 1000)
+        # A rejected distance already has a precise cause, rather than being missing.
+        if "negative_measurement:distanceMillimeters" not in metric_reasons:
+            metric_reasons.extend(distance_reasons)
         yield dict(
             metric="exercise",
             source=inputs.source(
@@ -76,11 +99,12 @@ def _session_rows(inputs: Inputs, left: datetime, stop: datetime, timezone: str)
             end=end.isoformat(),
             interval_seconds=(end - start).total_seconds(),
             reported_active_seconds=active,
+            reason_codes=active_reasons,
             exercise_type=_exercise_type(payload),
             calories_kcal=finite(metrics.get("caloriesKcal")),
             distance_meters=distance,
             evidence=[
-                evidence(raw, start.astimezone(ZoneInfo(timezone)).date(), reasons=distance_reasons)
+                evidence(raw, start.astimezone(ZoneInfo(timezone)).date(), reasons=metric_reasons)
             ],
         )
     for item in inputs.workouts:
@@ -188,9 +212,6 @@ def session_summaries(inputs: Inputs, query: ArchiveQuery, *, max_summaries: int
         reasons.extend(row["evidence"][0].get("reason_codes", []))
         if overlaps[index]:
             reasons.append("overlapping_sessions")
-        active = row["reported_active_seconds"]
-        if active is not None and not 0 <= active <= row["interval_seconds"]:
-            reasons.append("invalid_reported_active_duration")
-            row["reported_active_seconds"] = None
+        reasons.extend(row.pop("reason_codes", []))
         results.append(SessionSummary(**row, overlaps=overlaps[index], reason_codes=reasons))
     return results

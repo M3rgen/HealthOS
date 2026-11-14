@@ -49,6 +49,16 @@ def prepare_copy(root, version, status="2026-11-12"):
             flags=re.MULTILINE,
         )
     )
+    # The copy's README names the copy's own version, whatever the repository last published.
+    readme = root / "README.md"
+    readme.write_text(
+        re.sub(
+            r"(\*\*Latest published release: \[v)[\d.]+(\])",
+            rf"\g<1>{version}\g<2>",
+            readme.read_text(),
+            count=1,
+        )
+    )
     return root
 
 
@@ -148,7 +158,7 @@ def test_equal_target_is_rejected(tmp_path):
 @pytest.mark.parametrize("name", bump.FILES)
 @pytest.mark.parametrize("defect", ["missing-file", "missing-line", "mismatch"])
 def test_incomplete_or_inconsistent_release_set_never_writes(tmp_path, name, defect):
-    root = prepare_copy(tmp_path, "0.2.2.1")
+    root = prepare_copy(tmp_path, "0.2.2.7")
     path = root / name
     if defect == "missing-file":
         path.unlink()
@@ -156,11 +166,11 @@ def test_incomplete_or_inconsistent_release_set_never_writes(tmp_path, name, def
         text = path.read_text()
         if name == "CHANGELOG.md":
             text = text.replace(
-                "## [0.2.2.1] - 2026-11-12",
+                "## [0.2.2.7] - 2026-11-12",
                 "" if defect == "missing-line" else "## [9.9.9] - 2026-11-12",
             )
         else:
-            old = '"version": "0.2.2+1"' if name.endswith(".json") else 'version = "0.2.2.1"'
+            old = '"version": "0.2.2+7"' if name.endswith(".json") else 'version = "0.2.2.7"'
             text = text.replace(
                 old,
                 old.replace("version", "missing")

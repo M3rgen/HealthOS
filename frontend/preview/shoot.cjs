@@ -5,6 +5,7 @@
 //
 //   node preview/shoot.cjs [--out .test-output/shoot] [--base http://127.0.0.1:5174]
 //        [--viewports 1920x976,390x844] [--views overview,umay] [--reduced-motion]
+//        [--languages tr,en] [--scale 2] [--readme]
 const fs = require('node:fs');
 const path = require('node:path');
 const { chromium } = require('playwright');
@@ -12,6 +13,9 @@ const fx = require('./fixtures.cjs');
 
 const VIEWPORTS = require('../../tests/browser/viewport-floors.json').sizes.map(([w, h]) => `${w}x${h}`);
 const LANGUAGES = ['tr', 'en'];
+// The README images: English interface, 2x device pixels (1440x900 -> 2880x1800, 390x844 -> 780x1688).
+const README = { viewports: ['1440x900', '390x844'], views: ['overview', 'umay', 'metric-history', 'calendar', 'appearance'],
+  languages: ['en'], scale: 2 };
 const VIEWS = {
   overview: async () => {},
   'history-drag': async (page) => {
@@ -48,7 +52,8 @@ const VIEWS = {
     await page.waitForFunction(() => document.querySelector('#assistant-status').dataset.presence === 'online');
     await page.locator('#assistant-input').fill('Son haftamı özetler misin?');
     await page.locator('#assistant-send').click();
-    await page.waitForFunction(() => document.querySelector('.chat-assistant') && !document.querySelector('#assistant-stop:not([hidden])'));
+    await page.waitForFunction(() => document.querySelector('.chat-assistant') && document.querySelector('.chat-transfer') && !document.querySelector('#assistant-stop:not([hidden])'));
+    return showTurn(page);
   },
   measurements: async (page) => {
     await page.locator('[data-page="measurements"]').click();
@@ -135,8 +140,39 @@ const VIEWS = {
   } },
 };
 
+// Umay's question, its transfer receipt and the answer in one frame, with the data notice above them
+// either whole or scrolled away, never cut mid-sentence. The receipt stays folded: opened, its
+// counts and dates need more height than the bubble has beside the answer. Returns a note when the
+// bubble is too short for both (the notice then stays whole and the answer's end is below the fold).
+async function showTurn(page) {
+  return page.evaluate(() => {
+    const log = document.getElementById('assistant-messages');
+    if (log.scrollHeight <= log.clientHeight) { log.scrollTop = 0; return undefined; }
+    const notice = document.getElementById('assistant-data-notice').getBoundingClientRect();
+    const turn = document.querySelector('.chat-turn').getBoundingClientRect();
+    // The question starts just below the log's top edge, between it and the notice's last line.
+    const wanted = log.scrollTop + turn.top - log.getBoundingClientRect().top - Math.min(6, (turn.top - notice.bottom) / 2);
+    if (wanted <= log.scrollHeight - log.clientHeight) { log.scrollTop = wanted; return undefined; }
+    log.scrollTop = 0;
+    const cut = Math.ceil(document.querySelector('.chat-assistant').getBoundingClientRect().bottom - log.getBoundingClientRect().bottom);
+    return cut > 0 ? `Umay answer cut by ${cut} px below the whole data notice` : undefined;
+  });
+}
+
+// How many pixels of a half-visible history row the sheet's edge cuts off (0 when every row on
+// screen is whole). The overview's own layout decides this; the README preset reports it.
+async function historyRowsCut(page) {
+  return page.evaluate(() => {
+    const box = document.querySelector('#overview .history .table-scroll').getBoundingClientRect();
+    const rows = [...document.querySelectorAll('#history-rows tr')].map(row => row.getBoundingClientRect());
+    const cut = rows.find(row => row.top < box.bottom - 1 && row.bottom > box.bottom + 1);
+    return cut ? Math.ceil(cut.bottom - box.bottom) : 0;
+  });
+}
+
 function args(argv = process.argv.slice(2)) {
-  const out = { base: 'http://127.0.0.1:5174', viewports: VIEWPORTS, views: Object.keys(VIEWS), out: path.join(__dirname, '../.test-output/shoot'), reducedMotion: true };
+  const out = { base: 'http://127.0.0.1:5174', viewports: VIEWPORTS, views: Object.keys(VIEWS), out: path.join(__dirname, '../.test-output/shoot'), reducedMotion: true,
+    languages: LANGUAGES, scale: 1, readme: false };
   for (let i = 0; i < argv.length; i++) {
     const [key, inline] = argv[i].split('=');
     const value = () => inline ?? argv[++i];
@@ -145,11 +181,18 @@ function args(argv = process.argv.slice(2)) {
     else if (key === '--viewports') out.viewports = value().split(',');
     else if (key === '--views') out.views = value().split(',');
     else if (key === '--reduced-motion') out.reducedMotion = true;
+    else if (key === '--languages') out.languages = value().split(',');
+    else if (key === '--scale') out.scale = Number(value());
+    // README preset: its views, viewports, English and 2x; flags after it still override.
+    else if (key === '--readme') Object.assign(out, README, { readme: true });
     else if (key === '--help' || key === '-h') { console.log(fs.readFileSync(__filename, 'utf8').split('\n').slice(1, 7).join('\n')); process.exit(0); }
     else throw new Error(`Unknown argument ${argv[i]}`);
   }
   const unknown = out.views.filter(v => !VIEWS[v]);
   if (unknown.length) throw new Error(`Unknown views: ${unknown.join(', ')} (known: ${Object.keys(VIEWS).join(', ')})`);
+  const languages = out.languages.filter(language => !LANGUAGES.includes(language));
+  if (languages.length || !out.languages.length) throw new Error(`Unknown languages: ${languages.join(', ')} (known: ${LANGUAGES.join(', ')})`);
+  if (!(out.scale >= 1 && out.scale <= 3)) throw new Error(`--scale must be between 1 and 3, got ${out.scale}`);
   return out;
 }
 
@@ -196,8 +239,11 @@ async function mock(page, base, problems, scenario) {
       const message = JSON.parse(String(raw));
       if (!message.text) return;
       ws.send(JSON.stringify({ type: 'working', text: 'Umay düşünüyor…' }));
+      // The receipt arrives with the archive query, before the answer; it closes before 'done'.
+      ws.send(JSON.stringify(fx.chatTransfer('active')));
       const parts = fx.chatAnswer.match(/[\s\S]{1,48}/g);
       parts.forEach((text, i) => setTimeout(() => ws.send(JSON.stringify({ type: 'delta', id: 'a1', text })), 80 + i * 15));
+      setTimeout(() => ws.send(JSON.stringify(fx.chatTransfer('completed'))), 100 + parts.length * 15);
       setTimeout(() => ws.send(JSON.stringify({ type: 'done', status: 'completed' })), 120 + parts.length * 15);
     });
   });
@@ -243,9 +289,9 @@ async function main() {
   const rows = [];
   let failed = false;
   try {
-    for (const viewport of opt.viewports) for (const language of LANGUAGES) {
+    for (const viewport of opt.viewports) for (const language of opt.languages) {
       const [width, height] = viewport.split('x').map(Number);
-      const contextOptions = { viewport: { width, height }, deviceScaleFactor: 1,
+      const contextOptions = { viewport: { width, height }, deviceScaleFactor: opt.scale,
         locale: language === 'en' ? 'en-US' : 'tr-TR', timezoneId: 'UTC', reducedMotion: opt.reducedMotion ? 'reduce' : 'no-preference',
         hasTouch: width <= 900, isMobile: false };
       for (const view of opt.views) {
@@ -270,8 +316,15 @@ async function main() {
         if (await page.locator('#body-model').isVisible()) await page.waitForSelector('#body-model[data-model-loaded]', { timeout: 6000 }).catch(() => {});
         await page.waitForTimeout(500); // let the body model fade in and settle
         let result;
-        try { result = await spec.run(page); } catch (e) { problems.push(`view step failed: ${e.message.split('\n')[0]}`); }
-        const order = (opt.viewports.indexOf(viewport) * LANGUAGES.length + LANGUAGES.indexOf(language)) * opt.views.length + opt.views.indexOf(view);
+        const notes = [];
+        try {
+          result = await spec.run(page);
+          // Phones hide a row the sheet cannot show whole; the desktop table lets the edge cut it.
+          const cut = opt.readme && view === 'overview' && !(await page.locator('#overview-tab-steps').isVisible()) ? await historyRowsCut(page) : 0;
+          if (cut) notes.push(`last history row cut by ${cut} px at this height`);
+          if (opt.readme && typeof result === 'string' && result !== 'skip') notes.push(result);
+        } catch (e) { problems.push(`view step failed: ${e.message.split('\n')[0]}`); }
+        const order = (opt.viewports.indexOf(viewport) * opt.languages.length + opt.languages.indexOf(language)) * opt.views.length + opt.views.indexOf(view);
         if (result === 'skip') { rows.push({ order, viewport, language, view, skipped: true }); await context.close(); continue; }
         await page.waitForFunction(() => document.getAnimations().every(a => a.playState !== 'running' || a.effect?.getComputedTiming().iterations === Infinity), null, { timeout: 2000 }).catch(() => {});
         await page.waitForTimeout(150);
@@ -280,7 +333,7 @@ async function main() {
         await repaintSettled(page);
         await page.screenshot({ animations: 'disabled', caret: 'hide', path: path.join(opt.out, `${viewport}-${language}-${view}.png`) });
         if (overflow || problems.length) failed = true;
-        rows.push({ order, viewport, language, view, ...m, overflow, problems });
+        rows.push({ order, viewport, language, view, ...m, overflow, problems, notes });
         await context.close();
       }
     }
@@ -293,11 +346,12 @@ async function main() {
     if (r.skipped) { console.log(`${pad(r.viewport, 11)}${pad(r.language, 6)}${pad(r.view, 20)}${pad('-', 16)}${pad('-', 16)}skipped (not applicable)`); continue; }
     console.log(`${pad(r.viewport, 11)}${pad(r.language, 6)}${pad(r.view, 20)}${pad(`${r.sh}/${r.ih}`, 16)}${pad(`${r.sw}/${r.iw}`, 16)}${r.overflow ? 'OVERFLOW' : 'ok'}`);
     for (const p of r.problems) console.log(`    ! ${p}`);
+    for (const note of r.notes) console.log(`    note: ${note}`);
   }
   console.log(`\nScreenshots: ${path.resolve(opt.out)}`);
   console.log(failed ? 'FAIL: page overflow or problems detected' : 'PASS: no main-page overflow in any view');
   process.exit(failed ? 1 : 0);
 }
 
-module.exports = { VIEWPORTS, LANGUAGES, args };
+module.exports = { VIEWPORTS, LANGUAGES, README, args };
 if (require.main === module) main().catch((error) => { console.error(error); process.exit(2); });

@@ -14,6 +14,8 @@ from sqlalchemy.orm import DeclarativeBase
 from app.core.providers import GARMIN
 from app.models.garmin import GarminDailyProjection, GarminRawRecord
 
+from .garmin_time_state import write_day_times
+
 # Projection source kind -> all raw kinds the existing converter may use for its value.
 INPUTS = {
     "steps": ("steps",),
@@ -107,6 +109,8 @@ async def write_daily_projections(
     session: AsyncSession,
     record_ids: dict[tuple[str, str], int],
     rows: dict[type[DeclarativeBase], list[dict[str, Any]]],
+    *,
+    time_choices: dict[str, int | None] | None = None,
 ) -> None:
     """Append changed outcomes only, including absence after numeric preparation."""
     outcomes = list(_outcomes(record_ids, rows))
@@ -133,3 +137,6 @@ async def write_daily_projections(
         ]
         if changed:
             await session.execute(insert(GarminDailyProjection), changed)
+
+    if time_choices is not None:
+        await write_day_times(session, time_choices)

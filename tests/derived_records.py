@@ -130,7 +130,14 @@ async def snapshot(session, newer=()):
             ).all()
         )
         for name, table in Base.metadata.tables.items()
-        if name != "derived_days" and name not in newer
+        if name
+        not in {
+            "derived_days",
+            "google_heart_hours",
+            "google_heart_pending",
+            "google_heart_projection_state",
+        }
+        and name not in newer
     }
 
 

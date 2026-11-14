@@ -34,7 +34,7 @@ MODULES = sorted(
     if path.stem != "__init__"
 )
 LEGACY_MODULES = MODULES
-MAX_DEEP_IMPORTS = 158 + 3  # + apple_readers: dashboard_rows, dashboard_window, reading (Apple)
+MAX_DEEP_IMPORTS = 156 + 3  # + apple_readers: dashboard_rows, dashboard_window, reading (Apple)
 
 
 def service_import_targets(node, package, modules):

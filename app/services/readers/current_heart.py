@@ -14,6 +14,11 @@ from app.models.state import RawHealthData
 from app.parsers.common import number, payload_for, temporal
 from app.services.shared.finite_math import finite_number
 
+from . import heart_projection
+
+# Bound decoded payload count; an individual Google document can still be large.
+_HEART_BATCH = 100
+
 
 def current_heart_rate(record: dict) -> tuple[datetime, float] | None:
     """Validate both time and value without borrowing retained normalized columns.
@@ -25,9 +30,14 @@ def current_heart_rate(record: dict) -> tuple[datetime, float] | None:
     """
     spec = RecordType("heart-rate")
     timestamp, _, _ = temporal(spec, record)
-    bpm = finite_number(
-        first_number(payload_for(spec, record), ("beatsPerMinute", "bpm", "value"), parse=number)
+    parsed = first_number(
+        payload_for(spec, record), ("beatsPerMinute", "bpm", "value"), parse=number
     )
+    # Reject the selected Decimal before float conversion, including tiny negatives.
+    # Do not borrow a positive alias; signed zero remains a supplied measurement.
+    if parsed is not None and parsed.is_finite() and parsed < 0:
+        return None
+    bpm = finite_number(parsed)
     if timestamp is None or bpm is None:
         return None
     return timestamp, bpm
@@ -39,10 +49,19 @@ async def heart_rate_samples(
     stop: datetime,
     source_filter: ColumnElement[bool],
 ) -> list[tuple[datetime, float, object]]:
-    """The current heart-rate samples in ``[start, stop)`` with their ``dataSource.platform``
-    (for the source label), under the caller's eligibility predicate; time-ordered."""
+    """Stream current samples in ``[start, stop)`` under the caller's eligibility predicate.
+
+    Keep source-time ordering and ``dataSource.platform`` for the caller's source labels.
+    Invalid corrections are parsed from the current payload, never the retained HeartRate
+    value. The join and source bounds therefore continue to use the current raw record.
+
+    Only JSON buffering is bounded by the fetch batch; the returned small sample tuples
+    still grow with the number of valid readings. There is no total record limit.
+    Close this result on completion, processing failure or cancellation; the caller
+    retains ownership of the session and its transaction.
+    """
     raw = aliased(RawHealthData)
-    records = await session.scalars(
+    records = await session.stream_scalars(
         select(raw.raw_json)
         .select_from(HeartRate)
         .join(
@@ -59,13 +78,51 @@ async def heart_rate_samples(
             source_filter,
         )
         .order_by(raw.source_start_time)
+        .execution_options(yield_per=_HEART_BATCH)
     )
     found = []
-    for record in records:
-        measurement = current_heart_rate(record)
-        if measurement is None:
-            continue
-        timestamp, bpm = measurement
-        source = record.get("dataSource") if isinstance(record, dict) else None
-        found.append((timestamp, bpm, source.get("platform") if isinstance(source, dict) else None))
+    try:
+        async for record in records:
+            measurement = current_heart_rate(record)
+            if measurement is None:
+                continue
+            timestamp, bpm = measurement
+            source = record.get("dataSource") if isinstance(record, dict) else None
+            found.append(
+                (
+                    timestamp,
+                    bpm,
+                    source.get("platform") if isinstance(source, dict) else None,
+                )
+            )
+    finally:
+        await records.close()
+    return found
+
+
+async def chart_heart_rate_samples(
+    session: AsyncSession,
+    start: datetime,
+    stop: datetime,
+    source_filter: ColumnElement[bool],
+) -> list[tuple[datetime, float, object]]:
+    """Reuse current hours, falling back only for each missing or stale UTC hour."""
+    cached = await heart_projection.packets(session, start, stop, source_filter)
+    if cached is None:
+        return await heart_rate_samples(session, start, stop, source_filter)
+    found = []
+    bucket = heart_projection.hour(start)
+    while bucket < stop:
+        if bucket in cached:
+            found.extend(cached[bucket])
+        else:
+            found.extend(
+                await heart_rate_samples(
+                    session,
+                    max(start, bucket),
+                    min(stop, bucket + heart_projection.HOUR),
+                    source_filter,
+                )
+            )
+        bucket += heart_projection.HOUR
     return found

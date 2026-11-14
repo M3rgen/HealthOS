@@ -8,7 +8,7 @@ from zoneinfo import ZoneInfo
 
 from app.core.timeutil import as_utc
 from app.google_health.data_types import REGISTRY, WAKE_DATED_TYPES, RecordKind
-from app.parsers.common import parse_date, parse_datetime, payload_for
+from app.parsers.common import number, parse_date, parse_datetime, payload_for
 from app.services.shared.finite_math import finite_difference
 
 from .archive_query import ArchiveQuery
@@ -173,6 +173,50 @@ def measurement_summaries(
     return results
 
 
+def _source_measurement(
+    kind: str, field: str, supplied: object, factor: float
+) -> tuple[float | None, list[str]]:
+    """Validate signs for explicit Google body, quantity and physiology measurements.
+
+    Validate the source Decimal before scaling or casting: even values smaller
+    than the float range are negative measurements, never measured zero.
+    Large finite negatives likewise retain their sign reason before conversion
+    could overflow. Signed zero remains a valid measurement in the final unit.
+    Keep the evidence field and its precise cause while excluding its value
+    from statistics, measurement dates, change and freshness. Null evidence also
+    cannot conflict with a valid value reported for the same interval.
+    Energy and respiratory fields keep separate definitions, including the
+    top-level and full-sleep respiratory readings. Rejecting one field never
+    substitutes the other field's value. Interval amounts keep their scope.
+    VO2 readings keep their method-specific groups and longer freshness window;
+    the sign policy only decides whether each source value is usable evidence.
+    Missing, malformed, nonfinite and unrepresentable positive values still use
+    scaled_measurement's existing reasons. The allowlist deliberately excludes
+    temperature: signed temperatures and baseline derivations remain supported.
+    Manual measurements retain their own sign policies. No physiological range
+    or source preference is imposed, and the normalized archive is untouched.
+    """
+    if kind in (
+        "weight",
+        "height",
+        "body-fat",
+        "active-energy-burned",
+        "total-calories",
+        "distance",
+        # Both the top-level and full-sleep respiratory definitions require this sign.
+        "daily-respiratory-rate",
+        "respiratory-rate-sleep-summary",
+        # Estimate methods remain separate, but share the VO2 sign policy.
+        "vo2-max",
+        "daily-vo2-max",
+        "run-vo2-max",
+    ):
+        source = number(supplied)
+        if source is not None and source.is_finite() and source < 0:
+            return None, [f"negative_measurement:{field}"]
+    return scaled_measurement(supplied, factor)
+
+
 def _group_source_measurements(
     inputs: Inputs,
     query: ArchiveQuery,
@@ -221,7 +265,7 @@ def _group_source_measurements(
             if not exists:
                 continue
             supported = True
-            value, reasons = scaled_measurement(supplied, factor)
+            value, reasons = _source_measurement(kind, field, supplied, factor)
             if payload.get("unit") not in (None, unit):
                 value = None
                 reasons.append("unsupported_unit")

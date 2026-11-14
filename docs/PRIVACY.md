@@ -30,6 +30,8 @@ that concerns your health.
   read from a file and never stored in `.env`, the database or a log.
 - **Backups** are encrypted (`age` or `gpg`) on your host and kept forever unless you opt into
   retention.
+- **Nothing personal in the repository.** Real health records, secrets, logs, backups and local
+  verification outputs are excluded from this repository; screenshots and fixtures are synthetic.
 
 ## What leaves your machine
 

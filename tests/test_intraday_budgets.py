@@ -2,6 +2,7 @@
 
 import json
 from collections import Counter
+from copy import deepcopy
 from datetime import datetime, timedelta
 from itertools import pairwise
 from random import Random
@@ -13,14 +14,17 @@ from interpretation_records import SCOPE_ERROR, call
 from sqlalchemy import select, update
 
 from app.google_health.data_types import REGISTRY
-from app.models.health import Steps
+from app.models.health import HeartRate, Steps
 from app.models.identity_tables import RawSourceDevice
+from app.models.raw_versions import RawHealthDataVersion
 from app.models.state import RawHealthData
 from app.parsers.common import payload_hash
 from app.services.interpretation import health_interpretation
 from app.services.interpretation import interpretation_cells as cells_service
 from app.services.interpretation import interpretation_intraday as intraday
 from app.services.interpretation.interpretation_types import Interpretation, Refusal
+from app.services.readers.current_heart import current_heart_rate
+from app.services.readers.current_steps import current_steps
 
 
 def heart(name, offset, value):
@@ -53,6 +57,86 @@ def assert_refusal(result, code):
     if code.endswith("_budget_exceeded"):
         assert result["error"] == SCOPE_ERROR
     assert "summaries" not in result and "next_cursor" not in result
+
+
+@pytest.mark.parametrize("kind", ["steps", "heart-rate"])
+@pytest.mark.parametrize("selected", [0, 1, 2])
+@pytest.mark.parametrize(
+    "value,expected",
+    [(v, None) for v in ("NaN", "sNaN", "Infinity", "-Infinity", "1e10000", "1e-10000")]
+    + [(v, 120) for v in (None, "text", True, False)]
+    + [(0, 0), (-0.0, 0), ("-0", 0), (7, 7)]
+    + [(v, None) for v in (-7, "-7", "-1e-1000", "-1e-10000", "-1e1000")],
+)
+async def test_current_multifield_correction_and_alias_recovery(
+    sessions, kind, selected, value, expected
+):
+    is_steps = kind == "steps"
+    if selected == 2 and expected == 120:  # No later alias can supply the fallback.
+        expected = None
+    fields = ("count", "countSum", "steps") if is_steps else ("beatsPerMinute", "bpm", "value")
+    original = step("edited", 60, 120, 77) if is_steps else heart("edited", 60, 77)
+    if not is_steps:
+        await store(sessions, kind, heart("before", 0, 60), heart("after", 120, 60))
+    key = REGISTRY[kind].json_key
+    corrected, recovery = deepcopy(original), deepcopy(original)
+    corrected[key].update(
+        {
+            field: "text" if i < selected else value if i == selected else 120
+            for i, field in enumerate(fields)
+        }
+    )
+    recovery[key].pop(fields[0])  # Missing primary; the last alias supplies measured zero.
+    recovery[key].update({fields[1]: False, fields[2]: 0})
+    reader = current_steps if is_steps else current_heart_rate
+    model, column = (Steps, "count") if is_steps else (HeartRate, "bpm")
+    for record, measurement in ((original, 77), (corrected, expected), (recovery, 0)):
+        stored = await store(sessions, kind, record)
+        current = reader(record)
+        assert (current[-1] if current else None) == measurement
+        async with sessions() as session:
+            before = await snapshot(session)
+            raw = await session.scalar(
+                select(RawHealthData).where(RawHealthData.google_data_point_id == record["name"])
+            )
+            assert raw.raw_json == record
+            if stored.normalization_skipped:
+                normalized = await session.scalar(
+                    select(model).where(model.google_data_point_id == record["name"])
+                )
+                assert getattr(normalized, column) == 77
+        result = await call(sessions, "intraday", data_type=kind, limit=1)
+        Interpretation.model_validate(result)
+        json.dumps(result, allow_nan=False)
+        [row] = result["summaries"]
+        [evidence] = [e for e in row["evidence"] if e["record"] == record["name"]]
+        assert evidence["value"] == measurement and evidence["field"] == fields[0]
+        codes = ["unsupported_or_missing_value"] if measurement is None else []
+        assert evidence["reason_codes"] == codes
+        assert ("unsupported_or_missing_value" in row["reason_codes"]) == (measurement is None)
+        assert row["statistics"]["count"] == (int(measurement is not None) + (0 if is_steps else 2))
+        if measurement is None:
+            assert row["supported_seconds"] == 0 and row["time_weighted_mean"] is None
+            assert row["cells"] == naive_cells([] if not is_steps else [(60, 120, None)])
+            assert row["statistics"]["median"] == (None if is_steps else 60)
+        else:
+            assert row["supported_seconds"] == (60 if is_steps else 120)
+            mean = measurement / 60 if is_steps else (60 + measurement) / 2
+            assert row["time_weighted_mean"] == mean
+            assert row["cells"] == naive_cells(
+                [(60, 120, mean)] if is_steps else [(0, 60, mean), (60, 120, mean)]
+            )
+        assert result["next_cursor"] is None
+        async with sessions() as session:
+            assert await snapshot(session) == before
+    async with sessions() as session:
+        versions = list(
+            await session.scalars(
+                select(RawHealthDataVersion).order_by(RawHealthDataVersion.version)
+            )
+        )
+        assert [version.raw_json for version in versions] == [original, corrected]
+        assert [version.version for version in versions] == [1, 2]
 
 
 @pytest.mark.parametrize("dense", [False, True])
@@ -193,6 +277,25 @@ async def test_step_cells_match_reference_with_equal_endpoints_missing_and_zero(
         assert await snapshot(session) == before
 
 
+@pytest.mark.parametrize("value", [-120, "-120", "-1e-1000"])
+async def test_negative_step_evidence_leaves_other_movement_supported(sessions, value):
+    await store(sessions, "steps", step("negative", 0, 60, value), step("valid", 60, 120, 120))
+    async with sessions() as session:
+        before = await snapshot(session)
+    row = (await call(sessions, "intraday", data_type="steps"))["summaries"][0]
+    assert row["cells"] == naive_cells([(0, 60, None), (60, 120, 2)])
+    assert row["supported_seconds"] == 60 and row["time_weighted_mean"] == 2
+    assert row["gap_seconds"] == 86400 - 60 and row["conflict_seconds"] == 0
+    assert row["statistics"]["count"] == 1
+    # Evidence follows raw UUID order, which need not match ingestion order.
+    assert {e["record"]: (e["value"], e["reason_codes"]) for e in row["evidence"]} == {
+        "synthetic/steps/negative": (None, ["unsupported_or_missing_value"]),
+        "synthetic/steps/valid": (120, []),
+    }
+    async with sessions() as session:
+        assert await snapshot(session) == before
+
+
 async def test_heart_conflicts_gap_limit_zero_and_clipped_interpolation(sessions):
     samples = [
         (-60, 60),
@@ -295,9 +398,12 @@ async def test_filters_precede_planning_but_excluded_changes_expire_cursor(
     monkeypatch.setattr(cells_service, "MAX_INTRADAY_CELLS", 3 * len(expected))
     monkeypatch.setattr(health_interpretation, "MAX_SUMMARIES", len(expected))
     planner = Mock(wraps=intraday.CellPlan)
+    parser = Mock(wraps=intraday._intraday_measurement)
     monkeypatch.setattr(intraday, "CellPlan", planner)
+    monkeypatch.setattr(intraday, "_intraday_measurement", parser)
     page = await call(sessions, "intraday", limit=1, **args, **filters)
     assert planner.call_count == len(expected)
+    assert parser.call_count == len(expected)
     rest = await call(sessions, "intraday", cursor=page["next_cursor"], **args, **filters)
     assert page["summaries"] + rest["summaries"] == expected
     assert rest["next_cursor"] is None
@@ -410,8 +516,11 @@ async def test_default_evidence_limit_bounds_multi_day_amplification(sessions, m
     args = dict(start_date=str(DAY - timedelta(days=89)), data_type="steps")
     monkeypatch.setattr(health_interpretation, "RESPONSE_BUDGET_BYTES", 8 * 1024 * 1024)
     build = Mock(wraps=intraday.Intraday)
+    parser = Mock(wraps=intraday._intraday_measurement)
     monkeypatch.setattr(intraday, "Intraday", build)
+    monkeypatch.setattr(intraday, "_intraday_measurement", parser)
     result = await call(sessions, "intraday", limit=1, **args)
+    assert parser.call_count == 242
     assert result["total_summaries"] == 90 and result["next_cursor"]
     assert sum(len(item.kwargs["evidence"]) for item in build.call_args_list) == 20_000
     await store(sessions, "steps", step("one-over", 60, 61, 1))

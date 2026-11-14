@@ -30,7 +30,7 @@ from datetime import UTC, date, datetime, timedelta
 from typing import Any, Self
 
 from sqlalchemy import func, select
-from sqlalchemy.ext.asyncio import async_sessionmaker
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.config import Settings
 from app.core.fetch_window import FetchWindow
@@ -46,7 +46,8 @@ from app.schemas.status import GarminDaily, GarminStatus
 from app.services.identities.source_precedence import Policy, category
 
 from .garmin_checkpoints import Checkpoints, Fenced
-from .garmin_current import newest_records
+from .garmin_daily_summary import daily_summaries
+from .garmin_daily_summary import day_summary as _day  # noqa: F401 - existing public import
 from .garmin_ingestion import GarminPage, GarminSource
 from .garmin_kinds import (  # noqa: F401 - existing public imports
     ACTIVITY_PAGE,
@@ -413,25 +414,25 @@ class GarminPull:
 
     # -- projections -------------------------------------------------------------------
 
-    async def status(self) -> GarminStatus:
-        async with self.sessions() as session:
-            counts = {
-                kind: (total, newest)
-                for kind, total, newest in (
-                    await session.execute(
-                        select(
-                            GarminRawRecord.kind,
-                            func.count(GarminRawRecord.id),
-                            func.max(GarminRawRecord.key),
-                        ).group_by(GarminRawRecord.kind)
-                    )
-                ).tuples()
-            }
-            responses = await session.scalar(select(func.count(GarminApiResponse.id))) or 0
-            states = {
-                state.kind: state for state in (await session.scalars(select(GarminPullState)))
-            }
-            normalization = await normalization_status(session)
+    async def status(self, *, session: AsyncSession | None = None) -> GarminStatus:
+        if session is None:
+            async with self.sessions() as owned_session:
+                return await self.status(session=owned_session)
+        counts = {
+            kind: (total, newest)
+            for kind, total, newest in (
+                await session.execute(
+                    select(
+                        GarminRawRecord.kind,
+                        func.count(GarminRawRecord.id),
+                        func.max(GarminRawRecord.key),
+                    ).group_by(GarminRawRecord.kind)
+                )
+            ).tuples()
+        }
+        responses = await session.scalar(select(func.count(GarminApiResponse.id))) or 0
+        states = {state.kind: state for state in (await session.scalars(select(GarminPullState)))}
+        normalization = await normalization_status(session)
         kinds: dict[str, Any] = {}
         for name in KIND_NAMES:
             total, newest = counts.get(name, (0, None))
@@ -454,8 +455,12 @@ class GarminPull:
                 },
             }
         successes = [s.last_success_at for s in states.values() if s.last_success_at]
-        failures = [s for s in states.values() if _failing(s)]
-        latest_failure = max(failures, key=lambda s: as_utc(s.last_error_at)) if failures else None
+        failures = [
+            (as_utc(s.last_error_at), s)
+            for s in states.values()
+            if s.last_error_at is not None and _failing(s)
+        ]
+        latest_failure = max(failures, key=lambda pair: pair[0])[1] if failures else None
         return {
             "enabled": self.enabled,
             "key_file_present": self.settings.garmin_api_key_file.expanduser().is_file(),
@@ -472,25 +477,14 @@ class GarminPull:
             "normalization": normalization,
         }
 
-    async def daily(self, start: date, end: date) -> GarminDaily:
+    async def daily(
+        self, start: date, end: date, *, session: AsyncSession | None = None
+    ) -> GarminDaily:
         """A read-only per-day summary from the newest Garmin record of each kind and day."""
-        wanted = (
-            "steps",
-            "daily-summaries",
-            "heart-rate",
-            "sleep",
-            "sleep-summaries",
-            "hrv-summaries",
-            "hrv",
-            "spo2",
-            "stress",
-        )
-        async with self.sessions() as session:
-            records = await newest_records(session, wanted, start, end)
-        latest = {
-            (kind, key): body for kind, values in records.items() for key, body in values.items()
-        }
-        days = sorted({key for _, key in latest})
+        if session is None:
+            async with self.sessions() as owned_session:
+                return await self.daily(start, end, session=owned_session)
+        days = await daily_summaries(session, start, end)
         policy = Policy.from_settings(self.settings)
         return {
             "source": "garmin",
@@ -502,7 +496,7 @@ class GarminPull:
                 metric: policy.priority("GARMIN", category(metric)) for metric in DAILY_METRICS
             },
             "policy": policy.as_dict(),
-            "days": [_day(day, {kind: latest.get((kind, day)) for kind in wanted}) for day in days],
+            "days": days,
         }
 
 
@@ -516,55 +510,3 @@ def _failing(state: GarminPullState | None) -> bool:
 
 def _iso_time(value: datetime | None) -> str | None:
     return as_utc(value).isoformat() if value is not None else None
-
-
-def _number(value: Any) -> int | float | None:
-    if isinstance(value, bool) or not isinstance(value, int | float):
-        return None
-    if isinstance(value, float) and (value != value or value in (float("inf"), float("-inf"))):
-        return None
-    return value
-
-
-def _get(record: Any, *path: str) -> Any:
-    value = record
-    for name in path:
-        value = value.get(name) if isinstance(value, dict) else None
-    return value
-
-
-def _day(day: str, records: dict[str, Any]) -> dict[str, Any]:
-    steps, summary, spo2 = (records.get(name) for name in ("steps", "daily-summaries", "spo2"))
-    # Sleep and HRV fall back by whole record, even when a present primary has no value.
-    sleep = records.get("sleep") or records.get("sleep-summaries")
-    hrv = records.get("hrv-summaries") or _get(records.get("hrv"), "hrvSummary")
-    resting = _number(_get(summary, "heartRate", "restingValue"))
-    if resting is None:
-        resting = _number(_get(records.get("heart-rate"), "restingHeartRate"))
-    stress = _number(_get(records.get("stress"), "values", "overallStressLevel"))
-    if stress is None:
-        stress = _number(_get(summary, "stress", "avgLevel"))
-    return {
-        "date": day,
-        "steps": _number(_get(steps, "totalSteps")),
-        "distance_m": _number(_get(steps, "totalDistance")),
-        "resting_heart_rate": resting,
-        "sleep_seconds": _number(_get(sleep, "sleepTimeSeconds")),
-        "sleep_stages_seconds": {
-            "deep": _number(_get(sleep, "deepSleepSeconds")),
-            "light": _number(_get(sleep, "lightSleepSeconds")),
-            "rem": _number(_get(sleep, "remSleepSeconds")),
-            "awake": _number(_get(sleep, "awakeSleepSeconds")),
-        },
-        "sleep_score": _number(_get(sleep, "sleepScores", "overall", "value")),
-        "body_battery": {
-            "max": _number(_get(summary, "bodyBattery", "maxValue")),
-            "min": _number(_get(summary, "bodyBattery", "minValue")),
-            "latest": _number(_get(summary, "bodyBattery", "latestValue")),
-            "charged": _number(_get(summary, "bodyBattery", "chargedValue")),
-            "drained": _number(_get(summary, "bodyBattery", "drainedValue")),
-        },
-        "stress_average": stress,
-        "hrv_last_night_average": _number(_get(hrv, "lastNightAvg")),
-        "spo2_average": _number(_get(spo2, "averageSpO2")),
-    }

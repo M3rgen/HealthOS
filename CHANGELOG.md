@@ -9,6 +9,41 @@ in this file when they were made; the 0.2 entry was written afterwards from the 
 > There is no 0.3, 0.4 or 0.5 release: 0.2 is newer than every snapshot labelled 0.5.0, and the
 > releases since are 0.2.1, 0.2.2 and so on.
 
+## [0.2.3] - 2026-11-14
+
+Everything merged since v0.2.2.1. This closes the fifth hardening pass; it follows the four-part
+interim release and returns to a three-part version.
+
+Upgrade notes:
+
+- Migration `20261112_0035` adds Garmin time evidence and `20261114_0036` adds the Google heart projection (`google_heart_hours`, `google_heart_projection_state`, `google_heart_pending`). Both run in the `migrate` service, only add tables and triggers, change no existing row and refuse a downgrade that would discard their contents ([notes](docs/MIGRATIONS.md)). `20261114_0036` takes its locks with a five-second timeout and fails cleanly instead of queueing behind a long transaction.
+- The heart projection is filled on request: `python -m app.cli.heart_backfill --hours 168` (resumable, newest hours first). Until it reports `ready`, the dashboard reads heart rate from the raw archive exactly as before ([heart projection](docs/reference/heart-projection.md)). Its effect on PostgreSQL 17 with rotating disks has not been measured, so the production performance target remains unverified.
+- Upgrading directly from v0.2.2 still pauses Google sync until you use "Connect Google" once for fresh consent; records and backups are kept ([steps](docs/RUNBOOK.md#upgrade-from-v022)).
+- `/health` answers `503` with `HEALTH_DATABASE_UNAVAILABLE` (`error_type=read_timeout`) when its database read exceeds the limit. `/api/status` and the other browser read routes answer `504`.
+
+Reading and performance:
+
+- Browser read requests carry a database statement time limit; a streamed response that reaches it also ends as `504`. The limit lives in the database layer and the HTTP mapping in `app/api/read_limits.py`.
+- The dashboard heart chart reads hourly packets of original samples instead of rescanning the raw archive. Measured write overhead with the projection triggers: steps +6 %, heart insert +8 %, heart correction +23 %.
+- History bounds for steps, sleep and heart rate come from displayable daily values and are cached per archive snapshot, so they are recomputed only when the archive changes.
+- Garmin daily, intraday heart, sleep and workout reads, Google daily, heart and sleep reads, Umay coverage, canonical day and manual profile reads no longer buffer whole archives or repeat per-day queries; memory use is bounded and tested on SQLite and PostgreSQL.
+
+Correctness:
+
+- Negative, non-finite and out-of-range values in Garmin, Google and Umay steps, sleep, heart rate, HRV, oxygen, respiration, VO₂, energy, distance, weight, height, body fat and workout durations are kept in the archive but no longer shown as valid measurements, and an invalid primary field is not replaced by an alias.
+- The coverage panel judges invalid step and sleep records the way the dashboard does, counts weight from the raw table, judges sleep per day and reads only the Google archive for Google sleep.
+- Google daily values and the heart chart choose platforms by source priority without mixing them; concurrent contradictory profile measurements are kept.
+- The step chart distributes daylight-saving changes that do not fall on the hour; multi-day workouts join the heart source window; FIT compressed timestamps survive unknown messages; JSON number tokens keep their sign and very small negatives no longer render as zero.
+
+Documentation and repository:
+
+- The README went from 327 to 144 lines; setup, Garmin, troubleshooting and screenshot detail moved under `docs/`. New banner and social preview images replace the PNG files.
+- Preview fixtures are consistent per date, and `frontend/preview/shoot.cjs --readme` takes the README frames (English, 2x).
+- Published tests no longer import files that are excluded from the published tree.
+- The Umay dialog breakpoint is aligned to 900 px.
+
+Not proven: the heart projection on PostgreSQL 17 or rotating disks; any ruleset on `main` (none is applied); real phones, Safari and screen readers.
+
 ## [0.2.2.1] - 2026-11-13
 
 The first interim release toward 0.2.3. It covers everything merged since v0.2.2; interim
@@ -162,7 +197,7 @@ Quality and repository:
 - The clock matrix works again, and a broken harness now fails the blocking `verify` job (`make test-clock-preflight`). Event-loop tests count loop turns instead of wall-clock time; cancellation-budget tests wait for the archive write. `codex_runtime_rpc.py` counts toward coverage.
 - Frontend functions are limited to 60 lines and complexity 10, and `tsc --strict` errors went from 469 to 9 (all three.js typings).
 
-Not proven: any run on GitHub-hosted runners or `x64` (`act` is `arm64`, and skips CodeQL and `smoke`, which were run by hand on the host); `release.yml`, the `release` environment and attestation; a real ChatGPT turn through the filtered front (run with the real CLI and a synthetic provider); Linux and systemd for the bridge; the fifteen opt-in real-CLI tests in this combined tree; a real Garmin account; real screen readers and phones; Debian (the deployment guide was followed on Ubuntu 24.04). `npm audit` over the build tooling reports six advisories (two high, vite), left to the maintainer. The 8 MiB frame limit of the bridge front is a judgement, not a measurement.
+Not proven: any run on GitHub-hosted runners or `x64` (`act` is `arm64`, and skips CodeQL and `smoke`, which were run by hand on the host); `release.yml`, the `release` environment and attestation; a real ChatGPT turn through the filtered front (run with the real CLI and a synthetic provider); Linux and systemd for the bridge; the fifteen opt-in real-CLI tests in this combined tree; a real Garmin account; real screen readers and phones; Debian (the deployment guide was followed on Ubuntu 24.04). `npm audit` over the build tooling reported six advisories at the time (two high, vite); Vite 8.3.8 in the fifth pass closed them. The 8 MiB frame limit of the bridge front is a judgement, not a measurement.
 
 ### Second hardening pass, November 2026
 
@@ -257,8 +292,9 @@ Quality gates:
   `local_sockets` fixture (`HEALTHOS_REQUIRE_SOCKETS=1`) are new. Pyright is `standard`; Ruff `C901` ≤ 24 (lowered to 16 later this month).
 
 Not yet proven: no run of these workflows on GitHub Actions, rulesets not applied, `publish` and
-attestation never executed. `npm audit` over dev dependencies reports vite and source-map-js (production: none). Tested only in
-Chromium: real phones, Safari and screen readers were not. The Apple importer's presence was stubbed.
+attestation never executed. `npm audit` over dev dependencies reported vite and source-map-js at the
+time (production: none); neither is reported since Vite 8.3.8. Tested only in Chromium: real phones,
+Safari and screen readers were not. The Apple importer's presence was stubbed.
 
 ### Documentation and first run
 

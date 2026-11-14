@@ -36,6 +36,9 @@ async def test_numeric_preparation_matches_postgres_and_keeps_whole_pages(pg_ses
                 numeric_point(kind, path, value)
                 for value in (*BAD_NUMBERS, str(overflow * Decimal(str(multiplier))))
             ]
+            if kind in {"sleep", "steps"}:
+                # SQL can hold this value, but sleep/step evidence cannot be negative.
+                invalid.insert(0, numeric_point(kind, path, str(-good * Decimal(str(multiplier)))))
             records = [valid, *invalid]
         cast_value = text(f"SELECT CAST(CAST(:value AS TEXT) AS NUMERIC({precision}, {scale}))")
         async with pg_sessions.begin() as session:
@@ -44,13 +47,18 @@ async def test_numeric_preparation_matches_postgres_and_keeps_whole_pages(pg_ses
                 parsed = normalize(
                     spec, numeric_point(kind, path, str(good * sign * Decimal(str(multiplier))))
                 )
-                assert parsed.values[column] == expected
+                if kind in {"sleep", "steps"} and sign == -1:
+                    assert parsed is None
+                else:
+                    assert parsed is not None and parsed.values[column] == expected
                 with pytest.raises(DBAPIError):
                     async with session.begin_nested():
                         await session.execute(cast_value, {"value": str(overflow * sign)})
             stats = await store_records(session, spec, records)
             # An optional column's overflow is stored as NULL; its record is kept.
             kept = [record for record in invalid if normalize(spec, record) is not None]
+            if kind in {"sleep", "steps"}:
+                assert invalid[0] not in kept
             assert (invalid[-1] in kept) == model.__table__.c[column].nullable
             assert stats.inserted == len(records) and stats.normalized == 1 + len(kept)
             assert stats.normalization_skipped == len(invalid) - len(kept)

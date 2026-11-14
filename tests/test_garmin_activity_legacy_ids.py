@@ -43,6 +43,25 @@ def legacy_row(record, version="v2", **extra):
     )
 
 
+async def test_canonical_version_wins_when_same_body_also_has_a_legacy_key(sessions, monkeypatch):
+    a, b = [body(identifier) for identifier in LONG_IDS]
+    await store_page(sessions, "activities", [a], NOW)
+    await legacy_page(sessions, monkeypatch, [a, b])
+    before = await snapshot(sessions, (GarminRawRecord,))
+    assert (await store_page(sessions, "activities", [a, a, b], NOW)).inserted == 0
+    assert await snapshot(sessions, (GarminRawRecord,)) == before
+    async with sessions() as session:
+        sightings = (
+            await session.execute(
+                select(GarminRawRecord.key, GarminRawRecord.body_sha256)
+                .join(GarminRecordObservation)
+                .order_by(GarminRecordObservation.id.desc())
+                .limit(2)
+            )
+        ).all()
+    assert set(sightings) == {(activity_key(a), payload_hash(a)), (PREFIX, payload_hash(b))}
+
+
 @pytest.mark.parametrize("mode", ["direct", "bounded"])
 @pytest.mark.parametrize("observed", [False, True])
 @pytest.mark.parametrize("identifiers", [LONG_IDS, tuple(map(int, LONG_IDS))])

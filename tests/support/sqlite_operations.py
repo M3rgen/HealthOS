@@ -27,6 +27,10 @@ async def no_lock(*args, **kwargs):
     pass
 
 
+async def denied(*args, **kwargs):
+    return False
+
+
 async def granted(*args, **kwargs):
     return True
 
@@ -124,6 +128,8 @@ def refuse_while_held(operations, table, schema, where, what):
 
 
 OPERATIONS = {
+    "app.services.readers.heart_maintenance.fence": denied,
+    "app.services.readers.heart_projection.packets": no_role_risk,
     "app.sync.ownership._run_lock": _SqliteLock,
     "app.db.downgrade_guard._refuse_while_held": refuse_while_held,
     "app.services.identities.source_chain_locks.lock_data_type": no_lock,

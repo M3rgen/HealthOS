@@ -18,11 +18,56 @@ from app.google_health.client import Page
 from app.models.health import SleepSession
 from app.models.raw_versions import RawHealthDataVersion
 from app.models.state import RawHealthData
+from app.parsers.sleep import SLEEP_NUMERIC_ERROR
 from app.services.interpretation.canonical_daily import bounds
 from app.services.umay import codex_health
 
 DATES = [(DAY + timedelta(days=i)).isoformat() for i in range(3)]
 QUERY = {"start_date": DATES[0], "end_date": DATES[-1], "timezone": "UTC"}
+
+
+@pytest.mark.parametrize("label", ["AWAKE", "WAKE", "RESTLESS"])
+@pytest.mark.parametrize("bad_first", [False, True])
+async def test_reversed_stage_correction_invalidates_cached_daily_reads(
+    api, sessions, label, bad_first
+):
+    original = sleep(summary={"minutesAsleep": 60})
+    await store(sessions, "sleep", original)
+    query = {"start_date": str(DAY), "end_date": str(DAY), "timezone": "UTC"}
+    good = await codex_health.read_health(sessions, {"action": "daily", **query})
+    assert good["days"][0]["sleep_seconds"] == 3600
+    assert streams(good["derived"], "sleep_seconds")[0]["value"] == 3600
+    entries = [stage(label, 2, 1), stage(label, 1, 3)]
+    if not bad_first:
+        entries.reverse()
+    corrected = sleep(stages=entries)
+    stats = await store(sessions, "sleep", corrected)
+    assert stats.normalization_skipped == stats.updated == stats.versions_kept == 1
+    async with sessions() as session:
+        assert await session.scalar(select(RawHealthData.raw_json)) == corrected
+        [version] = list(await session.scalars(select(RawHealthDataVersion)))
+        assert version.raw_json == original and version.version == 1
+        retained = await session.scalar(select(SleepSession))
+        assert retained.duration_seconds == 7200 and retained.awake_seconds is None
+        before = await snapshot(session)
+    response = await api.get("/api/dashboard", params={"end_date": str(DAY), "days": 1})
+    assert response.status_code == 200, response.text
+    day = response.json()["days"][0]
+    assert day["sleep_seconds"] is None and day["sleep_assumptions"] == [SLEEP_NUMERIC_ERROR]
+    daily = await codex_health.read_health(sessions, {"action": "daily", **query})
+    assert daily["days"][0]["sleep_seconds"] is None
+    [derived] = streams(daily["derived"], "sleep_seconds")
+    assert derived["value"] is None and SLEEP_NUMERIC_ERROR in derived["uncertainties"]
+    assert derived["sleep"]["sessions"][0]["stage_totals_seconds"] == {label.lower(): None}
+    async with sessions() as session:
+        assert await snapshot(session) == before
+    await store(sessions, "sleep", original)
+    recovered = await codex_health.read_health(sessions, {"action": "daily", **query})
+    assert recovered["days"][0]["sleep_seconds"] == 3600
+    assert streams(recovered["derived"], "sleep_seconds")[0]["value"] == 3600
+    async with sessions() as session:
+        versions = await session.scalars(select(RawHealthDataVersion).order_by("version"))
+        assert [row.raw_json for row in versions] == [original, corrected]
 
 
 @pytest.fixture
@@ -130,7 +175,7 @@ async def test_interval_loss_and_recovery_across_readers(api, sessions, loss):
     await Runner(sessions, "sync", "sleep", T0, T0 + timedelta(days=3)).run(
         Client(Page([original, sound, zero], None))
     )
-    await outputs(api, sessions, [7200, None, 1800])
+    await outputs(api, sessions, [7200, None, 0])
     corrected = sleep(
         start=T0 + timedelta(days=1),
         end=T0 + timedelta(days=1, hours=2),
@@ -165,14 +210,14 @@ async def test_interval_loss_and_recovery_across_readers(api, sessions, loss):
         assert retained.duration_seconds == 7200
         [version] = list(await session.scalars(select(RawHealthDataVersion)))
         assert version.raw_json == original and version.version == 1
-    await outputs(api, sessions, [None, None, 1800])
+    await outputs(api, sessions, [None, None, 0])
     recovery = sleep(
         start=T0 + timedelta(hours=23),
         end=T0 + timedelta(days=1, hours=1),
         summary={"minutesAsleep": 0},
     )
     await store(sessions, "sleep", recovery)
-    await outputs(api, sessions, [None, 0, 1800])
+    await outputs(api, sessions, [None, 0, 0])
     async with sessions() as session:
         versions = list(await session.scalars(select(RawHealthDataVersion).order_by("version")))
         assert [row.raw_json for row in versions] == [original, corrected]

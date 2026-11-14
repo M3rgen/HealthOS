@@ -21,10 +21,13 @@ FUNCTION_BODY = re.compile(
     r"(CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\b[^;$]*?\bAS\s+)(\$\w*\$)(.*?)\2",
     re.IGNORECASE | re.DOTALL,
 )
-# The one removal a trigger body may perform: the committing transaction's own entries in the
-# invalidation queue (0028). The queue holds no record; its rows never outlive the transaction.
+# The removals a trigger body may perform: the committing transaction's own entries in an
+# invalidation queue, derived days (0028) and Google heart hours (0036). A queue holds no
+# record (only a transaction id and a day or hour key that the transaction already bumped);
+# its rows never outlive the transaction that wrote them.
 ALLOWED_IN_FUNCTIONS = {
-    "DELETE FROM derived_day_pending WHERE xact = pg_current_xact_id()::text::bigint;"
+    "DELETE FROM derived_day_pending WHERE xact = pg_current_xact_id()::text::bigint;",
+    "DELETE FROM google_heart_pending WHERE xact = NEW.xact;",
 }
 
 # Alembic's own bookkeeping for the one merge revision (0029): it replaces two head rows of
@@ -67,6 +70,6 @@ def test_upgrading_the_whole_chain_generates_no_statement_that_loses_data(monkey
     statements, bodies = split_function_bodies(ddl)
     assert bodies  # the triggers really were generated
     statements, merges = MERGE_BOOKKEEPING.subn("", statements)
-    assert merges == 3  # 0029 and the Apple extension's merges, as Alembic's offline plan runs them
+    assert merges == 4  # 0029 and the Apple extension's merges, as Alembic's offline plan runs them
     assert LOSES_DATA.findall(statements) == []
     assert set().union(*map(removals_in, bodies)) <= ALLOWED_IN_FUNCTIONS

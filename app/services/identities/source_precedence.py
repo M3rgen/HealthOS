@@ -16,10 +16,10 @@ Vocabulary:
   after device sources), ``MANUAL`` (entered by the owner) and ``DEMO``
   (the synthetic sample data, listed in no policy; it is only loaded into an empty archive);
 * a **category** is ``activity`` or ``health``; ``CATEGORIES`` assigns every metric a reader
-  resolves to one of them, and ``sample_category`` places a minute-level sample inside a
+  resolves to one of them, and ``sample_category`` places a sample inside a
   selected workout window in ``activity`` and outside in ``health``;
 * a **conflict** is the same metric from two sources over an overlapping time: the same
-  calendar day for a daily value, the same minute for a sample, an overlapping start/end
+  calendar day for a daily value, the same minute slice for a sample, an overlapping start/end
   for a session. ``resolve`` orders the observations of one conflict by the policy: the first
   is ``selected``, the rest are ``alternatives`` (all kept, none summed).
 
@@ -29,9 +29,10 @@ shown as they are (``MANUAL`` is not a device). Nothing here reads or writes the
 
 from __future__ import annotations
 
+from bisect import bisect_left, bisect_right
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from app.core.config import Settings, get_settings
@@ -230,10 +231,92 @@ class SessionPlacement:
     alternatives: tuple[Observation, ...] = ()
 
 
-def _overlaps(left: Observation, right: Observation) -> bool:
-    if left.start is None or left.end is None or right.start is None or right.end is None:
-        return False
-    return left.start < right.end and right.start < left.end
+class _SessionIndex:
+    """Start-ordered segment tree for the first overlapping session in O(log n).
+
+    Each node retains the largest ends of two distinct sources. Excluding one source
+    still leaves an exact maximum, so even dense same-source inputs prune immediately.
+    Removing visited sessions lets a graph search find components without listing edges.
+    """
+
+    def __init__(self, items: Mapping[str, Observation], keys: Sequence[str]) -> None:
+        self.sessions = [
+            (item.start, item.end, item.source, key)
+            for key in keys
+            if (item := items[key]).start is not None and item.end is not None
+        ]
+        self.starts = [start for start, _, _, _ in self.sessions]
+        self.positions = {key: i for i, (_, _, _, key) in enumerate(self.sessions)}
+        self.size = 1 << (len(self.sessions) - 1).bit_length() if self.sessions else 1
+        self.tree: list[tuple[tuple[datetime, str], ...]] = [()] * (2 * self.size)
+        for i, (_, end, source, _) in enumerate(self.sessions):
+            self.tree[self.size + i] = ((end, source),)
+        for node in range(self.size - 1, 0, -1):
+            self._refresh(node)
+
+    def _refresh(self, node: int) -> None:
+        candidates = sorted((*self.tree[2 * node], *self.tree[2 * node + 1]), reverse=True)
+        best: list[tuple[datetime, str]] = []
+        for end, source in candidates:  # At most four entries, never session pairs.
+            if not best or source != best[0][1]:
+                best.append((end, source))
+            if len(best) == 2:
+                break
+        self.tree[node] = tuple(best)
+
+    def remove(self, key: str) -> None:
+        if key not in self.positions:
+            return
+        node = self.size + self.positions[key]
+        self.tree[node] = ()
+        while node > 1:
+            node //= 2
+            self._refresh(node)
+
+    def first(self, item: Observation, *, other_source: bool = False) -> str | None:
+        if item.start is None or item.end is None:
+            return None
+        start = item.start
+        stop = bisect_left(self.starts, item.end)
+
+        def search(node: int, left: int, right: int) -> str | None:
+            if left >= stop or not any(
+                end > start and (not other_source or source != item.source)
+                for end, source in self.tree[node]
+            ):
+                return None
+            if right - left == 1:
+                return self.sessions[left][3]
+            middle = (left + right) // 2
+            found = search(2 * node, left, middle)
+            return found if found is not None else search(2 * node + 1, middle, right)
+
+        return search(1, 0, self.size)
+
+
+def _session_groups(items: Mapping[str, Observation], devices: Sequence[str]) -> list[list[str]]:
+    """Visit each cross-source component, removing each session from the index once.
+
+    There are at most n successful and n unsuccessful neighbor queries, including for
+    complete overlap graphs. Together with sorting and removals this costs O(n log n).
+    """
+    index = _SessionIndex(items, devices)
+    unseen = set(devices)
+    groups = []
+    for seed in devices:
+        if seed not in unseen:
+            continue
+        unseen.remove(seed)
+        index.remove(seed)
+        members = [seed]
+        # Appending discoveries visits the component without recursion or queue copies.
+        for key in members:
+            while (neighbor := index.first(items[key], other_source=True)) is not None:
+                index.remove(neighbor)
+                unseen.remove(neighbor)
+                members.append(neighbor)
+        groups.append(members)
+    return groups
 
 
 def resolve_sessions(
@@ -250,38 +333,24 @@ def resolve_sessions(
     """
     policy = policy or Policy.from_settings()
     items = {item.record_id: item for item in sessions if item.record_id is not None}
-    parent = {key: key for key in items}
-
-    def find(name: str) -> str:
-        while parent[name] != name:
-            parent[name] = parent[parent[name]]
-            name = parent[name]
-        return name
 
     def order(key: str) -> tuple[datetime, str]:
         return items[key].start or datetime.min, key
 
     devices = sorted((key for key, item in items.items() if item.source != MANUAL), key=order)
-    for index, left in enumerate(devices):
-        for right in devices[index + 1 :]:
-            if items[left].source != items[right].source and _overlaps(items[left], items[right]):
-                parent[find(right)] = find(left)
-    groups: dict[str, list[str]] = {}
-    for key in devices:
-        groups.setdefault(find(key), []).append(key)
     placements: dict[str, SessionPlacement] = {
         key: SessionPlacement(PRIMARY) for key, item in items.items() if item.source == MANUAL
     }
-    for members in groups.values():
+    for members in _session_groups(items, devices):
         rank = {key: policy.rank(items[key].source, ACTIVITY) for key in members}
         best = min(rank.values())
         primaries = sorted((key for key in members if rank[key] == best), key=order)
         held: dict[str, list[Observation]] = {key: [] for key in primaries}
+        primary_index = _SessionIndex(items, primaries)
         for key in sorted((key for key in members if rank[key] != best), key=order):
-            holder = next(
-                (primary for primary in primaries if _overlaps(items[primary], items[key])),
-                primaries[0],
-            )
+            holder = primary_index.first(items[key])
+            if holder is None:
+                holder = primaries[0]
             held[holder].append(items[key])
             placements[key] = SessionPlacement(SECONDARY, holder)
         for primary in primaries:
@@ -297,31 +366,51 @@ def sample_category(moment: datetime, windows: Iterable[tuple[datetime, datetime
     return ACTIVITY if any(start <= moment < end for start, end in windows) else HEALTH
 
 
+def _sample_slices(
+    series: Mapping[str, Sequence[tuple[datetime, float]]],
+    boundaries: Sequence[datetime],
+) -> dict[tuple[datetime, int], dict[str, list[tuple[datetime, float]]]]:
+    """Partition UTC minutes at exact window boundaries, keeping original samples.
+
+    The boundary index from ``bisect_right`` puts a sample exactly at a boundary in
+    the slice starting there, so starts are inclusive and ends are exclusive.
+    """
+    slices: dict[tuple[datetime, int], dict[str, list[tuple[datetime, float]]]] = {}
+    for source, samples in series.items():
+        for moment, value in samples:
+            minute = moment.astimezone(UTC).replace(second=0, microsecond=0)
+            slice_index = bisect_right(boundaries, moment)
+            candidates = slices.setdefault((minute, slice_index), {})
+            candidates.setdefault(source, []).append((moment, value))
+    return slices
+
+
 def resolve_samples(
     series: Mapping[str, Sequence[tuple[datetime, float]]],
     windows: Sequence[tuple[datetime, datetime]] = (),
     policy: Policy | None = None,
 ) -> tuple[list[tuple[datetime, float, str]], dict[str, int]]:
-    """One value per minute from the series of several sources (source code -> samples).
+    """Select one source per UTC minute slice (source code -> original samples).
 
-    Samples are grouped by UTC minute; in a minute with several sources the category of the
-    minute (inside a workout window: activity, else health) picks the source, and that
-    source's samples of the minute are kept (a source's own samples are never mixed with
-    another's). Returns the kept samples with their source, time-ordered, and how many
-    minutes each source was selected for.
+    Exact workout starts and ends split a minute into half-open slices. Only sources
+    present in a slice compete under its activity/health policy; all of the winner's
+    samples in that slice survive. Minutes without boundaries keep their usual selection.
+    Returns time-ordered samples and each source's number of distinct contributing UTC
+    minutes. A source contributing several slices of one minute counts only once.
     """
     policy = policy or Policy.from_settings()
-    minutes: dict[datetime, dict[str, list[tuple[datetime, float]]]] = {}
-    for source, samples in series.items():
-        for moment, value in samples:
-            minute = moment.replace(second=0, microsecond=0)
-            minutes.setdefault(minute, {}).setdefault(source, []).append((moment, value))
+    boundaries = sorted(
+        {bound for start, end in windows if start < end for bound in (start, end)},
+    )
+    slices = _sample_slices(series, boundaries)
     kept: list[tuple[datetime, float, str]] = []
-    chosen: dict[str, int] = {}
-    for minute in sorted(minutes):
-        candidates = minutes[minute]
-        kind = sample_category(minute, windows)
+    chosen: dict[str, set[datetime]] = {}
+    for (minute, _), candidates in sorted(slices.items()):
+        # Every sample in this slice has the same category, even in overlapping windows.
+        moment = next(iter(candidates.values()))[0][0]
+        kind = sample_category(moment, windows)
         source = min(candidates, key=lambda code: (policy.rank(code, kind), code))
-        chosen[source] = chosen.get(source, 0) + 1
-        kept.extend((moment, value, source) for moment, value in sorted(candidates[source]))
-    return kept, chosen
+        chosen.setdefault(source, set()).add(minute)
+        samples = sorted(candidates[source])
+        kept.extend((moment, value, source) for moment, value in samples)
+    return kept, {source: len(minutes) for source, minutes in chosen.items()}

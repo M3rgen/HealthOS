@@ -29,14 +29,19 @@ def current_weight(record: object) -> tuple[datetime, float] | None:
     timestamp, _, _ = temporal(spec, record)
     if grams is None or timestamp is None:
         return None
+    # Check the finite source Decimal before scaling: a tiny negative can round
+    # to signed zero in storage or underflow during float conversion. Signed
+    # source zero remains valid; malformed/nonfinite numbers keep their policy.
+    if grams.is_finite() and grams < 0:
+        return None
     kilograms = finite_scale(grams, 1, 1000)
     return (timestamp, kilograms) if kilograms is not None else None
 
 
 async def latest_weight(
     session: AsyncSession, stop: datetime, eligibility: ColumnElement[bool]
-) -> tuple[datetime, float] | None:
-    """Stream newest source candidates 100 at a time, stopping at the first valid value.
+) -> tuple[datetime, float | None] | None:
+    """Stream the latest valid time group; a missing value denotes conflicting values.
 
     Only memory per batch is bounded; the scan has no total cap. It reaches older rows
     only past invalid corrections, and a cap would hide the valid measurement behind
@@ -44,6 +49,8 @@ async def latest_weight(
     Source times are refreshed by store_records even when normalization is skipped.
     Ordering and the upper bound must use those times, so an invalid correction cannot
     retain its old position or hide another valid Google/manual measurement.
+    Keep the first valid candidate's source selection, then compare every valid value
+    from that source at the same instant. Neither duplicates nor conflicts need a list.
     """
     raw = aliased(RawHealthData)  # eligibility probes the raw table itself
     candidates = await session.stream_scalars(
@@ -60,11 +67,20 @@ async def latest_weight(
         .order_by(raw.source_start_time.desc(), raw.google_data_point_id.desc())
         .execution_options(yield_per=100)
     )
+    latest = None
+    source = None
     try:
         async for record in candidates:
             measurement = current_weight(record)
-            if measurement is not None and measurement[0] < stop:
-                return measurement
+            if measurement is None or measurement[0] >= stop:
+                continue
+            if latest is None:
+                latest = measurement
+                source = record.get("dataSource")
+            elif measurement[0] != latest[0]:
+                break
+            elif record.get("dataSource") == source and measurement[1] != latest[1]:
+                latest = (latest[0], None)
     finally:
         await candidates.close()
-    return None
+    return latest

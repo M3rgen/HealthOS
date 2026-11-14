@@ -5,20 +5,27 @@ apart (raw_health_data_rejections) and coverage sees only what is archived.
 """
 
 import math
+from datetime import timedelta
+from zoneinfo import ZoneInfo
 
 import pytest
-from derived_records import BAND, PHONE, point, snapshot, store
+from derived_records import BAND, DAY, PHONE, T0, point, sleep, snapshot, steps, store
+from interpretation_records import QUERY as DAY_QUERY
 from retrieval_records import START
 from retrieval_records import point as response_point
-from sqlalchemy import select
+from sqlalchemy import event, select
 from support.coverage_fixtures import PATH, QUERY, daily, fetch, query
 from support.coverage_fixtures import api as api
 from support.coverage_fixtures import archive as archive
+from support.postgres_reads import read_statements
+from test_google_platform_daily import project
 
 from app.google_health.data_types import REGISTRY
 from app.models.raw_rejections import RawHealthDataRejection
 from app.models.raw_versions import RawHealthDataVersion
 from app.models.state import RawHealthData
+from app.services.synchronization import coverage_reading
+from app.services.synchronization.coverage_types import Window
 from app.services.umay.codex_health import read_health
 
 KINDS = [
@@ -231,3 +238,47 @@ async def test_invalid_numeric_return_keeps_completed_with_records(
     assert report["source_regimes"] == []
     async with sessions() as session:
         assert await snapshot(session) == before
+
+
+INTERVALS = {  # kind, dashboard key, record, valid value, negative value
+    "steps": ("steps", "steps", lambda value: steps(count=value), 120, -5),
+    "duration": ("sleep", "sleep_seconds", lambda value: sleep(duration=value), "3600s", "-60s"),
+    "asleep": ("sleep", "sleep_seconds", lambda v: sleep(summary={"minutesAsleep": v}), 100, -1),
+}
+
+
+@pytest.mark.parametrize("case", list(INTERVALS))
+@pytest.mark.parametrize("value", ["valid", "negative", "NaN"])
+@pytest.mark.parametrize("corrected", [False, True], ids=["first", "correction"])
+async def test_panel_judges_steps_and_sleep_like_the_dashboard(
+    sessions, api, monkeypatch, case, value, corrected
+):
+    """A record without a dashboard value is invalid_shape, whatever its history: one that
+    never normalized as much as a correction (maintainer, 2026-11-13). One bounded read."""
+    kind, key, make, good, negative = INTERVALS[case]
+    current = {"valid": good, "negative": negative, "NaN": "NaN"}[value]
+    for payload in ([good] if corrected else []) + [current]:
+        await fetch(sessions, T0, T0 + timedelta(days=1), kind, points=[make(payload)])
+    day, _ = await project(sessions, monkeypatch)
+    response = await api.get(PATH, params={**DAY_QUERY, "data_type": kind})
+    report = response.json()["types"][0]
+    present = value == "valid"
+    assert (day[key] is not None) is report["days"][0]["has_value"] is present
+    assert report["days"][0]["retrieval"] == "completed_with_records"
+    assert report["exclusions"]["invalid_shape"] == int(not present)
+    assert [row["record_count"] for row in report["source_regimes"]] == [1] * present
+    metric = next(metric for metric in coverage_reading.METRICS if metric.data_type == kind)
+    statements = []
+    engine = sessions.kw["bind"].sync_engine
+
+    def capture(conn, cursor, statement, *args):
+        statements.append(statement)
+
+    event.listen(engine, "before_cursor_execute", capture)
+    try:
+        async with sessions() as session:
+            window = Window(DAY, DAY, DAY + timedelta(days=3), ZoneInfo("UTC"))
+            await coverage_reading.google_streams(session, metric, window)
+    finally:
+        event.remove(engine, "before_cursor_execute", capture)
+    assert len(read_statements(statements)) == 1

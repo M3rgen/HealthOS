@@ -513,10 +513,11 @@
     transform: translateY(6px);
   }
 }
-/* Phones: Umay opens as a full-screen sheet above the page (chat.js sets the bubble-anchored size
+/* Up to 900 px: Umay opens as a full-screen sheet above the page (chat.js sets the bubble-anchored size
    and position inline, so these need !important; assistant-sheet.js tracks the keyboard). The launcher lies under the sheet while it is open; the
-   close button takes over. Focus handling at these widths lives in chat.js. */
-@media (max-width: bp(w540)) {
+   close button takes over. Focus handling at these widths lives in chat.js.
+   Keep this literal condition aligned with widths.w900 for source-level breakpoint checks. */
+@media (max-width: 56.25em) {
   #assistant-dialog:not([hidden]) {
     top: var(--assistant-sheet-top, 0) !important;
     right: 0 !important;

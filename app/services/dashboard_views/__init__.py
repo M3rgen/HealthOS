@@ -12,6 +12,7 @@ if TYPE_CHECKING:
         dashboard_profile,
         dashboard_workouts,
         devices,
+        history_bounds,
     )
 
 __all__ = [
@@ -21,6 +22,7 @@ __all__ = [
     "dashboard_profile",
     "dashboard_workouts",
     "devices",
+    "history_bounds",
 ]
 
 

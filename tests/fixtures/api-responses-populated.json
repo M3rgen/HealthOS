@@ -111,9 +111,9 @@
         "partial": true,
         "sources": {
           "steps": {
-            "source": "GOOGLE",
-            "label": "Google",
-            "alternatives": []
+            "source": "FITBIT",
+            "label": "Fitbit",
+            "alternatives": [{"source": "HEALTH_KIT", "label": "Apple Sağlık", "value": 0}]
           },
           "sleep_seconds": {
             "source": "FITBIT",
@@ -296,9 +296,9 @@
       ],
       "sources": {
         "steps": {
-          "source": "GOOGLE",
-          "label": "Google",
-          "alternatives": []
+          "source": "FITBIT",
+          "label": "Fitbit",
+          "alternatives": [{"source": "HEALTH_KIT", "label": "Apple Sağlık"}]
         },
         "heart_rate": {
           "source": "FITBIT",

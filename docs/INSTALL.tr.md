@@ -32,17 +32,17 @@ kendisi asla `sudo` çağırmaz: root iken sistem birimleri, normal kullanıcıy
 kurar; `sudo` gerektiren komutlar yazdırılır, onları siz çalıştırırsınız. Türkçe sorular için sonuna `-s -- --lang tr` ekleyin:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/M3rgen/HealthOS/v0.2.2.1/install.sh | bash
-curl -fsSL https://raw.githubusercontent.com/M3rgen/HealthOS/v0.2.2.1/install.sh | bash -s -- --lang tr
+curl -fsSL https://raw.githubusercontent.com/M3rgen/HealthOS/v0.2.3/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/M3rgen/HealthOS/v0.2.3/install.sh | bash -s -- --lang tr
 ```
 
 **Windows 10/11** (PowerShell, kendi kullanıcınızla):
 
 ```powershell
-irm https://raw.githubusercontent.com/M3rgen/HealthOS/v0.2.2.1/install.ps1 | iex
+irm https://raw.githubusercontent.com/M3rgen/HealthOS/v0.2.3/install.ps1 | iex
 ```
 
-İki komut da bir sürüm kurar (burada v0.2.2.1): kurulum aracı kendi etiketini
+İki komut da bir sürüm kurar (burada v0.2.3): kurulum aracı kendi etiketini
 (`HEALTHOS_INSTALLER_VERSION`) klonlar; siz istemedikçe hareketli `main` dalını değil.
 
 **Geliştirme sürümü** (`main`, sürüm değil):
@@ -60,14 +60,14 @@ curl -fsSL https://raw.githubusercontent.com/M3rgen/HealthOS/main/install.sh | b
 yeniden klonlamaz:
 
 ```sh
-git clone --branch v0.2.2.1 https://github.com/M3rgen/HealthOS.git
+git clone --branch v0.2.3 https://github.com/M3rgen/HealthOS.git
 cd HealthOS
 less install.sh
 ./install.sh --lang tr            # ya da önce: ./install.sh --lang tr --dry-run
 ```
 
 ```powershell
-git clone --branch v0.2.2.1 https://github.com/M3rgen/HealthOS.git
+git clone --branch v0.2.3 https://github.com/M3rgen/HealthOS.git
 cd HealthOS
 notepad .\install.ps1
 powershell -ExecutionPolicy Bypass -File .\install.ps1 -Lang tr     # ya da -DryRun ekleyin
@@ -79,14 +79,14 @@ Kabuk erişimi olan bir kodlama ajanı (Claude Code, OpenAI Codex CLI ya da benz
 [AI_INSTALL.md](AI_INSTALL.md) adımlarını izleyerek sizin yerinize yapabilir. Ona şu istemi verin:
 
 ```text
-Bu bilgisayara HealthOS'u kur: https://raw.githubusercontent.com/M3rgen/HealthOS/v0.2.2.1/docs/AI_INSTALL.md adımlarını izle; yönetici izni ya da hesap bilgisi gereken her adımdan önce bana sor ve hiçbir veriyi silme.
+Bu bilgisayara HealthOS'u kur: https://raw.githubusercontent.com/M3rgen/HealthOS/v0.2.3/docs/AI_INSTALL.md adımlarını izle; yönetici izni ya da hesap bilgisi gereken her adımdan önce bana sor ve hiçbir veriyi silme.
 ```
 
 Terminalde doğrudan çalıştırmak için:
 
 ```sh
-claude "Bu bilgisayara HealthOS'u kur: https://raw.githubusercontent.com/M3rgen/HealthOS/v0.2.2.1/docs/AI_INSTALL.md adımlarını izle; yönetici izni ya da hesap bilgisi gereken her adımdan önce bana sor ve hiçbir veriyi silme."
-codex "Bu bilgisayara HealthOS'u kur: https://raw.githubusercontent.com/M3rgen/HealthOS/v0.2.2.1/docs/AI_INSTALL.md adımlarını izle; yönetici izni ya da hesap bilgisi gereken her adımdan önce bana sor ve hiçbir veriyi silme."
+claude "Bu bilgisayara HealthOS'u kur: https://raw.githubusercontent.com/M3rgen/HealthOS/v0.2.3/docs/AI_INSTALL.md adımlarını izle; yönetici izni ya da hesap bilgisi gereken her adımdan önce bana sor ve hiçbir veriyi silme."
+codex "Bu bilgisayara HealthOS'u kur: https://raw.githubusercontent.com/M3rgen/HealthOS/v0.2.3/docs/AI_INSTALL.md adımlarını izle; yönetici izni ya da hesap bilgisi gereken her adımdan önce bana sor ve hiçbir veriyi silme."
 ```
 
 İsterseniz istemi Claude Code'a, Codex'e ya da komut çalıştırabilen başka bir ajana yapıştırın.
@@ -309,7 +309,7 @@ bir sanal makine ya da Docker için iç içe sanallaştırması (nesting) açık
 sudo apt install git age python3      # Fedora: sudo dnf install git age python3
 sudo systemctl enable --now docker
 docker compose version
-curl -fsSL https://raw.githubusercontent.com/M3rgen/HealthOS/v0.2.2.1/install.sh | bash -s -- --lang tr
+curl -fsSL https://raw.githubusercontent.com/M3rgen/HealthOS/v0.2.3/install.sh | bash -s -- --lang tr
 ```
 
 **root ya da kendi kullanıcınız.**
@@ -462,7 +462,7 @@ Git (`xcode-select --install` ya da Homebrew); yedekler için `brew install age`
 (`brew install python`; Xcode komut satırı araçlarındaki `python3` çok eski).
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/M3rgen/HealthOS/v0.2.2.1/install.sh | bash -s -- --lang tr
+curl -fsSL https://raw.githubusercontent.com/M3rgen/HealthOS/v0.2.3/install.sh | bash -s -- --lang tr
 ```
 
 Kurulum aracı macOS'u algılar ve önceden seçer. Kurulum dizini: `~/healthos`. Yedek anahtarı:
@@ -489,7 +489,7 @@ yedekler için `winget install FiloSottile.age`. Windows PowerShell 5.1 ve Power
 de çalışır.
 
 ```powershell
-irm https://raw.githubusercontent.com/M3rgen/HealthOS/v0.2.2.1/install.ps1 | iex
+irm https://raw.githubusercontent.com/M3rgen/HealthOS/v0.2.3/install.ps1 | iex
 ```
 
 Kurulum aracı Windows'u algılar ve önceden seçer. Bütün platformları listeler ama bu bilgisayara
@@ -670,13 +670,13 @@ olarak yazılır.
 
 Güncelleme her platformda aynıdır: yedek alın, yeni sürümün etiketine geçin, kurulum aracını
 yeniden çalıştırın. Kurulum aracının yaptığı klon bir sürüm etiketindedir (dal yok), bu yüzden
-`git pull` işe yaramaz; istediğiniz sürümün etiketini kullanın (burada bir sonraki, v0.2.2.1):
+`git pull` işe yaramaz; istediğiniz sürümün etiketini kullanın (burada bir sonraki, v0.2.3):
 
 ```sh
 cd ~/healthos                 # ya da /opt/healthos, ya da %USERPROFILE%\healthos
 make backup                  # ya da: bash scripts/backup.sh  (Windows: .\scripts\backup.ps1)
 git fetch --tags
-git checkout v0.2.2.1          # main dalındaki bir klonda bunun yerine: git pull --ff-only
+git checkout v0.2.3          # main dalındaki bir klonda bunun yerine: git pull --ff-only
 ./install.sh --lang tr       # Windows: .\install.ps1 -Lang tr
 ```
 

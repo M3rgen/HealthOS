@@ -89,8 +89,8 @@ async def test_bounded_rebuild_keeps_legacy_until_completed_and_resumes_failed_c
     before = await snapshot(sessions)
     original = garmin_normalize.write_daily_projections
 
-    async def fail_second_chunk(session, record_ids, rows):
-        await original(session, record_ids, rows)
+    async def fail_second_chunk(session, record_ids, rows, **kwargs):
+        await original(session, record_ids, rows, **kwargs)
         if ("steps", str(days[7])) in record_ids:
             raise RuntimeError("synthetic chunk failure")
 

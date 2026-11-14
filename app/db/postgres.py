@@ -26,7 +26,14 @@ LOCK_NAMESPACES = MappingProxyType(
         "garmin": 0x47524D31,  # GRM1; per kind, including normalize
     }
 )
-BIGINT_LOCKS = MappingProxyType({"derived_build": 72_184_518, "watchdog": 7_104_201_986})
+BIGINT_LOCKS = MappingProxyType(
+    {
+        "derived_build": 72_184_518,
+        "watchdog": 7_104_201_986,
+        # Frozen as a literal in migration 20261114_0036's heart fence function.
+        "heart_projection": 72_184_536,
+    }
+)
 
 DATA_TYPE_LOCK = LOCK_NAMESPACES["identity_data_type"]
 BACKFILL_LOCK = (LOCK_NAMESPACES["identity_backfill"], 1)

@@ -119,7 +119,7 @@ async def test_production_lifespan_does_not_start_as_superuser(monkeypatch, risk
 
 @pytest.mark.parametrize("risk", [role_check.SUPERUSER, role_check.PRIVILEGED_ROLE])
 @pytest.mark.parametrize("grace", [False, True])
-async def test_health_says_the_superuser_runs_on_its_grace(risk, grace):
+async def test_health_says_the_superuser_runs_on_its_grace(risk, grace, sessions):
     settings = SimpleNamespace(
         production=True,
         healthos_sources=["none"],
@@ -128,12 +128,15 @@ async def test_health_says_the_superuser_runs_on_its_grace(risk, grace):
         app_ui_token="x",
         watchdog_enabled=False,
         backup_status_file=None,
+        api_read_statement_timeout_seconds=25,
     )
     snapshot = SimpleNamespace(as_dict=lambda **_: {"status": "healthy", "reasons": []})
     runtime = SimpleNamespace(
         scheduler_needed=lambda _settings: False,
         scheduler_running=False,
-        pipeline_health=SimpleNamespace(inspect=AsyncMock(return_value=snapshot)),
+        pipeline_health=SimpleNamespace(
+            inspect=AsyncMock(return_value=snapshot), sessions=sessions
+        ),
     )
     state = SimpleNamespace(
         runtime=runtime,
@@ -141,7 +144,9 @@ async def test_health_says_the_superuser_runs_on_its_grace(risk, grace):
         database_role_risk=risk,
         database_role_grace_until=datetime.now(UTC).date() if grace else None,
     )
-    payload = await health_api.health(SimpleNamespace(app=SimpleNamespace(state=state)))
+    payload = await health_api.health(
+        SimpleNamespace(method="GET", app=SimpleNamespace(state=state))
+    )
     expected = [f"database_role_{risk}"]
     if grace:
         expected.append(f"database_role_{risk}_grace")

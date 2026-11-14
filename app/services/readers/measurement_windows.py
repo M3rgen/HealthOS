@@ -40,19 +40,49 @@ class StepWindow:
         )
 
     def hourly_terms(self, zone: ZoneInfo):
-        """Split in UTC at civil-hour edges, including midnight and repeated DST hours."""
+        """Stream UTC durations within one civil date/hour and constant UTC offset.
+
+        Repeated hours keep the same label; callers merge their contributions into
+        the existing 24 buckets. No contribution is rounded or retained here.
+        """
         cursor = self.start
         while cursor < self.stop:
             local = cursor.astimezone(zone)
-            edge = min(
-                cursor
-                + timedelta(
-                    seconds=3600 - local.minute * 60 - local.second - local.microsecond / 1e6
-                ),
-                self.stop,
-            )
+            edge = _hour_edge(cursor, self.stop, local, zone)
             yield local, (self.count, (edge - cursor).total_seconds(), self.term[2])
             cursor = edge
+
+
+def _hour_edge(cursor: datetime, stop: datetime, local: datetime, zone: ZoneInfo) -> datetime:
+    """The next wall-hour boundary or earlier offset transition, on the UTC axis.
+
+    ZoneInfo exposes offsets rather than a public transition table. Probe no
+    farther than the next nominal hour (at most one UTC hour). IANA transitions
+    are separated by more than an hour, so an offset difference brackets exactly
+    one transition, even when the local hour label repeats across it.
+
+    Bisect that bracket in integer timedelta arithmetic: at most 32 probes for
+    an hour, with no second/microsecond scan and no floating-point edge rounding.
+    The lower endpoint retains the old offset; the upper endpoint has the new
+    one. Returning the upper endpoint guarantees progress even one µs away.
+    """
+    remaining = timedelta(hours=1) - timedelta(
+        minutes=local.minute, seconds=local.second, microseconds=local.microsecond
+    )
+    # Compare before adding so a clipped window at datetime.max cannot overflow.
+    edge = cursor + min(remaining, stop - cursor)
+    offset = local.utcoffset()
+    if edge.astimezone(zone).utcoffset() == offset:
+        return edge
+    lower = cursor
+    resolution = timedelta(microseconds=1)
+    while edge - lower > resolution:
+        middle = lower + (edge - lower) // 2
+        if middle.astimezone(zone).utcoffset() == offset:
+            lower = middle
+        else:
+            edge = middle
+    return edge
 
 
 def step_window(

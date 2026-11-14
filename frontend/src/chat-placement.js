@@ -5,7 +5,7 @@ import { setupLauncherDrag } from './chat-drag.js';
 
 const EDGE = 8, GAP = 12, LAUNCHER_EDGE = 12;
 
-// Phones and landscape phones: the panel covers the screen, so everything behind it goes inert
+// At the shared 900 px boundary (or on short screens), everything behind the panel goes inert
 // (hidden from Tab and screen readers) until it closes. Wider screens keep it a side panel.
 const MODAL_VIEW = queries.umayModal;
 

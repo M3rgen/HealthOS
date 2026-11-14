@@ -5,6 +5,8 @@ import re
 LOCK_NOT_AVAILABLE = "55P03"
 DEADLOCK_DETECTED = "40P01"
 SERIALIZATION_FAILURE = "40001"
+# statement_timeout, a client cancel request or pg_cancel_backend() ended the statement.
+QUERY_CANCELED = "57014"
 _SQLSTATE = re.compile(r"[0-9A-Z]{5}")
 
 

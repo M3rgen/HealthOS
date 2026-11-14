@@ -3,11 +3,11 @@ HealthOS installer for Windows 10/11 with Docker Desktop (WSL 2 backend).
 Windows PowerShell 5.1 and PowerShell 7. The Windows counterpart of install.sh: same options,
 same questions, same .env rules.
 
-  irm https://raw.githubusercontent.com/M3rgen/HealthOS/v0.2.2.1/install.ps1 | iex
-  & ([scriptblock]::Create((irm https://raw.githubusercontent.com/M3rgen/HealthOS/v0.2.2.1/install.ps1))) -Ref main
+  irm https://raw.githubusercontent.com/M3rgen/HealthOS/v0.2.3/install.ps1 | iex
+  & ([scriptblock]::Create((irm https://raw.githubusercontent.com/M3rgen/HealthOS/v0.2.3/install.ps1))) -Ref main
   powershell -ExecutionPolicy Bypass -File .\install.ps1 [-DryRun] [-Help]
 
-A bootstrap clones the release tag of this installer (v0.2.2.1 here); -Ref main follows main.
+A bootstrap clones the release tag of this installer (v0.2.3 here); -Ref main follows main.
 
 Safety: .env is never overwritten (a copy goes to %LOCALAPPDATA%\HealthOS\env-backups first,
 readable only by you, and existing secrets are never replaced), no volume, backup or file is
@@ -49,7 +49,7 @@ try { Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force -ErrorAc
 $HealthOSPreviousErrorAction = $ErrorActionPreference
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
-$HEALTHOS_INSTALLER_VERSION = "0.2.2.1"
+$HEALTHOS_INSTALLER_VERSION = "0.2.3"
 
 $HealthOSRepoUrl = 'https://github.com/M3rgen/HealthOS.git'
 $HealthOSRawUrl = 'https://raw.githubusercontent.com/M3rgen/HealthOS'
@@ -152,7 +152,7 @@ function Show-Usage {
 HealthOS installer for Windows 10/11 (Docker Desktop, WSL 2 backend)
 
 Usage: .\install.ps1 [options]
-  irm https://raw.githubusercontent.com/M3rgen/HealthOS/v0.2.2.1/install.ps1 | iex
+  irm https://raw.githubusercontent.com/M3rgen/HealthOS/v0.2.3/install.ps1 | iex
 
 Options (the same as install.sh):
   -Lang en|tr                  language (asked; English preselected)
@@ -191,7 +191,7 @@ Linux server is the recommended platform for an always-on install.
 Windows 10/11 i\u00e7in HealthOS kurulumu (Docker Desktop, WSL 2 altyap\u0131s\u0131)
 
 Kullan\u0131m: .\\install.ps1 [se\u00e7enekler]
-  irm https://raw.githubusercontent.com/M3rgen/HealthOS/v0.2.2.1/install.ps1 | iex
+  irm https://raw.githubusercontent.com/M3rgen/HealthOS/v0.2.3/install.ps1 | iex
 
 Se\u00e7enekler (install.sh ile ayn\u0131):
   -Lang en|tr                  dil (sorulur; \u0130ngilizce \u00f6nse\u00e7ili)

@@ -303,19 +303,19 @@ async def test_finite_extremes_keep_representable_statistics_and_explain_change(
     for index, value in enumerate(values):
         await store(
             sessions,
-            "body-fat",
+            "core-body-temperature",
             point(
-                "body-fat",
+                "core-body-temperature",
                 str(index),
                 {
                     "sampleTime": {"physicalTime": (T0 + timedelta(minutes=index)).isoformat()},
-                    "percentage": value,
+                    "temperatureCelsius": value,
                 },
             ),
         )
     async with sessions() as session:
         before = await snapshot(session)
-    result = await call(sessions, "longitudinal", data_type="body-fat")
+    result = await call(sessions, "physiology", data_type="core-body-temperature")
     row = result["summaries"][0]
     stats = row["statistics"]
     assert stats["median"] == center and stats["mad"] == mad
@@ -326,7 +326,7 @@ async def test_finite_extremes_keep_representable_statistics_and_explain_change(
         assert row["change"] is None and "numeric_overflow:change" in row["reason_codes"]
     else:
         assert row["change"] == 0
-    assert result == await call(sessions, "longitudinal", data_type="body-fat", limit=1)
+    assert result == await call(sessions, "physiology", data_type="core-body-temperature", limit=1)
     Interpretation.model_validate(result)
     json.dumps(result, allow_nan=False)
     async with sessions() as session:
@@ -335,7 +335,7 @@ async def test_finite_extremes_keep_representable_statistics_and_explain_change(
 
 @pytest.mark.parametrize("scale,expected_z", [(1e-100, None), (1.7e308, 1 / 1.4826)])
 async def test_robust_ratio_overflow_never_creates_a_candidate(sessions, scale, expected_z):
-    await resting(sessions, [-scale, scale] * 14, start=DAY - timedelta(days=28))
+    await resting(sessions, [0, scale] * 14, start=DAY - timedelta(days=28))
     await resting(sessions, [1e308 if expected_z is None else scale])
     await store(
         sessions, "daily-oxygen-saturation", summary("daily-oxygen-saturation", averagePercentage=0)
@@ -344,7 +344,7 @@ async def test_robust_ratio_overflow_never_creates_a_candidate(sessions, scale, 
         before = await snapshot(session)
     result = await call(sessions, "analyze")
     row = next(r for r in result["summaries"] if r["metric"] == "resting_bpm")
-    assert row["statistics"]["count"] == 28 and row["statistics"]["mad"] == scale
+    assert row["statistics"]["count"] == 28 and row["statistics"]["mad"] == scale / 2
     if expected_z is None:
         assert row["robust_z"] is row["percentile"] is None and not row["eligible"]
         assert "numeric_overflow:robust_z" in row["reason_codes"]
@@ -381,6 +381,65 @@ async def test_intraday_unrepresentable_rate_is_a_gap_with_sound_zero_retained(s
         assert await snapshot(session) == before
 
 
+RESPIRATORY_FIELDS = ("breathsPerMinute", "fullSleepStats.breathsPerMinute")
+
+
+@pytest.mark.parametrize(
+    "kind,fields",
+    [
+        ("active-energy-burned", ("kcal", "kcalSum")),
+        ("total-calories", ("kcal", "kcalSum")),
+        ("daily-respiratory-rate", RESPIRATORY_FIELDS),
+        ("respiratory-rate-sleep-summary", RESPIRATORY_FIELDS),
+    ],
+)
+@pytest.mark.parametrize("index", [0, 1])
+@pytest.mark.parametrize("negative", [-1, "-1e-999999", "-1e999999"])
+async def test_quantity_and_respiratory_rejection_keeps_other_definition_available(
+    sessions, kind, fields, index, negative
+):
+    field = fields[index]
+    respiratory = "respiratory" in kind
+    values = dict(zip(fields, (100, 200), strict=True))
+    values[field] = negative
+    record = point(
+        kind,
+        "separate",
+        {
+            "interval": {
+                "startTime": T0.isoformat(),
+                "endTime": (T0 + timedelta(hours=1)).isoformat(),
+            },
+            "date": str(DAY),
+            **{key: value for key, value in values.items() if "." not in key},
+            **(
+                {"fullSleepStats": {"breathsPerMinute": values["fullSleepStats.breathsPerMinute"]}}
+                if respiratory
+                else {}
+            ),
+        },
+    )
+    await store(sessions, kind, record)
+    async with sessions() as session:
+        before = await snapshot(session)
+    result = await call(sessions, "physiology" if respiratory else "longitudinal", data_type=kind)
+    Interpretation.model_validate(result)
+    json.dumps(result, allow_nan=False)
+    rows = result["summaries"]
+    assert len(rows) == 2 and len({r["definition"] for r in rows}) == 2
+    for row in rows:
+        [evidence] = row["evidence"]
+        rejected = evidence["field"] == field
+        assert row["state"] == ("unsupported" if rejected else "available")
+        assert row["statistics"]["count"] == int(not rejected)
+        assert evidence["value"] == (None if rejected else values[evidence["field"]])
+        assert evidence["reason_codes"] == ([f"negative_measurement:{field}"] if rejected else [])
+        if not respiratory:
+            assert row["time_basis"] == "interval_amount" and row["interval_seconds"] == 3600
+    async with sessions() as session:
+        assert await snapshot(session) == before
+
+
 async def test_unit_conversion_underflow_does_not_invent_a_measured_zero(sessions):
     for name, value, offset in [("tiny", "5e-324", 0), ("zero", 0, 1)]:
         await store(
@@ -411,7 +470,9 @@ async def test_unit_conversion_underflow_does_not_invent_a_measured_zero(session
         assert await snapshot(session) == before
 
 
-@pytest.mark.parametrize("values,mean", [([1.7e308, 1.7e308], 1.7e308), ([-1.7e308, 1.7e308], 0)])
+@pytest.mark.parametrize(
+    "values,mean", [([1.7e308, 1.7e308], 1.7e308), ([-1.7e308, 1.7e308], None)]
+)
 async def test_intraday_interpolation_and_weighted_mean_retry_intermediate_overflow(
     sessions, values, mean
 ):
@@ -432,8 +493,10 @@ async def test_intraday_interpolation_and_weighted_mean_retry_intermediate_overf
     )
     result = await call(sessions, "intraday", data_type="heart-rate")
     row = result["summaries"][0]
-    assert row["supported_seconds"] == 60 and row["time_weighted_mean"] == mean
-    assert next(c for c in row["cells"] if c["state"] == "supported")["value"] == mean
-    assert row["statistics"]["count"] == 2
+    assert row["supported_seconds"] == (60 if mean is not None else 0)
+    assert row["time_weighted_mean"] == mean
+    supported = [c["value"] for c in row["cells"] if c["state"] == "supported"]
+    assert supported == ([mean] if mean is not None else [])
+    assert row["statistics"]["count"] == (2 if mean is not None else 1)
     Interpretation.model_validate(result)
     json.dumps(result, allow_nan=False)

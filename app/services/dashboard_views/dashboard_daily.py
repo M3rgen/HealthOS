@@ -22,39 +22,43 @@ async def read_days(
     reads: list[DailyRead] = []
     for archive in archives:
         if archive.daily is not None:
-            reads.append(
+            reads.extend(
                 await archive.daily(
                     session, window, calendar.end_date, calendar.zone, calendar.sources
                 )
             )
+    step_hours: list[float | None] = [None] * 24
     for day, values in rows.items():
         for metric in calendar.sources.metrics:
             candidates = [
-                read.days[day][metric] for read in reads if metric in read.days.get(day, {})
+                (read.days[day][metric], read) for read in reads if metric in read.days.get(day, {})
             ]
-            resolution = resolve(
-                metric,
-                [
-                    Observation(item.source, item.value, provider=item.provider)
-                    for item in candidates
-                ],
-                policy,
+            # Retain each observation's originating read: equal source codes can
+            # still belong to different providers with different hourly evidence.
+            observations = [
+                (Observation(item.source, item.value, provider=item.provider), read)
+                for item, read in candidates
+            ]
+            resolution = resolve(metric, [item for item, _ in observations], policy)
+            selected_read = next(
+                (read for item, read in observations if item is resolution.selected), None
             )
             values[metric] = resolution.value
             values["sources"][metric] = resolution.as_dict()
+            if day == calendar.end_date and metric == "steps" and selected_read is not None:
+                step_hours = (
+                    selected_read.step_hours
+                    if selected_read.step_hours is not None
+                    else [None] * 24
+                )
             if metric == "sleep_seconds" and candidates:
-                selected = next(
-                    (
-                        item
-                        for item in candidates
-                        if resolution.selected is not None
-                        and item.source == resolution.selected.source
-                        and item.provider == resolution.selected.provider
-                    ),
-                    candidates[0],
+                selected = (
+                    selected_read.days[day][metric]
+                    if selected_read is not None
+                    else candidates[0][0]
                 )
                 values["sleep_assumptions"] = list(selected.sleep_assumptions)
-    return next((read.step_hours for read in reads if read.step_hours is not None), [None] * 24)
+    return step_hours
 
 
 def set_status(rows: dict[date, DashboardDay]):

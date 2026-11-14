@@ -7,9 +7,10 @@ from datetime import timedelta
 import pytest
 from garmin_records import store_page
 from test_garmin_daily_projections import CASES, corrected
-from test_garmin_normalize import DAY, NOW
+from test_garmin_normalize import DAY, NOW, garmin_sleep
 
 from app.api.dashboard import export
+from app.models.health import SleepSession
 from app.services.dashboard_views.dashboard import dashboard_data
 from app.services.dashboard_views.dashboard_history import history_data
 from app.services.providers.garmin_normalize import normalize_window
@@ -17,10 +18,26 @@ from app.services.readers.dashboard_queries import DashboardQuery
 from app.services.umay.codex_health import read_health
 
 
-@pytest.mark.parametrize("kind,model,body,path,metric", [c for c in CASES if c[-1]])
-async def test_daily_consumers_agree_after_correction(sessions, kind, model, body, path, metric):
+@pytest.mark.parametrize(
+    "kind,model,body,path,metric,replacement",
+    [c + ("null",) for c in CASES if c[-1]]
+    + [
+        c + (r,)
+        for c in CASES
+        if c[-1] in ("steps", "resting_bpm", "hrv_ms", "spo2")
+        for r in ("negative", "tiny-negative", "underflow")
+    ]
+    + [
+        ("sleep", SleepSession, garmin_sleep(DAY), (field,), "sleep_seconds", replacement)
+        for field in ("sleepTimeSeconds", "awakeSleepSeconds")
+        for replacement in ("negative", "tiny-negative", "underflow")
+    ],
+)
+async def test_daily_consumers_agree_after_correction(
+    sessions, kind, model, body, path, metric, replacement
+):
     a = {**body, "calendarDate": str(DAY)}
-    for index, payload in enumerate((a, corrected(a, path, "null"), a)):
+    for index, payload in enumerate((a, corrected(a, path, replacement), a)):
         await store_page(sessions, kind, [payload], NOW + timedelta(minutes=index))
         async with sessions.begin() as session:
             await normalize_window(session, DAY, DAY)

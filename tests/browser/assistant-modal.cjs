@@ -2,7 +2,7 @@
 // inside, and closing gives the page and the focus back. A wide screen keeps its side panel.
 const assert = require('node:assert/strict');
 const fx = require('../../frontend/preview/fixtures.cjs');
-const { BASE, launch, run } = require('./lib.cjs');
+const { BASE, launch, run, shot } = require('./lib.cjs');
 const { contained } = require('./helpers/accessibility.cjs');
 
 async function mock(page) {
@@ -22,7 +22,7 @@ const focusInside = page => page.evaluate(() => document.getElementById('assista
 run(async () => {
   const browser = await launch();
   try {
-    for (const viewport of [{ width: 375, height: 667 }, { width: 844, height: 390 }]) {
+    for (const viewport of [...[375, 700, 701, 800, 900].map(width => ({ width, height: 667 })), { width: 1024, height: 390 }]) {
       const page = await browser.newPage({ viewport, reducedMotion: 'reduce' });
       const errors = []; page.on('pageerror', error => errors.push(error.message));
       await mock(page);
@@ -35,13 +35,23 @@ run(async () => {
       assert.equal(await page.locator('#assistant-dialog').getAttribute('aria-modal'), 'true');
       assert.equal(await page.locator('#assistant-dialog').getAttribute('role'), 'dialog');
       const box = await page.locator('#assistant-dialog').boundingBox();
-      // Up to 540 px wide the panel is a full-screen sheet (chat-assistant.css); wider modals keep an 8 px margin.
-      if (viewport.width <= 540) assert.ok(box.y === 0 && box.height === viewport.height && box.x === 0 && box.width === viewport.width, JSON.stringify(box));
+      // Up to 900 px wide the panel is a full-screen sheet (chat-assistant.css); wider modals keep an 8 px margin.
+      if (viewport.width <= 900) assert.ok(box.y === 0 && box.height === viewport.height && box.x === 0 && box.width === viewport.width, JSON.stringify(box));
       else assert.ok(box.y >= 8 && box.y + box.height <= viewport.height - 8 && box.height >= viewport.height - 16.5, JSON.stringify(box));
       assert.equal(await page.locator('#assistant-open').isVisible(), false, 'launcher hidden under the modal');
       assert.equal(await page.locator('#assistant-open').evaluate(el => el.inert), true, 'launcher out of the tab order under the modal');
       await page.locator('#assistant-open').focus().catch(() => {});
       assert.notEqual(await page.evaluate(() => document.activeElement.id), 'assistant-open', 'launcher cannot take focus under the modal');
+      await page.locator('#assistant-messages').evaluate(el => {
+        const message = document.createElement('p');
+        message.className = 'chat-message';
+        message.textContent = 'Synthetic long message. '.repeat(1000);
+        el.append(message);
+        el.scrollTop = el.scrollHeight;
+      });
+      assert.ok(await page.locator('#assistant-messages').evaluate(el => el.scrollTop > 0));
+      await contained(page);
+      if (viewport.width === 800) await page.screenshot({ path: shot('umay-800.png') });
       const seen = new Set();
       for (let i = 0; i < 12; i++) {
         await page.keyboard.press('Tab');
@@ -65,14 +75,14 @@ run(async () => {
       await page.close();
     }
     // Height boundaries shared with CSS, including the newly widened layout ranges.
-    for (const width of [390, 1024]) for (const height of [480, 490, 500, 560, 580, 608]) {
+    for (const width of [390, 901, 1024]) for (const height of [480, 490, 500, 560, 580, 608]) {
       const page = await browser.newPage({ viewport: { width, height }, reducedMotion: 'reduce' });
       await mock(page);
       await page.goto(BASE);
       await page.waitForFunction(() => document.querySelectorAll('#history-rows tr').length === 7);
       await page.locator('#assistant-open').click();
       await page.locator('#assistant-dialog').waitFor();
-      assert.equal(await backgroundInert(page), width <= 700 || height <= 480, `${width}x${height} Umay mode`);
+      assert.equal(await backgroundInert(page), width <= 900 || height <= 480, `${width}x${height} Umay mode`);
       await contained(page);
       await page.locator('#assistant-close').click();
       await page.locator('[data-page="system"]').click();
@@ -95,10 +105,11 @@ run(async () => {
     await page.waitForFunction(() => !document.getElementById('assistant-dialog').hidden);
     assert.equal(await backgroundInert(page), false, 'desktop stays a side panel');
     assert.equal(await page.locator('#assistant-dialog').getAttribute('aria-modal'), null);
-    // Shrinking to phone width with the panel open switches it to the modal.
-    await page.setViewportSize({ width: 375, height: 667 });
+    // Crossing the shared boundary with the panel open changes mode in both directions.
+    await page.setViewportSize({ width: 900, height: 667 });
     await page.waitForFunction(() => document.querySelector('main').inert);
-    await page.setViewportSize({ width: 1280, height: 800 });
+    await contained(page);
+    await page.setViewportSize({ width: 901, height: 667 });
     await page.waitForFunction(() => !document.querySelector('main').inert);
     console.log('PASS desktop stays a side panel and the mode follows a resize');
     await page.close();

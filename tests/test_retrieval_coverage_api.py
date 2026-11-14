@@ -24,8 +24,11 @@ from app.services.readers.dashboard_queries import DashboardQuery
 from app.services.synchronization import retrieval_coverage
 
 
-@pytest.mark.parametrize("kind", ["steps", "daily-resting-heart-rate", "heart-rate"])
-async def test_source_labels_preserve_stored_measurements(api, source_archive, kind):
+@pytest.mark.parametrize("kind", ["steps", "daily-resting-heart-rate", "heart-rate", "exercise"])
+async def test_source_labels_preserve_stored_measurements(api, source_archive, kind, monkeypatch):
+    from app.services.synchronization import coverage_sources
+
+    monkeypatch.setattr(coverage_sources, "_SOURCE_BATCH", 1)
     response = await api.get(PATH, params=QUERY | {"data_type": kind, "end_date": "2026-09-02"})
     assert response.status_code == 200, response.text
     report = response.json()["types"][0]

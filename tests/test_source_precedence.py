@@ -160,3 +160,66 @@ def test_minute_samples_follow_the_health_policy_outside_and_activity_inside_a_w
     assert all(value in {v for _, v in fitbit} | {v for _, v in garmin} for _, value, _ in kept)
     without_window, _ = resolve_samples({"FITBIT": fitbit, "GARMIN": garmin}, (), DEFAULT)
     assert [source for _, _, source in without_window] == ["FITBIT"] * 3 + ["GARMIN"]
+
+
+@pytest.mark.parametrize("policy", [DEFAULT, REVERSED])
+@pytest.mark.parametrize(
+    "bounds,active",
+    [
+        ([(30, 90)], {3, 4, 5, 6, 7, 8}),
+        ([(60, 120)], {6, 7, 8, 9, 10, 11}),
+        ([(15, 45)], {1, 2, 3, 4}),
+        ([(30, 75), (15, 45), (15, 45)], {1, 2, 3, 4, 5, 6}),
+        ([(30.000001, 89.999999)], {4, 5, 6, 7}),
+        ([(15, 30), (45, 60)], {1, 2, 5}),
+        ([], set()),
+    ],
+)
+def test_samples_compete_only_within_actual_workout_boundaries(policy, bounds, active):
+    offsets = [0, 15, 29.999999, 30, 30.000001, 45, 60, 75, 89.999999, 90, 90.000001, 105, 120]
+    moments = [T + timedelta(seconds=offset) for offset in offsets]
+    series = {
+        source: [(moment, base + i) for i, moment in reversed(list(enumerate(moments)))]
+        for source, base in [("GARMIN", 100.0), ("FITBIT", 60.0)]
+    }
+    windows = [(T + timedelta(seconds=a), T + timedelta(seconds=b)) for a, b in bounds]
+    expected = []
+    for i, moment in enumerate(moments):
+        source = policy.activity[0] if i in active else policy.health[0]
+        expected.append((moment, (100.0 if source == "GARMIN" else 60.0) + i, source))
+    kept, chosen = resolve_samples(series, windows, policy)
+    assert kept == expected  # Original values, chronological, without duplicated samples.
+    assert chosen == {
+        source: len(
+            {moment.replace(second=0, microsecond=0) for moment, _, s in expected if s == source}
+        )
+        for source in {s for _, _, s in expected}
+    }
+
+
+@pytest.mark.parametrize("policy", [DEFAULT, REVERSED])
+def test_preferred_source_on_another_side_does_not_hide_available_samples(policy):
+    health, activity = policy.health[0], policy.activity[0]
+    before, inside, after = [T + timedelta(seconds=s) for s in (15, 45, 55)]
+    series = {health: [(before, 61.0), (inside, 62.0)], activity: [(T, 70.0), (after, 71.0)]}
+    windows = [(T + timedelta(seconds=30), T + timedelta(seconds=50))]
+    assert resolve_samples(series, windows, policy) == (
+        [(before, 61.0, health), (inside, 62.0, health), (after, 71.0, activity)],
+        {health: 1, activity: 1},
+    )
+
+
+def test_empty_sample_series_has_no_selected_minutes():
+    assert resolve_samples({"FITBIT": [], "GARMIN": []}, [(at(0), at(1))], DEFAULT) == ([], {})
+
+
+@pytest.mark.parametrize("windows", [[], [(at(-1), at(2))]])
+def test_minutes_without_boundaries_keep_all_samples_of_the_winning_source(windows):
+    first, second, other = [T + timedelta(seconds=s) for s in (15, 45, 30)]
+    series = {"FITBIT": [(second, 62.0), (first, 61.0)], "GARMIN": [(other, 70.0)]}
+    expected = (
+        [(other, 70.0, "GARMIN")]
+        if windows
+        else [(first, 61.0, "FITBIT"), (second, 62.0, "FITBIT")]
+    )
+    assert resolve_samples(series, windows, DEFAULT) == (expected, {expected[0][2]: 1})

@@ -58,6 +58,25 @@ starts. The backup unit takes both `backups` and `backup-status` for root before
 ([details](DEPLOYMENT.md#8-encrypted-backups)), so no `chown` is needed either way. `GET /health/backup`
 reports `missing` until the next backup run.
 
+### Existing installations: migrate before updating
+
+An installation from before the application database role and the `healthos.localhost` login
+address needs these steps once, in this order:
+
+1. Run `make backup`, then check the current database role ([Application database role](#application-database-role)).
+2. Set `POSTGRES_APP_USER=healthos_app` and a generated `POSTGRES_APP_PASSWORD` in `.env`; remove any
+   owner/privileged role membership before provisioning.
+3. Validate existing secrets against the [production requirements](DEPLOYMENT.md#3-fill-in-env); if
+   role migration must wait, set `HEALTHOS_ALLOW_SUPERUSER_UNTIL=<YYYY-MM-DD>` at most 30 days
+   ahead, then remove it after migration.
+4. Build and start (`docker compose build app`, `docker compose up -d`); confirm the app uses
+   `healthos_app` and `/health` has no `database_role_*` reason (temporary grace reports
+   `database_role_superuser_grace`).
+5. Reopen `healthos.localhost:8000` and log in, keep an explicit existing `GOOGLE_REDIRECT_URI` in
+   `.env` or register the new `http://healthos.localhost:8000/auth/google/callback` default in
+   Google Cloud Console first, and restart the host bridge after the update
+   ([Restart the Umay bridge](#restart-the-umay-bridge)).
+
 ### Upgrade from v0.2.2
 
 After upgrading from v0.2.2 (to 0.2.2.1 or later), Google sync pauses until you use "Connect Google" once for fresh offline
@@ -128,8 +147,9 @@ Notes on every revision from `20261020_0010` on (what it changed, locks, rollbac
 | <a id="signed-webhook-bodies-jsonb-cannot-hold--20261031_0021"></a>Signed webhook bodies jsonb cannot hold — 20261031_0021 | [Signed webhook bodies jsonb cannot hold — 20261031_0021](MIGRATIONS.md#signed-webhook-bodies-jsonb-cannot-hold--20261031_0021) |
 | <a id="google-records-jsonb-cannot-hold--20261102_0023"></a>Google records jsonb cannot hold — 20261102_0023 | [Google records jsonb cannot hold — 20261102_0023](MIGRATIONS.md#google-records-jsonb-cannot-hold--20261102_0023) |
 | <a id="deferred-derived-day-invalidation--20261108_0028"></a>Deferred derived-day invalidation — 20261108_0028 | [Deferred derived-day invalidation — 20261108_0028](MIGRATIONS.md#deferred-derived-day-invalidation--20261108_0028) |
+| Google heart chart packets — 20261114_0036 | [Google heart chart projection](reference/heart-projection.md#maintenance) |
 
-Applying a revision needs nothing beyond [Update the application](#update-the-application) unless its notes say otherwise; `20261020_0011` and `20261031_0021` stop after 30 seconds, changing nothing, when a nightly `pg_dump` is running, so update outside the backup window.
+Applying a revision needs nothing beyond [Update the application](#update-the-application) unless its notes say otherwise; `20261020_0011` and `20261031_0021` stop after 30 seconds, changing nothing, when a nightly `pg_dump` is running, so update outside the backup window. `20261114_0036` waits at most 5 seconds for an open sync, and its packets are used only after the [initial heart fill](reference/heart-projection.md#maintenance), which you start by hand: until then the dashboard reads the raw archive as before.
 
 ## Guards and the database superuser
 

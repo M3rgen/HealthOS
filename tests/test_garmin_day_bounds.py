@@ -54,8 +54,8 @@ async def test_overflow_day_preserves_values_and_evidence(sessions, monkeypatch,
 
     original = garmin_normalize.write_daily_projections
 
-    async def fail_after_evidence(session, record_ids, rows):
-        await original(session, record_ids, rows)
+    async def fail_after_evidence(session, record_ids, rows, **kwargs):
+        await original(session, record_ids, rows, **kwargs)
         raise RuntimeError("synthetic rollback after daily evidence")
 
     monkeypatch.setattr(garmin_normalize, "write_daily_projections", fail_after_evidence)

@@ -7,6 +7,21 @@ from datetime import UTC, datetime, timedelta
 from derived_records import point
 
 START = datetime(2026, 8, 31, 21, 30, tzinfo=UTC)
+OPTIONAL_METRICS = {"caloriesKcal": "calories_kcal", "distanceMillimeters": "distance_meters"}
+METRIC_VALUES = [
+    -10,
+    "-10",
+    -1000,
+    -5e-324,
+    "-1e-999999",
+    "-1e30",
+    0,
+    "0",
+    "-0",
+    -0.0,
+    12.5,
+    "12.5",
+]
 
 
 def exercise(name="one", start=START, **fields):

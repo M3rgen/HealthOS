@@ -20,11 +20,19 @@ from sqlalchemy import text
 
 from app.db.dialect import database_operation
 
-# Dropped even with rows: rebuilt from the archive (derived_days), operational timestamps with
+# Dropped even with rows: rebuilt from the archive (derived_days and Google heart packets),
+# their initial-fill cursor (google_heart_projection_state), operational timestamps with
 # a row seeded by their own migration (reliability_state), a resumable pull's bookkeeping
 # (garmin_pull_state) and one display setting (display_preferences).
 DISPOSABLE_TABLES = frozenset(
-    {"derived_days", "display_preferences", "garmin_pull_state", "reliability_state"}
+    {
+        "derived_days",
+        "google_heart_hours",
+        "google_heart_projection_state",
+        "display_preferences",
+        "garmin_pull_state",
+        "reliability_state",
+    }
 )
 # The operator's existing consent, each named by its revision's own guard ("after a backup").
 # It covers what that revision drops and nothing else: no flag reaches raw_health_data.

@@ -5,13 +5,11 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
-from uuid import UUID
 from zoneinfo import ZoneInfo
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.schemas.dashboard import DashboardDay
-from app.services.archive.manual_flags import excluded_measurement_ids
 from app.services.dashboard_views.dashboard import dashboard_data
 from app.services.readers import DashboardQuery
 
@@ -39,7 +37,6 @@ from .retrieval_coverage import receipt_horizon
 @dataclass(frozen=True)
 class _CoverageContext:
     dashboard_days: dict[date, DashboardDay]
-    excluded: set[UUID]
     horizon: datetime | None
     single_metric: bool
     closed_days: int
@@ -55,11 +52,10 @@ async def _metric_coverage(
     if metric.data_type is not None:
         streams, invalid = await google_streams(session, metric, window)
     if metric.manual is not None:
-        stream, dropped = await manual_stream(session, metric, window, context.excluded)
+        stream, dropped = await manual_stream(session, metric, window)
         streams["manuel"] = stream
         manual_dropped = dropped
-    if metric.read in {"steps", "sleep", "weight"}:
-        invalid = None  # rows that never normalized are not looked for yet
+    if invalid is None:
         codes.append("invalid_shape_unknown")
     if metric.read in {"steps", "sleep"}:
         days = {day for day, row in context.dashboard_days.items() if row[metric.key] is not None}
@@ -124,8 +120,7 @@ async def coverage_card(
     if any(metric.read in {"steps", "sleep"} for metric in metrics):
         data = await dashboard_data(session, query=DashboardQuery(end_date, requested, timezone))
         dashboard_days = {date.fromisoformat(row["date"]): row for row in data["days"]}
-    excluded = await excluded_measurement_ids(session)
-    context = _CoverageContext(dashboard_days, excluded, horizon, len(metrics) == 1, closed)
+    context = _CoverageContext(dashboard_days, horizon, len(metrics) == 1, closed)
     cards = [await _metric_coverage(session, metric, window, context) for metric in metrics]
     codes = ["daily_status_not_coverage"]
     if horizon is None:

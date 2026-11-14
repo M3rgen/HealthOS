@@ -109,7 +109,7 @@ async def test_garmin_adapter_preserves_raw_table_and_normalization_boundary(ses
                     ZoneInfo("UTC"),
                     DashboardSources(),
                 )
-            ).days[DAY]["steps"].value == daily_steps(DAY)["totalSteps"]
+            )[0].days[DAY]["steps"].value == daily_steps(DAY)["totalSteps"]
         assert record_digest(record) == google_digest(record) == payload_hash(record)
         from types import SimpleNamespace
 

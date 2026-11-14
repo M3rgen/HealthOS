@@ -2,7 +2,7 @@
 # HealthOS installer for Linux servers (default), Raspberry Pi, NAS, cloud VPS and macOS.
 # Windows: use install.ps1. English / Türkçe. Run `bash install.sh --help` for every option.
 #
-#   curl -fsSL https://raw.githubusercontent.com/M3rgen/HealthOS/v0.2.2.1/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/M3rgen/HealthOS/v0.2.3/install.sh | bash
 #   (a release: clones its own tag, v$HEALTHOS_INSTALLER_VERSION; the development version is
 #   .../main/install.sh | bash -s -- --ref main)
 #   bash install.sh                       # inside a checkout: guided setup
@@ -20,7 +20,7 @@
 #
 # Runs on bash 3.2 (macOS) and newer with POSIX tools, curl or wget, git (to clone), and
 # openssl or /dev/urandom for secrets. No Python is needed for the installer itself.
-HEALTHOS_INSTALLER_VERSION="0.2.2.1"
+HEALTHOS_INSTALLER_VERSION="0.2.3"
 
 set -u
 set -o pipefail

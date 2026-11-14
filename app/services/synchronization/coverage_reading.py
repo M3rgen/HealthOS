@@ -23,7 +23,8 @@ records, not days; unknown counts are ``null``. Nothing here writes.
 
 from __future__ import annotations
 
-import uuid
+from collections.abc import AsyncGenerator
+from contextlib import aclosing
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
 from typing import Literal
@@ -41,7 +42,10 @@ from app.models.health import SleepSession, Steps, Weight
 from app.models.manual import ManualMeasurement
 from app.models.state import RawHealthData
 from app.parsers.common import payload_hash
+from app.parsers.google_daily import DAILY_SPO2_FIELDS
+from app.parsers.sleep import sleep_asleep_seconds
 from app.parsers.text import optional_text
+from app.services.archive.manual_flags import excluded_measurements
 from app.services.readers.current_sleep import current_sleep, sleep_wake_window
 from app.services.readers.current_steps import current_steps
 from app.services.readers.current_weight import current_weight
@@ -83,13 +87,15 @@ METRICS = (
         "spo2",
         "daily-oxygen-saturation",
         "raw_daily",
-        ("averagePercentage", "percentage", "average"),
+        DAILY_SPO2_FIELDS,
     ),
     Metric("weight", "weight", "weight", manual="weight"),
     Metric("height", "height", "raw_sample", ("heightMillimeters",), manual="height"),
     Metric("body_fat", "body-fat", "raw_sample", ("percentage",), manual="body_fat"),
     Metric("muscle", None, "manual", manual="muscle"),
 )
+_NORMALIZED_BATCH = 1000
+_MANUAL_BATCH = 1000
 NORMALIZED = {"steps": Steps, "sleep": SleepSession, "weight": Weight}
 
 
@@ -229,55 +235,77 @@ async def google_streams(session: AsyncSession, metric: Metric, window: Window):
     invalid = 0
     start, stop = window.start, window.stop
     if metric.read in NORMALIZED:
-        rows = await _normalized_records(session, metric, window)
-        for (record,) in rows:
-            # SQL scalar extraction can turn booleans into 0/1, changing the fingerprint.
-            data_source = record.get("dataSource")
-            times = [record]
-            if metric.read in {"steps", "sleep"}:
+        async with aclosing(_normalized_records(session, metric, window)) as rows:
+            async for record, normalized in rows:
+                # SQL scalar extraction can turn booleans into 0/1, changing the fingerprint.
+                data_source = record.get("dataSource")
+                if metric.read == "weight":
+                    measurement = current_weight(record)
+                    if measurement is None or not normalized:  # the dashboard has no value
+                        invalid += 1
+                        continue
+                    timestamp, _ = measurement
+                    if start <= timestamp < stop:
+                        stream = stream_of(data_source, streams)
+                        stream.records += 1
+                        stream.days.add(window.local(timestamp))
+                    continue
                 measurement = (
-                    current_steps(times[0]) if metric.read == "steps" else current_sleep(times[0])
+                    current_steps(record) if metric.read == "steps" else _current_sleep(record)
                 )
-                if measurement is None:
+                if measurement is None or not normalized:
                     invalid += 1
                     continue
-                times = (measurement[0], measurement[1])
-            if metric.read == "weight":
-                measurement = current_weight(times[0])
-                if measurement is None:
-                    invalid += 1
+                stream = stream_of(data_source, streams)
+                left, right = as_utc(measurement[0]), as_utc(measurement[1])
+                if right <= left:  # no value: the dashboard skips these too (steps and sleep)
                     continue
-                timestamp, _ = measurement
-                if start <= timestamp < stop:
-                    stream = stream_of(data_source, streams)
-                    stream.records += 1
-                    stream.days.add(window.local(timestamp))
-                continue
-            stream = stream_of(data_source, streams)
-            left, right = as_utc(times[0]), as_utc(times[1])
-            if right <= left:  # no value: the dashboard skips these too (steps and sleep)
-                continue
-            stream.records += 1
-            if metric.read == "sleep":  # the wake day
-                stream.days.add(window.local(right))
-                continue
-            day = max(left, start).astimezone(window.zone).date()
-            last = (min(right, stop) - timedelta(microseconds=1)).astimezone(window.zone).date()
-            while day <= last:
-                stream.days.add(day)
-                day += timedelta(days=1)
+                stream.records += 1
+                if metric.read == "sleep":  # the wake day
+                    stream.days.add(window.local(right))
+                    continue
+                day = max(left, start).astimezone(window.zone).date()
+                last = (min(right, stop) - timedelta(microseconds=1)).astimezone(window.zone).date()
+                while day <= last:
+                    stream.days.add(day)
+                    day += timedelta(days=1)
         return streams, invalid
-    async for source, day in raw_value_days(session, metric, window):
-        if day is None:
-            invalid += 1
-        else:
-            stream = stream_of(source, streams)
-            stream.records += 1
-            stream.days.add(day)
+    # These generators own live cursors; close them even if source grouping fails.
+    async with aclosing(raw_value_days(session, metric, window)) as rows:
+        async for source, day in rows:
+            if day is None:
+                invalid += 1
+            else:
+                stream = stream_of(source, streams)
+                stream.records += 1
+                stream.days.add(day)
     return streams, invalid
 
 
-async def _normalized_records(session: AsyncSession, metric: Metric, window: Window):
+def _current_sleep(record: dict) -> tuple[datetime, datetime, dict] | None:
+    """The current interval of a session whose asleep time the dashboard can show.
+
+    A valid interval is not enough: the dashboard's estimate also rejects invalid
+    duration evidence (``SleepAsleep`` without a period), so a negative or NaN
+    duration has no value here either, whether it arrived first or as a correction.
+    """
+    measurement = current_sleep(record)
+    if measurement is None:
+        return None
+    left, right, payload = measurement
+    return measurement if sleep_asleep_seconds(payload, left, right).period is not None else None
+
+
+async def _normalized_records(
+    session: AsyncSession, metric: Metric, window: Window
+) -> AsyncGenerator[tuple[dict, bool], None]:
+    """Yield current raw payloads and whether their normalized row exists, one batch at a time.
+
+    Steps, sleep and weight read every counted raw record of the window, so a record
+    that never normalized is judged as well (maintainer, 2026-11-13). The consumer
+    owns this generator via aclosing, so a processing failure or early exit
+    also releases its cursor instead of waiting for finalization.
+    """
     start, stop = window.start, window.stop
     model = NORMALIZED[metric.read]
     if metric.data_type is None:
@@ -302,39 +330,74 @@ async def _normalized_records(session: AsyncSession, metric: Metric, window: Win
                 raw.source_start_time < stop,
             ),
         )
-    return await session.execute(
-        select(*columns)
-        .select_from(model)
-        .join(
-            raw,
-            and_(
-                raw.data_type == metric.data_type,
-                raw.google_data_point_id == model.google_data_point_id,
-            ),
-        )
-        .where(*where, normalized_counted(model, (metric.data_type,)))
+    types = (metric.data_type,)
+    # Aliased: raw_counted's quarantine probe of the normalized table must not correlate.
+    row = aliased(model)
+    statement = (
+        select(*columns, row.google_data_point_id.is_not(None))
+        .select_from(raw)
+        .outerjoin(row, raw.google_data_point_id == row.google_data_point_id)
+        .where(raw.data_type == metric.data_type, *where, raw_counted(raw, types))
     )
+    rows = await session.stream(statement, execution_options={"yield_per": _NORMALIZED_BATCH})
+    try:
+        async for record, found in rows:
+            yield record, bool(found)
+    finally:
+        await rows.close()
 
 
 async def manual_stream(
-    session: AsyncSession, metric: Metric, window: Window, excluded: set[uuid.UUID]
-):
+    session: AsyncSession, metric: Metric, window: Window
+) -> tuple[Stream, int]:
+    """Count manual presence with one bounded scalar cursor, without loading ids.
+
+    The shared flag subquery decides exclusion in SQL, including event-time ties.
+    Only timestamps and that decision cross into Python; values, ids and the full
+    flag archive are unnecessary. Keep one day set for eligible presence and a
+    separate excluded-record count, so a fully excluded day has no source regime.
+    Local day conversion stays in Window to retain civil midnight and DST rules.
+    Neither excluded nor eligible rows accumulate, even on a densely sampled day.
+    """
     stream = Stream("manuel", "manual", None, None, None, set())
     dropped = 0
-    rows = await session.execute(
-        select(ManualMeasurement.id, ManualMeasurement.measured_at).where(
+    # The consumer owns the generator: grouping failures also close its live cursor.
+    async with aclosing(_manual_records(session, metric, window)) as rows:
+        async for measured_at, excluded in rows:
+            if excluded:  # flagged as a test record: no value, counted apart
+                dropped += 1
+                continue
+            stream.records += 1
+            stream.days.add(window.local(measured_at))
+    return stream, dropped
+
+
+async def _manual_records(
+    session: AsyncSession, metric: Metric, window: Window
+) -> AsyncGenerator[tuple[datetime, bool], None]:
+    """Yield window timestamps and shared exclusion decisions in fixed-size batches.
+
+    Selecting scalar columns avoids ORM identity-map retention. The database keeps
+    the flag-id subquery; neither an id list nor one query per measurement is needed.
+    The cursor is scoped to this generator, including errors between batch fetches.
+    """
+    rows = await session.stream(
+        select(
+            ManualMeasurement.measured_at,
+            ManualMeasurement.id.in_(excluded_measurements()),
+        ).where(
             ManualMeasurement.metric == metric.manual,
             ManualMeasurement.measured_at >= window.start,
             ManualMeasurement.measured_at < window.stop,
-        )
+        ),
+        execution_options={"yield_per": _MANUAL_BATCH},
     )
-    for identifier, measured_at in rows:
-        if identifier in excluded:  # flagged as a test record: no value, counted apart
-            dropped += 1
-            continue
-        stream.records += 1
-        stream.days.add(window.local(measured_at))
-    return stream, dropped
+    try:
+        async for measured_at, excluded in rows:
+            yield measured_at, excluded
+    finally:
+        # Also release the server cursor on conversion failures or task cancellation.
+        await rows.close()
 
 
 def _counts(*conditions: ColumnElement[bool]):

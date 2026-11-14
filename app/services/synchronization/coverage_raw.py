@@ -7,7 +7,7 @@ coverage reader can count it as invalid_shape, separately from retrieval evidenc
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
 from datetime import UTC, date, datetime, time, timedelta
 from typing import TYPE_CHECKING
 
@@ -19,7 +19,10 @@ from app.core.records import RecordType
 from app.models.eligibility import raw_counted
 from app.models.state import RawHealthData
 from app.parsers.common import number, parse_date, payload_for
+from app.parsers.google_daily import daily_spo2
 from app.services.shared.finite_math import finite_number, finite_scale
+
+_RAW_BATCH = 1000
 
 if TYPE_CHECKING:
     from .coverage_types import Metric, Window
@@ -27,7 +30,7 @@ if TYPE_CHECKING:
 
 async def raw_value_days(
     session: AsyncSession, metric: Metric, window: Window
-) -> AsyncIterator[tuple[object, date | None]]:
+) -> AsyncGenerator[tuple[object, date | None], None]:
     """Yield each eligible source and its value day; None means an invalid row.
 
     Daily values use civil dates and daily query bounds. Samples use the local
@@ -35,34 +38,55 @@ async def raw_value_days(
     Height keeps its source Decimal through conversion from millimeters to cm:
     a value outside float range may still be representable in the final unit.
     True zero remains a value; overflow, underflow to zero and nonfinite values
-    cannot establish presence, even when the source date is well formed.
+    cannot establish presence, even when the source date is well formed. Negative
+    height/fat samples and daily heart/HRV/oxygen summaries are rejected on the
+    source Decimal, before float conversion or scaling; they remain invalid rows
+    belonging to their original source, even when an alternate field is valid.
     """
     spec = RecordType(metric.data_type or "")
     start, stop = window.start, window.stop
     if metric.read == "raw_daily":
         start = datetime.combine(window.first, time.min, UTC)
         stop = datetime.combine(window.end + timedelta(days=1), time.min, UTC)
-    rows = await session.execute(
+    rows = await session.stream(
         select(RawHealthData.raw_json, RawHealthData.source_start_time).where(
             RawHealthData.data_type == metric.data_type,
             RawHealthData.source_start_time >= start,
             RawHealthData.source_start_time < stop,
             raw_counted(data_types=(metric.data_type,)),
-        )
+        ),
+        execution_options={"yield_per": _RAW_BATCH},
     )
-    for record, started in rows:
-        payload = payload_for(spec, record)
-        day = (
-            parse_date(payload.get("date")) if metric.read == "raw_daily" else window.local(started)
-        )
-        if day is not None and window.first <= day <= window.end:
-            supplied = first_number(payload, metric.fields, parse=number)
-            value = (
-                finite_scale(supplied, 0.1)
-                if metric.key == "height" and supplied is not None
-                else finite_number(supplied)
+    try:
+        async for record, started in rows:
+            payload = payload_for(spec, record)
+            day = (
+                parse_date(payload.get("date"))
+                if metric.read == "raw_daily"
+                else window.local(started)
             )
-            if value is not None:
-                yield record.get("dataSource"), day
-                continue
-        yield record.get("dataSource"), None
+            if day is not None and window.first <= day <= window.end:
+                supplied = (
+                    daily_spo2(payload)[1]
+                    if metric.key == "spo2"
+                    else first_number(payload, metric.fields, parse=number)
+                )
+                if (
+                    metric.key in ("height", "body_fat", "resting_bpm", "hrv_ms", "spo2")
+                    and supplied is not None
+                    and supplied.is_finite()
+                    and supplied < 0
+                ):
+                    yield record.get("dataSource"), None
+                    continue
+                value = (
+                    finite_scale(supplied, 0.1)
+                    if metric.key == "height" and supplied is not None
+                    else finite_number(supplied)
+                )
+                if value is not None:
+                    yield record.get("dataSource"), day
+                    continue
+            yield record.get("dataSource"), None
+    finally:
+        await rows.close()

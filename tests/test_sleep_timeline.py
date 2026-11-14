@@ -11,6 +11,33 @@ from derived_records import BAND, DAY, PHONE, T0, read, sleep, stage, store, str
 from app.services.interpretation.sleep_timeline import sleep_timeline
 
 
+@pytest.mark.parametrize("label", ["awake", "wake", "restless", "light"])
+@pytest.mark.parametrize("shape", ["summary", "duration", "durationSeconds", "timestamps"])
+@pytest.mark.parametrize("bad_first", [False, True])
+def test_negative_stage_is_invalid_before_totals_can_hide_it(label, shape, bad_first):
+    if shape == "summary":
+        entries = [{"type": label, "minutes": -10}, {"type": label, "minutes": 20}]
+        entries.append({"type": "deep", "minutes": 60})
+        payload = {"summary": {"stagesSummary": entries}}
+    else:
+        bad = stage(label, 2, 1) if shape == "timestamps" else {"type": label, shape: "-600s"}
+        entries = [bad, {"type": label, "duration": "7200s"}, stage("deep", 1, 2)]
+        payload = {"stages": entries}
+    if not bad_first:
+        entries.reverse()
+    row = SimpleNamespace(start_time=T0, end_time=T0 + timedelta(hours=8))
+    timeline = sleep_timeline([(row, payload)])
+    assert timeline["sessions"][0]["stage_totals_seconds"] == {label: None, "deep": 3600}
+    assert f"unsupported_or_missing_value:stage_total:{label}" in timeline["reason_codes"]
+    if shape != "summary":
+        # Sound timed evidence remains independent from an invalid supplied total.
+        assert timeline["timeline_stage_seconds"] == {"deep": 3600}
+        key = "awake" if label == "wake" else label
+        assert timeline["stage_total_differences_seconds"][key] is None
+    if shape == "timestamps":
+        assert "unsupported_stage_timing" in timeline["reason_codes"]
+
+
 def test_timeline_matches_original_cell_scan():
     rng = Random(123)
     for size in range(30):

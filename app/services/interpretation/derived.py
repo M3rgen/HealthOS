@@ -14,6 +14,7 @@ from app.db.dialect import database_operation, dialect_insert
 from app.db.postgres import BUILD_LOCK
 from app.models.derived import DerivedDay
 from app.models.identity_queries import plan_each_query
+from app.services.readers import refresh_heart_hours
 
 from .canonical_daily import METHOD, bounds, canonical_day
 
@@ -381,6 +382,7 @@ class DerivedRefresh:
         queue. A day whose build fails is recorded as failed for its revision and skipped,
         so it cannot hold the queue; a later source change makes it pending again.
         """
+        await refresh_heart_hours(self.sessions)
         async with self.sessions() as session:
             keys = (
                 await session.execute(

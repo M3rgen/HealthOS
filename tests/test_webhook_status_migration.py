@@ -47,6 +47,9 @@ def test_upgrade_keeps_raw_archive_and_populated_diagnostics_refuse_downgrade(
         assert set(inspect(engine).get_table_names()) - before == {
             "webhook_status_events",
             "derived_days",
+            "google_heart_hours",
+            "google_heart_pending",
+            "google_heart_projection_state",
             "derived_day_pending",
             "display_preferences",
             *raw_rejections.TABLES,

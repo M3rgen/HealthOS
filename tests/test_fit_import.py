@@ -8,7 +8,15 @@ from pathlib import Path
 
 import httpx
 import pytest
-from fit_factory import START, activity, activity_messages, definition, fit_file
+from fit_factory import (
+    STAMP,
+    START,
+    activity,
+    activity_messages,
+    definition,
+    fit_file,
+    timestamp_message,
+)
 from sqlalchemy import func, select, update
 
 from app import main
@@ -125,6 +133,24 @@ async def test_file_encoding_changes_reuse_the_same_record_identities(client, se
     assert all(not stats.error for stats in results.values())
 
 
+@pytest.mark.parametrize("endian", ["<", ">"])
+@pytest.mark.parametrize("manufacturer", [1, 255])
+async def test_unknown_timestamp_bridge_import_and_reupload(client, sessions, endian, manufacturer):
+    data = activity_messages(endian=endian, manufacturer=manufacturer)
+    data += timestamp_message(STAMP + 31, endian=endian) + b"\xc0\x82"
+    http, _ = client
+    response = await http.post(PATH, content=fit_file(data), headers=HEADERS)
+    assert response.status_code == 200, response.text
+    assert response.json()["inserted"] == 4
+    again = await http.post(PATH, content=fit_file(data), headers=HEADERS)
+    assert again.json() == {**response.json(), "inserted": 0, "unchanged": 4}
+    async with sessions() as session:
+        rows = (await session.scalars(select(HeartRate).order_by(HeartRate.timestamp))).all()
+        assert rows[-1].timestamp.replace(tzinfo=START.tzinfo) == START + timedelta(seconds=32)
+        assert await count(session, RawHealthData) == 5
+        assert await count(session, RawHealthDataVersion) == 0
+
+
 async def test_correction_keeps_previous_file_and_payload(client, sessions):
     http, _ = client
     await http.post(PATH, content=activity(), headers=HEADERS)
@@ -212,6 +238,7 @@ async def test_damaged_or_undefined_message_never_partially_imports(client, sess
 
 @pytest.mark.parametrize("existing", [False, True])
 @pytest.mark.parametrize("endian", ["<", ">"])
+@pytest.mark.parametrize("with_data", [False, True])
 @pytest.mark.parametrize(
     "kind, field, code, value",
     [
@@ -221,10 +248,15 @@ async def test_damaged_or_undefined_message_never_partially_imports(client, sess
         (18, (7, 4, 0x88), "f", 1.0),  # floating-point elapsed time
         (18, (8, 8, 0x86), "II", (1000, 2000)),  # timer array
         (0, (3, 4, 0x86), "I", 0),  # uint32 instead of uint32z serial
+        (999, (253, 1, 2), "B", 1),  # original time-base corruption
+        (999, (253, 4, 0x85), "i", -1),  # signed timestamp
+        (999, (253, 2, 0x86), "H", 1),  # wrong width
+        (999, (253, 8, 0x86), "II", (1, 2)),  # array
+        (999, (253, 4, 0x06), "I", 1),  # missing endian flag
     ],
 )
 async def test_wrong_field_type_at_eof_never_writes_or_changes_rows(
-    client, sessions, existing, endian, kind, field, code, value
+    client, sessions, existing, endian, with_data, kind, field, code, value
 ):
     http, _ = client
     if existing:
@@ -255,7 +287,10 @@ async def test_wrong_field_type_at_eof_never_writes_or_changes_rows(
     # A complete valid prefix would change existing samples if parsing wrote incrementally.
     data = activity_messages(bpm=130, endian=endian)
     data += definition(3, kind, [field], endian=endian)
-    data += b"\x03" + struct.pack(endian + code, *(value if isinstance(value, tuple) else (value,)))
+    if with_data:
+        values = value if isinstance(value, tuple) else (value,)
+        data += b"\x03" + struct.pack(endian + code, *values)
+        data += b"\xc2\x82"  # compressed record must never use the malformed base
     response = await http.post(PATH, content=fit_file(data), headers=HEADERS)
     assert response.status_code == 422
     assert response.json() == {"detail": "FIT alanının türü veya skaler boyutu geçersiz."}

@@ -44,7 +44,11 @@ const withGarmin = (row) => ({ ...row, sources: { ...row.sources,
   steps: { source: 'FITBIT', label: 'Fitbit', alternatives: [{ source: 'GARMIN', label: 'Garmin', value: row.steps - 700 }] },
   sleep_seconds: { source: 'FITBIT', label: 'Fitbit', alternatives: [{ source: 'GARMIN', label: 'Garmin', value: row.sleep_seconds + 1500 }] } } });
 
-function day(date, i) {
+// One seed per calendar date, so the dashboard, its past windows and the metric history all show
+// the same value for the same day. It equals the day of the month in TODAY's month (16 Oct -> 16).
+const seedOf = (date) => Number(TODAY.slice(-2)) - Math.round((civil(TODAY) - civil(date)) / 86400000);
+
+function day(date, i = seedOf(date)) {
   const partial = date === TODAY;
   const missingSpo2 = i % 5 === 3;
   const row = {
@@ -63,7 +67,7 @@ function day(date, i) {
 function dashboard(params) {
   const days = Math.max(1, Math.min(31, Number(params.get('days') || 7)));
   const end = params.get('end_date') || TODAY;
-  const rows = Array.from({ length: days }, (_, i) => day(minus(end, i), Number(end.slice(-2)) - i));
+  const rows = Array.from({ length: days }, (_, i) => day(minus(end, i)));
   const daytime = (h) => h >= 7 && h <= 22;
   return {
     start_date: minus(end, days - 1), end_date: end, timezone: params.get('timezone') || 'UTC',
@@ -100,9 +104,11 @@ function history(params) {
   const end = minus(TODAY, 30 * (page - 1));
   const days = Array.from({ length: 30 }, (_, i) => {
     const date = minus(end, 29 - i);
-    const row = day(date, i + page * 30);
+    const row = day(date);
     const value = metric === 'steps' ? row.steps : metric === 'sleep' ? row.sleep_seconds : row.resting_bpm;
-    return { date, value: i % 11 === 4 ? null : value, partial: row.partial };
+    // A few days without a value, none of them in the dashboard's last 7 days (9 Oct, 28 Sep, 17 Sep...).
+    const gap = Math.round((civil(TODAY) - civil(date)) / 86400000) % 11 === 7;
+    return { date, value: gap ? null : value, partial: row.partial };
   });
   return {
     metric, page, total_pages: 7, start_date: minus(end, 29), end_date: end,
@@ -162,10 +168,41 @@ function workouts(params) {
   return rows.reverse();
 }
 
-const chatAnswer = '**Merhaba!** Son 7 günün özeti:\n\n' +
-  '- Ortalama adım: **9.120**\n- Ortalama uyku: **7 sa 18 dk**\n- Dinlenme nabzı istikrarlı (57–61 bpm).\n\n' +
-  '| Gün | Adım | Uyku |\n|---|---:|---:|\n| Pzt | 10.240 | 7 sa 40 dk |\n| Sal | 8.910 | 6 sa 55 dk |\n\n' +
-  'Uyku düzenini korumak için yatış saatini sabit tutmayı deneyebilirsin.';
+// Umay's preview answer is written from the dashboard's own last 7 days, so the bubble and the
+// table beside it never disagree. Umay speaks Turkish in every interface language.
+const TR_DAYS = ['Paz', 'Pzt', 'Sal', 'Çar', 'Per', 'Cum', 'Cmt'];
+const TR_MONTHS = ['Oca', 'Şub', 'Mar', 'Nis', 'May', 'Haz', 'Tem', 'Ağu', 'Eyl', 'Eki', 'Kas', 'Ara'];
+const trNumber = (value) => String(value).replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+const trSleep = (seconds) => { const minutes = Math.round(seconds / 60); return `${Math.floor(minutes / 60)} sa ${minutes % 60} dk`; };
+const trDay = (date) => { const d = civil(date); return `${TR_DAYS[d.getUTCDay()]} ${d.getUTCDate()} ${TR_MONTHS[d.getUTCMonth()]}`; };
+const lastWeek = dashboard(new URLSearchParams()).days;
+function weekAnswer(rows) {
+  const today = rows.find((row) => row.partial);
+  const done = rows.filter((row) => !row.partial);
+  const mean = (key) => Math.round(done.reduce((sum, row) => sum + row[key], 0) / done.length);
+  const bpm = done.map((row) => row.resting_bpm);
+  const bySteps = [...done].sort((a, b) => b.steps - a.steps);
+  const oldest = done.at(-1).date, newest = done[0].date;
+  const span = `${civil(oldest).getUTCDate()}–${trDay(newest).split(' ').slice(1).join(' ')}`;
+  return `**Merhaba!** Son ${done.length} tam gün (${span}): ortalama **${trNumber(mean('steps'))}** adım ve ` +
+    `**${trSleep(mean('sleep_seconds'))}** uyku; dinlenme nabzı ${Math.min(...bpm)}–${Math.max(...bpm)} bpm.\n\n` +
+    '| | Gün | Adım | Uyku |\n|---|---|---:|---:|\n' +
+    [['En çok', bySteps[0]], ['En az', bySteps.at(-1)]].map(([label, row]) =>
+      `| ${label} | ${trDay(row.date)} | ${trNumber(row.steps)} | ${trSleep(row.sleep_seconds)} |`).join('\n') +
+    (today ? `\n\nBugün şimdiye kadar **${trNumber(today.steps)}** adım.` : '');
+}
+const chatAnswer = weekAnswer(lastWeek);
+// The turn's transfer receipt (app/services/umay/health_transfer.py describe_result): one daily
+// query for the same 7 days the answer reads.
+const zeroCounts = { raw_records: 0, daily_summaries: 0, profile_measurements: 0, chart_points: 0,
+  derived_summaries: 0, derived_observations: 0, metadata_items: 0 };
+const weekRange = { first: lastWeek.at(-1).date, last: lastWeek[0].date };
+const chatTransferCall = { action: 'daily', outcome: 'sent', counts: { ...zeroCounts, daily_summaries: lastWeek.length },
+  unique_source_records: null, requested: weekRange, timezone: 'UTC', source_timezones: ['UTC'], data_dates: weekRange,
+  profile_dates: null, metadata_dates: null,
+  fields: ['days[].date', 'days[].steps', 'days[].sleep_seconds', 'days[].resting_bpm', 'days[].hrv_ms', 'days[].spo2', 'days[].status'] };
+const chatTransfer = (status) => ({ type: 'health_transfer', turn: 'preview', status, calls: [chatTransferCall],
+  counts: chatTransferCall.counts, failed_sends: 0 });
 
 // GET /api/sync/coverage: every requested day retrieved with records (app/api/sync.py).
 function coverage(params) {
@@ -305,4 +342,4 @@ const uploadBackgroundPng = () => syntheticPng(640, 400, (u, v) => [Math.round(3
 // Includes a script and an id marker: tests assert neither ever reaches the DOM.
 const uploadLogoSvg = () => Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" id="uploaded-svg-marker"><script>window.uploadedSvgRan=true</script><circle cx="24" cy="24" r="18" fill="none" stroke="#48d88c" stroke-width="5"/><path d="M15 24h18" stroke="#48d88c" stroke-width="5" stroke-linecap="round"/></svg>');
 
-module.exports = { NOW, TODAY, health, garminStatus, dashboard, dashboardWithSources, history, measurements, syncStatus, workouts, coverage, webhookStatus, devices, appleStatus, chatAnswer, scenario, appearanceSettings, syntheticPng, uploadAvatarPng, uploadBackgroundPng, uploadLogoSvg };
+module.exports = { NOW, TODAY, health, garminStatus, dashboard, dashboardWithSources, history, measurements, syncStatus, workouts, coverage, webhookStatus, devices, appleStatus, chatAnswer, chatTransfer, scenario, appearanceSettings, syntheticPng, uploadAvatarPng, uploadBackgroundPng, uploadLogoSvg };

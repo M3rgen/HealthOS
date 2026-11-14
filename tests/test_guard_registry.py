@@ -12,17 +12,23 @@ import app.models
 from app.db import guards
 from app.db.base import Base
 from app.models import guards as archive
+from app.models import heart_invalidation
 
 
 def test_archive_guard_counts_and_registered_functions_are_unchanged():
     pg, functions, triggers = guards.definitions()
     sqlite = sqlite_guards.definitions()
+    new_pg, new_functions, new_triggers = guards.definitions(heart_invalidation.GUARDS)
+    assert len(new_pg) == len(new_triggers) == 26
+    assert len(new_functions) == 17
+    # Keep the pre-projection archive contract fixed; verify the new declaration separately.
     # GitHub-only Apple extension: two append-only tables, two triggers each per backend.
-    assert len(pg) == len(triggers) == 101
-    assert len(sqlite) == 96
-    assert len(functions) == 27
-    assert len({table for table, _ in pg.values()}) == 42
-    assert len({table for table, _ in sqlite.values()}) == 41
+    original = {name: value for name, value in pg.items() if name not in new_pg}
+    assert len(original) == len(set(triggers) - set(new_triggers)) == 105
+    assert len(sqlite) == 100
+    assert len(functions.keys() - new_functions.keys()) == 27
+    assert len({table for table, _ in original.values()}) == 44
+    assert len({table for table, _ in sqlite.values()}) == 43
     assert (pg, functions, triggers) == archive.definitions()
     assert sqlite == sqlite_guards.SQLITE_TRIGGER_SQL
     assert {function for _, _, function in triggers} == functions.keys()

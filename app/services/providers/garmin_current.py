@@ -14,6 +14,7 @@ from .garmin_activity_identity import activity_identifier_sql, activity_key
 from .garmin_activity_state import completed_activity_versions
 from .garmin_daily_state import INPUTS, daily_projection_pending
 from .garmin_membership import heart_set_pending
+from .garmin_time_state import time_choice_pending
 
 
 def activity_identity(record=GarminRawRecord):
@@ -121,7 +122,7 @@ def current_record_ids(
 def pending_daily_days(*criteria: ColumnElement[bool]):
     """Select pending calendar keys in SQL without loading any archived bodies.
 
-    One changed or missing projection or heart set makes the whole day pending.
+    A changed projection, heart set or nearest time choice makes the whole day pending.
     Select current versions first: sightings choose A again even if B has a larger
     raw id; keys without observation evidence retain the legacy max-id fallback.
     A normalized-only historical day has no raw candidate and is left untouched.
@@ -133,7 +134,14 @@ def pending_daily_days(*criteria: ColumnElement[bool]):
     )
     return (
         select(raw.key)
-        .where(raw.id.in_(ids), or_(daily_projection_pending(), heart_set_pending()))
+        .where(
+            raw.id.in_(ids),
+            or_(
+                daily_projection_pending(),
+                heart_set_pending(),
+                time_choice_pending(current_record_ids(raw.kind == "heart-rate")),
+            ),
+        )
         .distinct()
         .order_by(raw.key)
     )

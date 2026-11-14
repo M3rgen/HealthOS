@@ -45,6 +45,7 @@ def test_reservations_keep_existing_process_and_trigger_identities():
     assert dict(postgres.BIGINT_LOCKS) == {
         "derived_build": 72184518,
         "watchdog": 7104201986,
+        "heart_projection": 72184536,
     }
     assert postgres.BACKFILL_LOCK == (0x48454932, 1)
     assert postgres.CREDENTIAL_LOCK_KEY == 0
