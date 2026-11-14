@@ -97,6 +97,8 @@ def test_projection_is_guarded_numeric_members_and_source_truthiness(dialect):
     assert "garmin_record_observations.id DESC" in sql
 
 
+# Builds two archives and traces allocations: over 60 s on a hosted runner with coverage.
+@pytest.mark.timeout(300)
 async def test_query_and_python_memory_do_not_grow_with_samples_or_versions(sessions, monkeypatch):
     engine = sessions.kw["bind"].sync_engine
     loads = json.loads
