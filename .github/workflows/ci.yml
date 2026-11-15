@@ -22,7 +22,7 @@ jobs:
   verify:
     name: verify (Python ${{ matrix.python }})
     runs-on: ubuntu-24.04
-    timeout-minutes: 180
+    timeout-minutes: 300
     continue-on-error: ${{ matrix.experimental }}
     strategy:
       fail-fast: false
@@ -77,8 +77,12 @@ jobs:
           uv run --frozen --extra dev ruff check .
           uv run --frozen --extra dev ruff format --check .
       - name: Unit tests and coverage floors
-        # About 35 minutes on a hosted runner at 0.2.3 (16 at 0.2.2.1); the limit leaves room.
-        timeout-minutes: 60
+        # 56 minutes on a hosted runner with Python 3.12 at 0.2.3, 38 with 3.13 (16 at 0.2.2.1).
+        timeout-minutes: 90
+        env:
+          # The per-test hang guard is 60 s for an uninstrumented local run. Under coverage on a
+          # hosted runner the memory-bound tests take four to five times their local time.
+          PYTEST_TIMEOUT: "300"
         # Fails below fail_under (pyproject.toml) or the security-module floor (Makefile).
         run: |
           make coverage-security
@@ -99,8 +103,8 @@ jobs:
             -o Dir::Etc::sourceparts=- -o APT::Get::List-Cleanup=0
           sudo apt-get install --yes --no-install-recommends postgresql-client-17
       - name: PostgreSQL integration and unit suites
-        # 34 minutes on a hosted runner at 0.2.2.1; the unit suite has roughly doubled since.
-        timeout-minutes: 100
+        # 34 minutes on a hosted runner at 0.2.2.1; the unit suite has more than doubled since.
+        timeout-minutes: 180
         # tests/integration, then the unit suite against a migrated database (see Makefile).
         # The target sets HEALTHOS_REQUIRE_POSTGRES, so a lost server fails instead of skipping.
         # The same for the backup round trip and its client tools.
@@ -110,6 +114,7 @@ jobs:
           # Keep the SQLite baseline while both PostgreSQL suites append their measurements.
           # Every run still enforces the unchanged project floor.
           PYTEST_ADDOPTS: --cov=app --cov-append --cov-report=term
+          PYTEST_TIMEOUT: "300"
         run: |
           make test-postgres
           cp .coverage .test-tmp-ci-coverage/.coverage.postgres
