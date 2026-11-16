@@ -67,8 +67,79 @@ The 28-day limit of steps and stress was verified against the live API (400 at 2
 31-day sleep and 90-day daily-summary limits are the community-reported bounds, kept
 conservatively (32 and 91 days answered 200). Garmin publishes no rate limit: requests are at
 least a second apart and 429/5xx are retried with exponential back-off (at most five attempts,
-`Retry-After` honoured up to five minutes); a 400 is not retried. FIT/ZIP downloads of
-activities and per-activity detail are phase 2.
+`Retry-After` honoured up to five minutes); a 400 is not retried. Original FIT downloads
+are archived as described below; FIT message parsing and route display remain separate work.
+`/activity-service/activity/{id}/details` is not used: original files are the series source.
+
+### Original activity files
+
+After a successful activity-list pull (including historical backfills) and its normalization,
+HealthOS requests `GET /download-service/files/activity/{id}` for pending activities across the
+whole archive. A file round never fails or delays the list pull: its outcome is reported
+separately (`activity_files` in the pull summary), and a round that breaks or loses its owner is
+logged by error type only and leaves the activities pending.
+An unchanged list version with a completed file result is skipped. A distinct list payload
+rechecks the original file: identical FIT bytes reuse the activity's existing content digest;
+different bytes append a new immutable version. A return to a previously checked list version
+uses its existing result. File changes without any list change cannot be detected by this
+missing-file pull; it does not periodically redownload completed activities.
+
+The streamed HTTP body is limited to 8 MiB + 128 KiB, independently of content type. ZIP magic,
+single-disk/single-entry central-directory bounds and the entry's actual size/CRC are checked.
+Paths (including nested paths), symlinks, encryption, ZIP64, unsupported compression and
+non-FIT names/content are refused. The only member must be a FIT envelope of at most 8 MiB;
+its header signature and declared length are checked, without parsing FIT messages or samples.
+Nothing is extracted onto the filesystem. A refused body is never written to the file archive.
+
+`GARMIN_ACTIVITY_FILES_PER_RUN` defaults to 10 (1–100); the delay between different activities
+is `GARMIN_ACTIVITY_FILE_INTERVAL_SECONDS`, default 5 (1–300 seconds), in addition to the
+client's shared request pacing. The existing 429/5xx retry/back-off policy applies to each
+request. Any such response ends the round, even if its retry succeeds; a recovered file is
+committed before stopping. Exhausted retries leave that activity pending. Other files already
+committed are skipped on the next round. 404/410 append permanent absence evidence for the
+full activity identity, including after a later list correction; they are never retried.
+A received body that is refused (not a ZIP, broken archive, not exactly one entry, unsafe or
+unsupported entry, not a FIT, over the byte budget, unasked-for content encoding) appends an
+`invalid` result for that raw list version: a fixed reason code (`not_zip`, `archive`, `entries`,
+`entry`, `not_fit`, `too_large`, `encoding`) and, when the body was received completely, its
+SHA-256 and size; the bytes themselves are not kept. The round goes on, and that list version is
+not requested again, so a permanently broken file cannot use up later rounds. A new list
+version of the activity (a new raw record) is checked again. Transport errors, 429/5xx after the
+retries, authentication and other HTTP errors are never `invalid`: they stop the round as
+failures and leave the activity pending.
+
+Migration `20261115_0038` adds `garmin_activity_files` (FIT bytes, SHA-256, size, fetch time,
+full source activity id and raw-list-record foreign key) and `garmin_activity_file_results`
+(completed raw version, selected file, permanent 404/410 outcome or `invalid` with its reason). Both are append-only,
+including PostgreSQL TRUNCATE/replica guards. The separate tables are intentional: manual FIT
+uploads store a base64 file record in `raw_health_data` and immediately parse it into exercise
+and heart-rate records. Reusing that path would mix API provenance with manual import and
+parse the series here. No manual-import archive or normalized measurement is changed.
+
+Binary HTTP evidence in `garmin_api_responses` keeps status, digest and received size with a
+fixed metadata-only body, including error responses. ZIP bytes and filenames are not duplicated
+there; validated FIT bytes live only in the file archive. Credential echoes inside compressed
+FIT content are refused too. Logs contain only fixed events, counts, sizes and retry delays;
+no activity names, filenames, coordinates, source ids or content.
+
+```sh
+python -m app.cli.garmin_activity_files --limit 50 --dry-run
+python -m app.cli.garmin_activity_files --limit 50
+```
+
+`--limit` bounds activities attempted per invocation; the scheduled cap is used when no
+explicit maintenance limit is supplied. Output is one number: planned attempts in dry run,
+downloads, permanent absences and invalid results otherwise. Exit 1 means failure or a stopped round.
+Dry run makes no HTTP requests or archive writes. Both entry points share the `activity-files`
+ownership lock and commit one activity at a time; repeated invocation resumes pending work.
+
+`/health` and `/api/status` expose `garmin.activity_files`; Garmin status and the Garmin entry
+in Cihazlarım's existing status response expose `activity_files`. Its mutually exclusive
+`downloaded`, `pending`, `unavailable`, `invalid` counts describe current list versions (a
+corrected list is pending until checked, even if an older file exists). There is no file/route API or frontend
+in this phase. Whole-database encrypted backups include both tables, file bytes and absence
+evidence; restore checks every table's count/revision and immutable guards. Keep these backups
+private: original files can contain location traces. Nothing here changes backup retention.
 
 **Response budgets.** A body is read as a stream and counted before it is decompressed, so a small
 compressed answer cannot inflate into memory or into the archive: at most 64 MiB on the wire and
@@ -83,7 +154,8 @@ received. The largest real answers are a few MiB of JSON.
 
 **Archive.** Every HTTP exchange (token exchange included, retries and error statuses too) is
 kept in `garmin_api_responses` (`body`, `body_sha256`, `body_size`, request `path` and `query`,
-never a request header), byte for byte except for credentials: a token exchange (`kind =
+never a request header), byte for byte except for original-file metadata-only captures above
+and credentials: a token exchange (`kind =
 'token'`, whatever its status) and a response whose body contains the bearer token in use keep
 the placeholder `[redacted: garmin bearer token]` as `body`, and a kept response header carrying
 one is masked; `body_sha256` and `body_size` still describe the bytes Garmin sent. Rows written
@@ -104,7 +176,8 @@ backfill checkpoint.
 120), at :10 past the hour and never between 02:00 and 03:59 UTC (Google reconciliation,
 identity reconciler, backup). A failed kind is logged (`GARMIN_PULL_KIND_FAILED`), written to
 `garmin_pull_state.last_error` and shown by `GET /api/garmin/status`; the other kinds go on and
-the next run fetches the same window again. With the defaults a run makes 23 requests.
+the next run fetches the same window again. With the defaults the list/day kinds make
+23 requests, plus at most ten pending original-file activities (retries are additional).
 
 **One run per kind.** Each kind, and normalization, is held under its own PostgreSQL advisory
 lock (`garmin_ownership` in `app/sync/ownership.py`), across containers too, so the scheduled job

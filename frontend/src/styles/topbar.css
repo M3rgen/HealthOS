@@ -204,6 +204,8 @@
     padding: 6px 8px;
   }
 }
+/* Five menu items stay on one row down to 320 px in both languages: spacing gives way first,
+   then the text shrinks with the width, never below 12 px. */
 @media (max-width: bp(w540)) {
   .brand {
     font-size: 1.625rem;
@@ -211,10 +213,33 @@
   .header-meta {
     font-size: 0.75rem;
   }
+  .topbar > nav {
+    gap: 0 4px;
+  }
+  .nav-button {
+    padding: 0 4px;
+    font-size: clamp(0.75rem, 3.4vw, 0.875rem);
+  }
+  .nav-button:after,
+  .nav-button.active:after {
+    left: 4px;
+    right: 4px;
+  }
 }
 @media (max-width: bp(w360)) {
+  .topbar {
+    padding: 12px 12px 0;
+  }
   .topbar > nav {
-    gap: 0 6px;
+    gap: 0 2px;
+  }
+  .nav-button {
+    padding: 0 2px;
+  }
+  .nav-button:after,
+  .nav-button.active:after {
+    left: 2px;
+    right: 2px;
   }
 }
 /* Too narrow for the wordmark and the date side by side (at large browser fonts this happens on
@@ -295,6 +320,14 @@
      What gives way in the short row, in order: the wordmark, then the month's full name and the
      year, and on the narrowest screens the day itself (it stays in the button's accessible name). */
   @media (max-width: bp(w704)) {
+    .nav-button {
+      padding: 0 4px;
+    }
+    .nav-button:after,
+    .nav-button.active:after {
+      left: 4px;
+      right: 4px;
+    }
     .brand .brand-wordmark {
       position: fixed;
       top: 0;
@@ -319,13 +352,13 @@
       display: none;
     }
     .nav-button {
-      padding: 0 4px;
-      font-size: 0.8125rem;
+      padding: 0 2px;
+      font-size: 0.75rem;
     }
     .nav-button:after,
     .nav-button.active:after {
-      left: 4px;
-      right: 4px;
+      left: 2px;
+      right: 2px;
     }
     /* "Genel bakış" is the way home here; the room goes to the last menu item. */
     .topbar > .brand {
@@ -333,6 +366,8 @@
     }
     .topbar {
       grid-template-columns: minmax(0, 1fr) auto;
+      gap: 0;
+      padding: 0 6px;
     }
     .topbar > nav {
       grid-column: 1;

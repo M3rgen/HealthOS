@@ -1,3 +1,4 @@
+import { pages } from './page-labels-en.js';
 import { platforms } from './platforms-en.js';
 
 // English interface text, loaded with import() only when English is chosen (i18n/index.js).
@@ -11,13 +12,7 @@ const plural = (count, one, other) => `${count} ${Number(String(count).replace(/
 /** @typedef {string | ((...args: I18nArg[]) => string) | { [key: string]: I18nValue }} I18nValue */
 export const en = /** @satisfies {Record<string, I18nValue>} */ ({
   // Menu pages: the tab title shows the open page.
-  pages: {
-    overview: 'Overview',
-    measurements: 'Measurements',
-    system: 'System',
-    sports: 'Sports',
-    title: page => `${page} · HealthOS`,
-  },
+  pages,
   notice: {
     close: 'Close notice',
   },
@@ -408,6 +403,7 @@ export const en = /** @satisfies {Record<string, I18nValue>} */ ({
       receiving: date => `Last verified notification: ${date}.`,
       silentNever: 'No notifications arriving: at least 7 days have passed since monitoring started and none has been received.',
       silent: 'No notifications arriving: no verified delivery for at least 7 days.',
+      missed: date => `Notifications have stopped while Google still holds new data: last verified notification ${date}; the scheduled catch-up keeps fetching it.`,
     },
     rows: {
       lastNotification: 'Last verified notification',
@@ -450,6 +446,7 @@ export const en = /** @satisfies {Record<string, I18nValue>} */ ({
       processing_failed: 'Processing error',
       batch_processing_failed: 'Batch processing error',
       processing_interrupted: 'Interrupted processing recovered',
+      catch_up_found: 'Scheduled catch-up found new data',
     },
   },
   umay: {
@@ -549,6 +546,8 @@ export const en = /** @satisfies {Record<string, I18nValue>} */ ({
     otherSources: count => `Other sources (${count})`,
     otherSourcesLabel: type => `Other sources for ${type}`,
     dayLabel: date => `Workouts on ${date}`,
+    trackOpen: 'Route and charts',
+    trackOpenLabel: (name, time) => `${name}, ${time}: open the route and charts`,
     exerciseTypes: {
       WALKING: 'Walking', RUNNING: 'Running', RUN_WALK: 'Run-walk', TREADMILL_RUNNING: 'Treadmill',
       HIKING: 'Hiking', CYCLING: 'Cycling', INDOOR_CYCLING: 'Indoor cycling', SWIMMING: 'Swimming',
@@ -737,6 +736,7 @@ export const page = {
   'system.sonBasariliEsitleme': 'Last successful sync',
   'system.durum': 'Status',
   'system.kayit': 'Records',
+  'topbar.plan': 'Plan',
   'sports.sports.label': 'Sports',
   'sports.spor': 'Sports',
   'sports.cihazlardanGelenVeElle': 'Workouts from your devices and entered by hand',

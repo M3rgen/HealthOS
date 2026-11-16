@@ -380,6 +380,9 @@
   max-width: 44ch;
   margin: 0 auto 16px;
 }
+.workout-track-open {
+  margin-top: 10px;
+}
 @media (max-width: bp(w760)) {
   .workout-fields {
     grid-template-columns: 1fr;

@@ -498,7 +498,8 @@
       "provider": "MANUAL",
       "priority": "primary",
       "group": null,
-      "alternatives": []
+      "alternatives": [],
+      "has_track": false
     }
   ],
   "/api/dashboard/measurements": [
@@ -590,6 +591,12 @@
         "precedence": {
           "activity": "primary",
           "health": "secondary"
+        },
+        "activity_files": {
+          "downloaded": 0,
+          "pending": 0,
+          "unavailable": 0,
+          "invalid": 0
         }
       }
     ],
@@ -632,7 +639,8 @@
         "notification_rejected": 0,
         "processing_failed": 0,
         "batch_processing_failed": 0,
-        "processing_interrupted": 0
+        "processing_interrupted": 0,
+        "catch_up_found": 0
       },
       "semantics": "events_not_exclusive; no historical counter backfill; database outages may omit observations",
       "valid": 0,
@@ -979,7 +987,8 @@
     "provider": "MANUAL",
     "priority": "primary",
     "group": null,
-    "alternatives": []
+    "alternatives": [],
+    "has_track": false
   },
   "POST /sync/all": {
     "status": "accepted",

@@ -19,6 +19,7 @@ from test_garmin_pull import key_file as key_file
 from test_garmin_response_limits import Handler, build
 
 from app.garmin import client as garmin
+from app.garmin import exchange
 from app.models.garmin import GarminApiResponse, GarminRawRecord, GarminRecordObservation
 from app.models.health import HeartRateVariability
 from app.services.providers.garmin_pull import BY_NAME
@@ -76,7 +77,7 @@ async def test_client_decode_failure_is_safe_and_keeps_complete_capture(key_file
         assert len(handler.requests) == len(exchanges) == 2
         capture = exchanges[-1]
         assert (capture.body, capture.complete, capture.error) == (
-            garmin.REDACTED_BODY if echo else raw,
+            exchange.REDACTED_BODY if echo else raw,
             True,
             None,
         )
@@ -140,11 +141,11 @@ async def test_pull_decode_failure_archives_once_and_resumes(
             ("GET", 200),
         ]
         failed = responses[-2]
-        assert failed.body == (garmin.REDACTED_BODY if echo else raw)
+        assert failed.body == (exchange.REDACTED_BODY if echo else raw)
         assert failed.complete and failed.body_size == len(raw) and failed.error is None
         assert failed.body_sha256 == hashlib.sha256(raw).hexdigest()
-        assert failed.headers["www-authenticate"] == garmin.REDACTED_HEADER
-        assert all(r.body == garmin.REDACTED_BODY for r in responses if r.method == "POST")
+        assert failed.headers["www-authenticate"] == exchange.REDACTED_HEADER
+        assert all(r.body == exchange.REDACTED_BODY for r in responses if r.method == "POST")
         for model in (GarminRawRecord, GarminRecordObservation):
             assert after[model] == before[model]
         async with sessions() as session:

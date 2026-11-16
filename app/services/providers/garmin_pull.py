@@ -45,9 +45,11 @@ from app.models.garmin import GarminApiResponse, GarminPullState, GarminRawRecor
 from app.schemas.status import GarminDaily, GarminStatus
 from app.services.identities.source_precedence import Policy, category
 
+from .garmin_activity_files import ActivityFiles, FilePullResult
 from .garmin_checkpoints import Checkpoints, Fenced
 from .garmin_daily_summary import daily_summaries
 from .garmin_daily_summary import day_summary as _day  # noqa: F401 - existing public import
+from .garmin_file_archive import file_counts
 from .garmin_ingestion import GarminPage, GarminSource
 from .garmin_kinds import (  # noqa: F401 - existing public imports
     ACTIVITY_PAGE,
@@ -134,9 +136,11 @@ class PullSummary:
     end: date
     kinds: dict[str, KindResult] = field(default_factory=dict)
     normalized: NormalizeStats | None = None
+    activity_files: FilePullResult | None = None
 
     @property
     def failed(self) -> bool:
+        # Original files are reported separately: their failure never fails the list pull.
         return any(result.error for result in self.kinds.values())
 
     def as_dict(self) -> dict[str, Any]:
@@ -144,11 +148,13 @@ class PullSummary:
             "context_id": self.context_id,
             "from": iso(self.start),
             "to": iso(self.end),
-            "requests": sum(r.requests for r in self.kinds.values()),
+            "requests": sum(r.requests for r in self.kinds.values())
+            + (self.activity_files.requests if self.activity_files else 0),
             "records": sum(r.records for r in self.kinds.values()),
             "new_records": sum(r.new_records for r in self.kinds.values()),
             "kinds": {name: result.as_dict() for name, result in self.kinds.items()},
             "normalized": self.normalized.as_dict() if self.normalized else None,
+            "activity_files": self.activity_files.as_dict() if self.activity_files else None,
         }
 
 
@@ -245,6 +251,8 @@ class GarminPull:
                 result.error = OWNERSHIP_LOST
                 event(logger, "GARMIN_PULL_OWNERSHIP_LOST", kind=kind.name)
         summary.normalized = await self.normalize(start, end, seen_since=started)
+        listed = "activities" in summary.kinds and not summary.kinds["activities"].error
+        summary.activity_files = await self._files_after_list(listed)
         event(
             logger,
             "GARMIN_PULL_COMPLETED",
@@ -254,6 +262,34 @@ class GarminPull:
             failed_kinds=sorted(name for name, r in summary.kinds.items() if r.error),
         )
         return summary
+
+    async def _files_after_list(self, listed: bool) -> FilePullResult | None:
+        """Original files follow a successful list pull and normalization, never fail them.
+
+        The list's checkpoint and the normalized workouts are already committed; a file
+        round that loses its owner or breaks is logged by type only and stays pending.
+        """
+        if self.backend is None or not listed:
+            return None
+        try:
+            return await self.activity_files()
+        except OwnershipLost:
+            event(logger, "GARMIN_PULL_OWNERSHIP_LOST", kind="activity-files")
+        except Exception as exc:
+            event(logger, "GARMIN_ACTIVITY_FILES_FAILED", error_type=type(exc).__name__)
+        return FilePullResult(failed=1, stopped=True)
+
+    async def activity_files(
+        self, limit: int | None = None, *, dry_run: bool = False
+    ) -> FilePullResult:
+        async with self._owned("activity-files") as owned:
+            return await ActivityFiles(
+                self.client, self.sessions, self.settings.garmin_activity_file_interval_seconds
+            ).run(
+                owned,
+                self.settings.garmin_activity_files_per_run if limit is None else limit,
+                dry_run=dry_run,
+            )
 
     async def normalize(
         self, start: date, end: date, *, seen_since: datetime | None = None
@@ -314,6 +350,9 @@ class GarminPull:
             # normalization existed brings its activities into ``exercise_sessions`` too. The
             # periodic ``run()`` keeps reading only the activities its own pull archived.
             report["normalized"] = (await self.normalize(since, until)).as_dict()
+            listed = "activities" in report["kinds"] and not report["kinds"]["activities"]["error"]
+            if files := await self._files_after_list(listed):
+                report["activity_files"] = files.as_dict()
         return report
 
     async def _backfill_kind(
@@ -475,6 +514,7 @@ class GarminPull:
             "responses": responses,
             "kinds": kinds,
             "normalization": normalization,
+            "activity_files": await file_counts(session),
         }
 
     async def daily(

@@ -10,6 +10,12 @@ cihazın tahminidir. Umay yalnız bilgilendirir; teşhis koymaz, ilaç ya da doz
 proje hesabı ya da telemetri yoktur. Google ve Garmin'den yalnız okunur, hiçbir şey geri
 yazılmaz.
 
+**Konum verisi depoya girmez:** antrenman izi en hassas kayıttır. Gerçek koordinat, iz,
+FIT/GPX/TCX dosyası, antrenman zaman serisi ya da yer adı koda, testlere, belgelere veya commit
+mesajlarına girmez; günlüklere koordinat yazılmaz. Testler 0° K 0° D çevresinde, açık denizdeki
+küçük bir kutuda uydurma konumlar kullanır. GitHub'a giden anlık görüntü ve `make verify`, metin
+dosyalarında bu kutunun dışında bir koordinat bulursa durur.
+
 **Umay açıksa OpenAI'ye giden:** Umay'ın kişilik ve kural talimatları; mesajın (saat dilimin,
 yerel tarih ve saatle); aynı bağlantıda daha önce yazdıklarından en fazla 8 KiB alıntı;
 `health_archive` aracının sonuçları (veri türleri ve sayıları, en fazla 366 günün günlük özeti,

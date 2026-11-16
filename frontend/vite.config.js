@@ -2,9 +2,10 @@ import { defineConfig } from 'vite';
 import { cssBreakpoints } from './css-breakpoints.js';
 import { performanceBudget } from './build-budget.js';
 import { htmlI18n } from './html-i18n.js';
+import { thirdPartyLicenses } from './third-party-licenses.js';
 
 export default defineConfig({
-  plugins: [htmlI18n(), performanceBudget()],
+  plugins: [htmlI18n(), thirdPartyLicenses(), performanceBudget()],
   css: { postcss: { plugins: [cssBreakpoints()] } },
   build: { outDir: '../app/static', emptyOutDir: true },
   server: { proxy: {

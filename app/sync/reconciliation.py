@@ -17,6 +17,7 @@ from app.services.synchronization import reconciliation_reports as reports
 from app.services.synchronization.pipeline_health import update_reliability_state
 from app.sync.errors import is_transient
 from app.sync.incremental import IncrementalSync
+from app.sync.scheduled_catch_up import ScheduledCatchUp
 
 logger = logging.getLogger(__name__)
 
@@ -24,14 +25,29 @@ FINAL_PASS_DELAY_SECONDS = 5.0
 
 
 class ReconciliationService:
+    """Fetch every data type's lookback window, one type at a time.
+
+    With ``slice_days`` a type is fetched in windows of at most that many days (a rollup type
+    never over its API limit), each under its own run ownership: a notification or a catch-up
+    of that type waits for one window, not for the whole pass (a 90-day heart-rate pass held
+    the type for hours). After each window but the last, the scheduled catch-up (``catch_up``,
+    whose ``run`` is also the scheduler's ``scheduled-catch-up`` job) fetches the type's recent
+    records when they are due, between two old windows.
+    """
+
     def __init__(
         self,
         incremental: IncrementalSync,
         sessions: async_sessionmaker | None = None,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+        *,
+        slice_days: int | None = None,
+        catch_up: ScheduledCatchUp | None = None,
     ):
         self.incremental = incremental
         self.sleep = sleep
+        self.slice_days = slice_days
+        self.catch_up = catch_up
         self.sessions = sessions if sessions is not None else getattr(incremental, "sessions", None)
         self._lock = asyncio.Lock()
 
@@ -128,18 +144,29 @@ class ReconciliationService:
         failure = None
         try:
             with reports.reporting(run_id if self.sessions else None, data_type):
-                max_days = getattr(spec, "max_window_days", None)
-                if not max_days or days <= max_days:
+                limits = [getattr(spec, "max_window_days", None), self.slice_days]
+                size = min((limit for limit in limits if limit), default=None)
+                if not size or days <= size:
                     result = await self.incremental.run(data_type, start, end)
                 else:
-                    result = StoreStats()
-                    cursor = start
-                    while cursor < end:
-                        window_end = min(cursor + timedelta(days=max_days), end)
-                        result.add(await self.incremental.run(data_type, cursor, window_end))
-                        cursor = window_end
+                    result = await self._fetch_slices(data_type, size, start, end)
         except Exception as exc:
             result = failure = exc
         if self.sessions:
             await reports.finish_type(self.sessions, run_id, data_type, failure)
+        return result
+
+    async def _fetch_slices(
+        self, data_type: str, size: int, start: datetime, end: datetime
+    ) -> StoreStats:
+        result = StoreStats()
+        cursor = start
+        while cursor < end:
+            if cursor > start and self.catch_up is not None:
+                # Not this run's difference: the catch-up keeps its own provenance.
+                with reports.reporting(None):
+                    await self.catch_up.between_slices(data_type)
+            window_end = min(cursor + timedelta(days=size), end)
+            result.add(await self.incremental.run(data_type, cursor, window_end))
+            cursor = window_end
         return result

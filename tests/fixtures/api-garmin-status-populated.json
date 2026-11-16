@@ -116,5 +116,11 @@
     "last_success_at": null,
     "last_error_at": null,
     "last_error_code": null
+  },
+  "activity_files": {
+    "downloaded": 0,
+    "pending": 0,
+    "unavailable": 0,
+    "invalid": 0
   }
 }

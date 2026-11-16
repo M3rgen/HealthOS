@@ -56,7 +56,7 @@ run(async () => {
       await ready(page);
       const turkish = await texts(page);
       assert.equal(turkish.lang, 'tr');
-      assert.deepEqual(turkish.nav, ['Genel bakış', 'Ölçümler', 'Sistem', 'Spor']);
+      assert.deepEqual(turkish.nav, ['Genel bakış', 'Ölçümler', 'Sistem', 'Spor', 'Plan']);
       assert.equal(turkish.connection, 'Veri bağlantısı');
       assert.equal(turkish.date, '16 Ekim 2026');
       assert.ok(!scripts.some(english), 'Turkish must not load the English dictionary');
@@ -71,7 +71,7 @@ run(async () => {
       const result = await texts(page);
       assert.equal(result.lang, 'en');
       assert.equal(result.title, 'System · HealthOS', 'the reload keeps the open page and names it');
-      assert.deepEqual(result.nav, ['Overview', 'Measurements', 'System', 'Sports']);
+      assert.deepEqual(result.nav, ['Overview', 'Measurements', 'System', 'Sports', 'Plan']);
       assert.equal(result.connection, 'Data connection');
       assert.equal(result.sync, 'Sync now');
       assert.equal(result.history, 'Last 7 days');

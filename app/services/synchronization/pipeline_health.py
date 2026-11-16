@@ -27,6 +27,7 @@ from app.services.archive.raw_rejections import summary as rejection_summary
 from app.services.identities.identity_reconcile_window import lock_contention
 from app.services.providers.garmin_health import GarminHealthSnapshot
 from app.services.providers.garmin_health import read_health as read_garmin_health
+from app.services.synchronization.webhook_status import webhook_silent
 
 _NOTIFICATION_ACTIVE = (NotificationStatus.pending, NotificationStatus.running)
 _NOTIFICATION_FAILURES = (NotificationStatus.failed, NotificationStatus.interrupted)
@@ -103,6 +104,7 @@ class PipelineSnapshot:
                 "lag_seconds": self.garmin.lag_seconds,
                 "stale_after_seconds": self.garmin.stale_after_seconds,
                 "normalization": self.garmin.normalization,
+                "activity_files": self.garmin.activity_files,
             }
         return payload
 
@@ -211,6 +213,17 @@ class PipelineHealthService:
                     now=now, scheduler_running=scheduler_running, session=owned_session
                 )
         snapshot = await self._inspect(session, now, scheduler_running)
+        if self.settings.google_enabled and await webhook_silent(
+            session, self.settings, snapshot.last_webhook_received, now
+        ):
+            # Notifications stopped while the scheduled catch-up still finds new records.
+            snapshot = replace(
+                snapshot,
+                reasons=(*snapshot.reasons, "webhook_silent"),
+                status=PipelineStatus.degraded
+                if snapshot.status == PipelineStatus.healthy
+                else snapshot.status,
+            )
         if not self.settings.garmin_enabled:
             return snapshot
         garmin = await read_garmin_health(session, self.settings, now)

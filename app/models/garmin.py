@@ -11,7 +11,7 @@ refused, also for replica sessions) and separate bookkeeping tables:
   (success, error status, retry), the body byte for byte with its SHA-256; the request as
   path and query string (never a header, so never the API key or the bearer token). A token
   exchange (``kind = 'token'``) keeps a fixed placeholder body instead of the token, with the
-  SHA-256 and size of the bytes received (``app.garmin.client.GarminExchange``); rows written
+  SHA-256 and size of the bytes received (``app.garmin.exchange.GarminExchange``); rows written
   before that change hold the then-current, long expired, token.
 * ``garmin_raw_records``: one row per record of one kind (``daily-summaries``, ``steps``,
   ``sleep``, ... ``activities``) and key (the calendar day, or the activity id) per distinct

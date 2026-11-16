@@ -20,7 +20,7 @@ do not reach it. Restoring a backup remains the way to go back on a live archive
   `alembic downgrade base` changes nothing. Tested on PostgreSQL in
   `tests/integration/test_pg_downgrade_refusal.py`.
 - Dropped even with rows, because they are rebuilt or are bookkeeping: `derived_days`,
-  `reliability_state`, `garmin_pull_state`, `display_preferences`, `google_heart_hours` and `google_heart_projection_state`.
+  `reliability_state`, `garmin_pull_state`, `display_preferences`, `google_heart_hours`, `google_heart_projection_state`, `garmin_tracks` and `garmin_track_sessions`.
 - The older per-revision consent flags still work, for their own tables only, and should follow a
   backup: `-x allow-version-loss=1` (`raw_api_responses`, `raw_health_data_events`,
   `raw_health_data_versions`), `-x allow-identity-loss=1` (the identity tables of `20261021_0012`) and
@@ -539,7 +539,7 @@ fails with nothing changed. Duration does not depend on the size of the archive.
 A merge revision with parents `20261108_0028` (installs of `main`) and `20261109_p001` (the bridge for
 v0.2.2 stamps). Its own identity is unchanged. It runs no SQL in either direction.
 `alembic upgrade head` from either line passes through it, and
-`alembic current` then prints `20261114_0036 (head)`: [Google heart projection](reference/heart-projection.md) documents its disposable packets and resumable fill; [Garmin time evidence](reference/garmin.md#time-evidence-and-recovery) documents the preceding `20261112_0035`.
+`alembic current` then prints `20261115_0040 (head)` ([FIT workout track links](#fit-workout-track-links--20261115_0040)); [Garmin FIT tracks](reference/garmin-tracks.md) documents `20261115_0039`; [Garmin original activity files](#garmin-original-activity-files--20261115_0038) documents `20261115_0038`; [plan document](#plan-document--20261115_0037) documents the preceding `20261115_0037`; [Google heart projection](reference/heart-projection.md) documents the preceding `20261114_0036` with its disposable packets and resumable fill; [Garmin time evidence](reference/garmin.md#time-evidence-and-recovery) documents `20261112_0035`.
 
 
 ## Garmin record observations — 20261111_0030
@@ -598,11 +598,49 @@ normalization attempt/success/error times and only the fixed `garmin_normalizati
 code; successful normalization clears the code. No existing row is rewritten and no prior
 normalization outcome is inferred. Raw archives and completed chunks remain untouched.
 
-## Apple extension merges — 20261111_a002, 20261112_a003, 20261112_a004, 20261114_a005
+## Plan document — 20261115_0037
+
+Adds append-only `plan_versions` (the validated document, its SHA-256, import time and schema
+version; the digest is unique, so the same content is never stored twice) and the singleton
+`plan_state` (programme start date and checked shopping item ids, replaced on each write).
+UPDATE/DELETE on `plan_versions` are refused on SQLite and PostgreSQL; PostgreSQL also refuses
+TRUNCATE and enables the guards in replica mode. `plan_state` is not guarded: it is replaceable
+interface state.
+
+Only new tables and guards: no existing table is read, locked or changed, so the upgrade's
+duration does not depend on the archive. Downgrade takes `ACCESS EXCLUSIVE` on both new tables
+(waiting at most 5 s) and refuses while either holds a row; it is not a disposable table.
+Schema, limits, import and backup notes: [plan document](reference/plan.md).
+
+## Garmin original activity files — 20261115_0038
+
+Adds `garmin_activity_files` (original FIT bytes and content metadata, linked to the raw list
+record) and `garmin_activity_file_results` (the checked raw version and file, permanent
+404/410 evidence, or an `invalid` refusal with reason code and, when complete, the received
+body's digest and size, never its bytes). Content versions are unique by full activity-id digest and FIT digest;
+the original activity id stays intact while indexes remain bounded. No existing data is read,
+rewritten or inferred. Both tables refuse UPDATE/DELETE and PostgreSQL TRUNCATE, also in replica
+mode. Downgrade refuses `--sql`; online it locks both tables with a five-second lock timeout,
+checks both before dropping either and refuses while either contains evidence. Whole-database
+backup/restore includes the bytes and results. See [original files](reference/garmin.md#original-activity-files).
+
+## FIT workout track links — 20261115_0040
+
+Adds `garmin_track_sessions`: which uploaded FIT content (`source_sha256`) produced which FIT
+workout (`exercise_sessions.source_record_id`, `fit:<record key>`), with an index on the
+digest. A manual upload's workout row does not carry its file digest; the link is derived by
+parsing the archived upload again, so like `garmin_tracks` it is a disposable read model: no
+guard, and a downgrade drops it even with rows. No existing table is read, locked or changed;
+`python -m app.cli.garmin_tracks --rebuild` fills the links of uploads archived before this
+revision. Garmin API workouts need no link (they reach their file through
+`garmin_activity_file_results`). See [track API](reference/garmin-tracks.md#track-api).
+
+## Apple extension merges — 20261111_a002, 20261112_a003, 20261112_a004, 20261114_a005, 20261115_a006, 20261115_a007
 
 Published release only (the GitHub-only Apple extension). Merge revisions that run no SQL: they
 join the extension's real `20261107_a001` (Apple raw tables, [Apple Health](reference/apple.md))
 to the main line, `20261111_a002` at `20261109_0029`, `20261112_a003` at `20261111_0033`, `20261112_a004` at
-`20261112_0034` and `20261114_a005` at `20261114_0036`, so
+`20261112_0034`, `20261114_a005` at `20261114_0036`, `20261115_a006` at `20261115_0039` and
+`20261115_a007` at `20261115_0040`, so
 Alembic has one head. No parent's `down_revision` is edited; a later main-line revision gets
 another merge revision like these.

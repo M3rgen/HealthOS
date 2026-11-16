@@ -30,8 +30,11 @@ from app.models import (
     apple,
     derived_invalidation,
     garmin,
+    garmin_files,
+    garmin_tracks,
     heart_invalidation,
     oauth_credentials,
+    plan,
     raw_rejections,
 )
 from app.models.derived_invalidation import BUILD_LOCK
@@ -54,6 +57,9 @@ def later_schema_contract():
         *oauth_credentials.TABLES,
         *raw_rejections.TABLES,
         *garmin.TABLES,
+        *plan.TABLES,
+        *garmin_files.TABLES,
+        *garmin_tracks.TABLES,
         *apple.TABLES,
         apple.IMPORTS,
         apple.SOURCES,
@@ -66,6 +72,8 @@ def later_schema_contract():
         | set(definitions(apple.GUARDS)[0])
         | {derived_invalidation.DRAIN_TRIGGER}
         | set(definitions(heart_invalidation.GUARDS)[0])
+        | set(definitions(plan.GUARDS)[0])
+        | set(definitions(garmin_files.GUARDS)[0])
     )
     return newer, later
 
@@ -104,7 +112,8 @@ async def test_0018_preserves_archive_history_manual_rows_and_guard_definitions(
             )
             session.add(WebhookStatusEvent(reason="signature_valid", occurred_at=T0))
         command.downgrade(alembic_config, "20261025_0017")
-        # Tables of later migrations (0022, 0023, 0024, a001, 0026, 0027) do not exist at 0017;
+        # Tables of later migrations (0022, 0023, 0024, a001, 0026, 0027, 0037) do not exist
+        # at 0017;
         # 0025 adds only columns (provider, source_record_id) to the normalized tables.
         newer, later = later_schema_contract()
         # 0020 narrowed four of them and 0028 replaced every body (verify_guards pins both).

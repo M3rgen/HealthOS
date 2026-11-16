@@ -284,7 +284,14 @@ def test_webhook_and_sync_status_read_the_legacy_session_factory(cli_database, m
 
     asyncio.run(seed())
     monkeypatch.setattr(
-        cli, "get_settings", lambda: SimpleNamespace(webhook_readiness={"ready": False})
+        cli,
+        "get_settings",
+        lambda: SimpleNamespace(
+            webhook_readiness={"ready": False},
+            webhook_silent_after_minutes=120,
+            google_health_webhook_endpoint_uri=None,
+            google_health_webhook_authorization=None,
+        ),
     )
     ready = RUNNER.invoke(cli.app, ["webhook-readiness"])
     assert ready.exit_code == 0 and ready.stderr == ""
@@ -301,6 +308,14 @@ def test_webhook_and_sync_status_read_the_legacy_session_factory(cli_database, m
         "notification_states": {"failed": 1},
         "incremental_sync_attempts": 3,
         "incremental_sync_successes": 1,
+        # No scheduled catch-up found anything: notifications cannot have gone silent.
+        "webhook_silent": {
+            "silent": False,
+            "last_notification_at": "2026-01-01 00:00:00+00:00",
+            "threshold_minutes": 120,
+            "catch_up_rounds_with_new_records": 0,
+            "last_found_at": None,
+        },
     }
     sync_status = RUNNER.invoke(cli.app, ["status"])
     assert sync_status.exit_code == 0 and sync_status.stderr == ""

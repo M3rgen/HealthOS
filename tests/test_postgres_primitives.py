@@ -37,6 +37,7 @@ def test_reservations_keep_existing_process_and_trigger_identities():
         "identity_backfill": 0x48454932,
         "identity_deferrals": 0x48454933,
         "manual_flags": 0x48464C31,
+        "plan": 0x48504C31,
         "credentials": 0x48454331,
         "sync_run": 0x48455331,
         "notification": 0x48455731,

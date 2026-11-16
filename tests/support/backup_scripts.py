@@ -149,8 +149,6 @@ def run_with_env_file(
     # Real packages prevent an editable install from supplying app from the worktree.
     for package in (Path("app"), Path("app/services"), operations):
         shutil.copy(ROOT / package / "__init__.py", tree / package)
-    # The services package installs its stdlib-only alias finder on import.
-    shutil.copy(ROOT / "app/services/_compat.py", tree / "app/services")
     for name in ("backup_status.py", "backup_files.py"):
         shutil.copy(ROOT / operations / name, tree / operations)
     (tree / ".env").write_text(content, encoding="utf-8")

@@ -29,6 +29,8 @@ from app.api import (
     google_health,
     health,
     login,
+    map_tiles,
+    plan,
     read_limits,
     sync,
     webhooks,
@@ -281,6 +283,8 @@ def create_app() -> FastAPI:
     application.include_router(dashboard.router)
     application.include_router(codex.router)
     application.include_router(settings_api.router)
+    application.include_router(plan.router)
+    application.include_router(map_tiles.router)
     application.include_router(devices.router)
     application.include_router(demo.router)
     if settings.garmin_enabled:

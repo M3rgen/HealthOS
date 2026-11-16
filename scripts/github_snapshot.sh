@@ -43,6 +43,7 @@
 # Maintainer runbooks and branch documentation are always excluded, including after path overrides.
 # Gitleaks must be installed. Content and message checks also run with --dry-run.
 # Data/export extensions, binary/envelope signatures and JSON over 100000 bytes stop publication.
+# Coordinates in text files outside the invented-track box stop it too (github_location_checks.py).
 # Only reviewed path + SHA-256 + provenance entries in github_snapshot_checks.py may pass;
 # no option (including --allow-references) bypasses the data check or adds an allowance.
 # Exit 0: branch updated, or nothing to do. Exit 1: a publication check rejected the tree/message.

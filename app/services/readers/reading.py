@@ -5,7 +5,7 @@
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import date, datetime
-from typing import Literal, Protocol, TypedDict
+from typing import Literal, NotRequired, Protocol, TypedDict
 from zoneinfo import ZoneInfo
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -25,6 +25,8 @@ class WorkoutRecord(TypedDict):
     distance_meters: float | None
     source_code: str
     provider: str
+    # Set by FIT-backed readers: a ready track package exists (GET .../workouts/{id}/track).
+    has_track: NotRequired[bool]
 
 
 @dataclass(frozen=True)

@@ -46,6 +46,7 @@ class Incremental:
 
     def __init__(self, fail_once=()):
         self.calls = []
+        self.catch_ups = []
         self.fail_once = set(fail_once)
 
     async def run(self, data_type, start=None, end=None, *, check_owner=None):
@@ -53,6 +54,10 @@ class Incremental:
         if data_type in self.fail_once:
             self.fail_once.remove(data_type)
             raise RuntimeError(f"temporary {data_type} failure")
+
+    async def catch_up(self, data_type, *, check_owner=None):
+        """Covered already: the catch-up itself is tested with IncrementalSync."""
+        self.catch_ups.append(data_type)
 
 
 def notification(data_type="steps", user="user-1", minute=0):
@@ -254,5 +259,13 @@ async def fetching_receiver(receiver, sessions):
             return await original(spec, start, end, page_token)
 
         client.list_data_points = record
+        # These tests count the notified windows' requests exactly; the catch-up that
+        # follows a completed element is tested with real fetches in test_webhook_catch_up.
+        incremental.catch_ups = []
+
+        async def catch_up(data_type, *, check_owner=None):
+            incremental.catch_ups.append(data_type)
+
+        incremental.catch_up = catch_up
         receiver.incremental = receiver.processor.incremental = incremental
         yield receiver

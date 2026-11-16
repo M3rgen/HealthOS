@@ -1,4 +1,4 @@
-"""Service package interfaces preserve legacy callers without loading unrelated services."""
+"""Service package interfaces are the only import paths and load no unrelated services."""
 
 import ast
 import importlib
@@ -6,9 +6,8 @@ import pkgutil
 import re
 import subprocess
 import sys
-import tomllib
 import warnings
-from importlib.util import resolve_name
+from importlib.util import find_spec, resolve_name
 from pathlib import Path
 
 import pytest
@@ -33,8 +32,7 @@ MODULES = sorted(
     for path in (SERVICES / package).glob("*.py")
     if path.stem != "__init__"
 )
-LEGACY_MODULES = MODULES
-MAX_DEEP_IMPORTS = 156 + 3  # + apple_readers: dashboard_rows, dashboard_window, reading (Apple)
+MAX_DEEP_IMPORTS = 155 + 3  # + apple_readers: dashboard_rows, dashboard_window, reading (Apple)
 
 
 def service_import_targets(node, package, modules):
@@ -82,8 +80,7 @@ def service_deep_imports(services):
                 continue
             for target in service_import_targets(node, package, modules):
                 parts = target.split(".")
-                flat = len(parts) == 3 and (services / f"{parts[2]}.py").is_file()
-                if flat or (len(parts) >= 4 and module.split(".")[2] != parts[2]):
+                if len(parts) >= 4 and module.split(".")[2] != parts[2]:
                     imports.append((str(path.relative_to(services)), node.lineno, target))
     return imports
 
@@ -102,7 +99,6 @@ def test_service_deep_imports_do_not_increase_and_reductions_lower_the_limit():
         ("from app.services.identities.owner import first, second", 2),
         ("from ..identities import owner", 1),
         ("def call():\n    from ..identities.owner import first", 1),
-        ("from app.services import backup_files", 1),
         ("from app.services.identities import public_symbol", 0),
         ("from app.services import identities", 0),
         ("from . import local", 0),
@@ -118,7 +114,6 @@ def test_service_deep_import_measurement_matches_the_rubric(tmp_path, source, co
         "archive/local",
         "identities/__init__",
         "identities/owner",
-        "backup_files",
     ):
         path = tmp_path / f"{name}.py"
         path.parent.mkdir(exist_ok=True)
@@ -140,7 +135,7 @@ def test_repository_uses_canonical_service_paths():
         root = ROOT / directory
         paths = root.rglob("*") if root.is_dir() else [root]
         for path in sorted(paths):
-            # This file deliberately exercises alias identity, reload and -m compatibility.
+            # This file names removed flat paths to prove they no longer import.
             if not path.is_file() or path == Path(__file__) or "__pycache__" in path.parts:
                 continue
             try:
@@ -163,12 +158,6 @@ def test_implementations_are_not_merged_or_left_in_the_flat_service_layer():
     # Issue #352 baseline: all 144 modules are intentional, particularly identities/chains.
     names = [name for _, name in MODULES]
     assert len(names) == len(set(names)) >= 144
-    assert len(LEGACY_MODULES) >= 144
-    assert {path.stem for path in SERVICES.glob("*.py")} == {
-        "__init__",
-        "_compat",
-        "backup_files",  # Retain the stdlib-only python -m entry point.
-    }
     assert {path.name for path in SERVICES.iterdir() if (path / "__init__.py").is_file()} == set(
         PACKAGES
     )
@@ -185,51 +174,43 @@ def test_package_interface_explicitly_exports_its_modules(package):
         _ = interface.nonexistent_service
 
 
-@pytest.mark.parametrize("package, name", LEGACY_MODULES)
-def test_legacy_and_public_imports_are_the_same_module(package, name, monkeypatch):
-    # Overrides must reach function globals as well as exported classes and exceptions.
+@pytest.mark.parametrize("package, name", MODULES)
+def test_package_interface_resolves_each_module_without_warnings(package, name):
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always", DeprecationWarning)
         implementation = importlib.import_module(f"app.services.{package}.{name}")
         interface = importlib.import_module(f"app.services.{package}")
         assert getattr(interface, name) is implementation
     assert not caught
-    if name == "backup_files":  # The file shim is outside the alias loader.
-        legacy = importlib.import_module(f"app.services.{name}")
-    else:
-        with pytest.warns(
-            DeprecationWarning, match=rf"app\.services\.{name} is deprecated"
-        ) as caught:
-            caller_line = sys._getframe().f_lineno + 1
-            legacy = importlib.import_module(f"app.services.{name}")
-        assert len(caught) == 1
-        assert str(caught[0].message) == (
-            f"app.services.{name} is deprecated; import app.services.{package}.{name}; "
-            "0.2.4'te kaldırılacak"
-        )
-        assert caught[0].filename == __file__
-        assert caught[0].lineno == caller_line
-    with warnings.catch_warnings(record=True) as repeated:
-        warnings.simplefilter("always", DeprecationWarning)
-        assert importlib.import_module(f"app.services.{name}") is legacy
-    assert not repeated
-    assert legacy is implementation is getattr(interface, name)
-    marker = object()
-    monkeypatch.setattr(legacy, "_compatibility_probe", marker, raising=False)
-    assert implementation._compatibility_probe is marker
 
 
-def test_compatibility_shims_have_a_one_release_removal_deadline():
-    version = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]["version"]
-    assert tuple(int(p) for p in version.split(".")) < (0, 2, 4), (
-        "Remove the flat service shims for release 0.2.4"
-    )
-    for name in ("_compat", "backup_files"):
-        tree = ast.parse((SERVICES / f"{name}.py").read_text())
-        assert (
-            "Deprecated since 0.2.2.1; remove in 0.2.4, after the 0.2.3 release."
-            in ast.get_docstring(tree)
-        )
+def test_flat_service_aliases_were_removed_in_0_2_4():
+    # The aliases were deprecated in 0.2.2.1 and removed in 0.2.4: no alias file, no finder.
+    assert {path.name for path in SERVICES.glob("*.py")} == {"__init__.py"}
+    importlib.import_module("app.services")
+    assert not [
+        finder for finder in sys.meta_path if type(finder).__module__.startswith("app.services")
+    ]
+
+
+@pytest.mark.parametrize(
+    "package, name",
+    [
+        ("shared", "query_ranges"),
+        ("archive", "storage"),
+        ("operations", "backup_files"),
+        ("synchronization", "scheduler"),
+        ("umay", "codex_chat"),
+    ],
+)
+def test_flat_service_paths_no_longer_import(package, name):
+    assert find_spec(f"app.services.{package}.{name}") is not None
+    assert find_spec(f"app.services.{name}") is None
+    with pytest.raises(ModuleNotFoundError) as dotted:
+        importlib.import_module(f"app.services.{name}")
+    assert dotted.value.name == f"app.services.{name}"
+    with pytest.raises(ImportError, match=f"cannot import name '{name}'"):
+        exec(f"from app.services import {name}", {})
 
 
 @pytest.mark.parametrize("module", ["app.cli.main", "app.main"])
@@ -243,75 +224,6 @@ def test_entry_points_import_without_deprecation_warnings(module):
     )
     assert result.returncode == 0, result.stdout + result.stderr
     assert result.stderr == ""
-
-
-@pytest.mark.parametrize(
-    "statement",
-    [
-        "import app.services.query_ranges",
-        "from app.services import query_ranges",
-        "importlib.import_module('app.services.query_ranges')",
-    ],
-)
-def test_alias_warning_points_to_the_importing_line_once(statement):
-    script = f"""
-import importlib
-import warnings
-with warnings.catch_warnings(record=True) as caught:
-    warnings.simplefilter('default', DeprecationWarning)
-    {statement}
-    {statement}
-assert len(caught) == 1
-assert caught[0].category is DeprecationWarning
-assert caught[0].filename == '<string>'
-assert caught[0].lineno == 6
-"""
-    result = subprocess.run(
-        [sys.executable, "-c", script], capture_output=True, text=True, cwd=ROOT, timeout=30
-    )
-    assert result.returncode == 0, result.stdout + result.stderr
-
-
-@pytest.mark.parametrize("legacy_first", [True, False])
-def test_alias_import_order_preserves_the_canonical_spec_and_reload(legacy_first):
-    names = ["app.services.query_ranges", "app.services.shared.query_ranges"]
-    if not legacy_first:
-        names.reverse()
-    script = f"""
-import importlib
-import sys
-import warnings
-with warnings.catch_warnings(record=True) as caught:
-    warnings.simplefilter('always', DeprecationWarning)
-    first = importlib.import_module({names[0]!r})
-    second = importlib.import_module({names[1]!r})
-assert len(caught) == 1
-assert str(caught[0].message) == (
-    "app.services.query_ranges is deprecated; import app.services.shared.query_ranges; "
-    "0.2.4'te kaldırılacak"
-)
-from app.services import query_ranges
-import app.services.query_ranges as dotted
-assert first is second is query_ranges is dotted
-assert first.__name__ == first.__spec__.name == 'app.services.shared.query_ranges'
-assert importlib.reload(first) is second
-assert 'sqlalchemy' not in sys.modules
-assert 'app.services.providers.garmin_normalize' not in sys.modules
-import app.services
-before = len(sys.meta_path)
-importlib.reload(app.services)
-assert len(sys.meta_path) == before
-try:
-    importlib.import_module('app.services.nonexistent_service')
-except ModuleNotFoundError as exc:
-    assert exc.name == 'app.services.nonexistent_service'
-else:
-    raise AssertionError('unknown service was accepted')
-"""
-    result = subprocess.run(
-        [sys.executable, "-c", script], capture_output=True, text=True, cwd=ROOT, timeout=30
-    )
-    assert result.returncode == 0, result.stdout + result.stderr
 
 
 @pytest.mark.parametrize("package", PACKAGES)
@@ -359,12 +271,10 @@ assert 'fastapi' not in sys.modules
     assert result.returncode == 0, result.stdout + result.stderr
 
 
-def test_application_imports_use_the_new_packages_instead_of_compatibility_files():
-    legacy = {name for _, name in LEGACY_MODULES}
+def test_application_imports_use_the_package_paths():
+    legacy = {name for _, name in MODULES}
     violations = []
     for path in (ROOT / "app").rglob("*.py"):
-        if path.parent == SERVICES:
-            continue
         module = ".".join(path.relative_to(ROOT).with_suffix("").parts)
         package = (
             module.removesuffix(".__init__")
@@ -387,10 +297,8 @@ def test_application_imports_use_the_new_packages_instead_of_compatibility_files
     assert violations == []
 
 
-@pytest.mark.parametrize(
-    "module", ["app.services.backup_files", "app.services.operations.backup_files"]
-)
-def test_host_backup_module_entry_points_preserve_an_existing_target(module, tmp_path):
+def test_host_backup_module_entry_point_preserves_an_existing_target(tmp_path):
+    module = "app.services.operations.backup_files"
     target = tmp_path / "health-synthetic.dump.age"
     target.write_bytes(b"existing ciphertext")
     created = subprocess.run(

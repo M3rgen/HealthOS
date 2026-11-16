@@ -22,6 +22,8 @@ paths. Behaviour:
   the bearer token or the key are replaced by :data:`REDACTED_BODY`, and a kept header naming
   or carrying one is masked. ``body_sha256`` and ``body_size`` still describe the bytes Garmin
   sent, so the row stays evidence of the exchange without being a usable credential.
+  Original-file exchanges keep metadata only; their paths use an identity digest and
+  validated FIT bytes belong to the separate immutable activity-file archive.
 * A response is read under byte budgets (:mod:`app.core.bounded_http`); one over them is
   refused, archived as incomplete and never parsed.
 * Invalid or ambiguous JSON raises :class:`GarminResponseDecodeError`. Captured bytes,
@@ -40,20 +42,28 @@ import base64
 import hashlib
 import json
 import logging
-from collections.abc import Callable, Mapping, Sequence
-from dataclasses import InitVar, dataclass, field
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from functools import partial
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 
 import httpx
 
 from app.core import http_retry
 from app.core.bounded_http import ACCEPT_ENCODING, ReadBody, read_bounded
 from app.core.logging import event
-from app.garmin import header_credentials, secret_scan
+from app.garmin import header_credentials
+from app.garmin.activity_zip import MAX_ZIP_BYTES, extract_fit
+from app.garmin.exchange import (
+    TOKEN_KIND,
+    CaptureRequest,
+    GarminExchange,
+    body_contains_secret,
+    kept_headers,
+)
 from app.garmin.response_json import unique_object
 
 logger = logging.getLogger(__name__)
@@ -74,18 +84,6 @@ MAX_WIRE_BYTES = 64 * 1024 * 1024
 MAX_DECODED_BYTES = 32 * 1024 * 1024
 # A token exchange's answer is a JWT.
 MAX_TOKEN_BYTES = 1024 * 1024
-# Response headers kept with a body: enough to read and date it, nothing about the caller.
-KEPT_HEADERS = ("content-type", "content-length", "date", "retry-after", "www-authenticate")
-# The ``kind`` of the key-for-token exchange; its body is the bearer token (or an error about
-# the key) and is never kept.
-TOKEN_KIND = "token"
-# What a capture keeps instead of a body that is, or contains, a credential.
-REDACTED_BODY = b"[redacted: garmin bearer token]"
-REDACTED_HEADER = "[redacted]"
-# Headers that carry credentials by name; masked even if ``KEPT_HEADERS`` ever lists one.
-CREDENTIAL_HEADERS = frozenset(
-    {"authorization", "proxy-authorization", "cookie", "set-cookie", "x-auth-token"}
-)
 
 
 class GarminError(Exception):
@@ -137,106 +135,6 @@ class GarminCredentialEchoError(GarminError):
 
     def __init__(self) -> None:
         super().__init__("Garmin response contained a credential")
-
-
-def body_contains_secret(body: bytes, secrets: Sequence[str]) -> bool:
-    """Match raw bytes and JSON string keys/values in O(body size) for fixed secrets.
-
-    Byte searches, encoding detection and the string lexer each make a bounded
-    number of passes. Decoded slices never overlap, so substring searches also
-    have linear total input. No object traversal or recursion is needed, and no
-    decoded body or credential is retained. Literal backslashes stay literal.
-    """
-    secrets = [secret for secret in secrets if secret]
-    if any(secret.encode() in body for secret in secrets):
-        return True
-    if not secrets or (b"\\" not in body and b"\x00" not in body):
-        return False
-    # Malformed bytes elsewhere must not hide an otherwise recoverable secret.
-    text = body.decode(json.detect_encoding(body), "replace")
-    return any(secret in value for value in secret_scan.json_strings(text) for secret in secrets)
-
-
-@dataclass(frozen=True)
-class _CaptureRequest:
-    kind: str
-    context_id: str | None
-    method: str
-    path: str
-    query: str | None
-    attempt: int
-
-
-@dataclass(frozen=True)
-class GarminExchange:
-    """One HTTP exchange with Garmin, as kept in ``garmin_api_responses``.
-
-    ``sha256`` and ``size`` are over the body as received. A token exchange's body, a body
-    containing one of ``secrets`` (the bearer token, the key) and a header value carrying one
-    are not kept: ``body`` becomes :data:`REDACTED_BODY` and such a header
-    :data:`REDACTED_HEADER`, so neither the instance nor its ``row()`` holds the credential.
-
-    ``body_redacted`` records the masking decision independently of the placeholder
-    bytes. A successful data call may archive this capture, but must refuse to
-    return its original payload to ingestion.
-    """
-
-    fetched_at: datetime
-    kind: str
-    context_id: str | None
-    method: str
-    path: str
-    query: str | None
-    attempt: int
-    status_code: int
-    headers: dict[str, str]
-    body: bytes
-    complete: bool = True
-    error: str | None = None
-    # Credentials of this exchange to keep out of the body and headers (not stored).
-    secrets: InitVar[Sequence[str]] = ()
-    sha256: str = field(init=False)
-    size: int = field(init=False)
-    request_sha256: str = field(init=False)
-    body_redacted: bool = field(init=False)
-
-    def __post_init__(self, secrets: Sequence[str]) -> None:
-        object.__setattr__(self, "sha256", hashlib.sha256(self.body).hexdigest())
-        object.__setattr__(self, "size", len(self.body))
-        request = f"{self.method} {self.path}" + (f"?{self.query}" if self.query else "")
-        object.__setattr__(self, "request_sha256", hashlib.sha256(request.encode()).hexdigest())
-        if self.kind == TOKEN_KIND:
-            # The body is the token itself: no header may repeat it either.
-            # HTTPX falls back to Latin-1 for headers containing invalid UTF-8.
-            secrets = (
-                *secrets,
-                self.body.decode("utf-8", "replace").strip(),
-                self.body.decode("latin-1").strip(),
-            )
-        redacted = self.kind == TOKEN_KIND or body_contains_secret(self.body, secrets)
-        object.__setattr__(self, "body_redacted", redacted)
-        if redacted:
-            object.__setattr__(self, "body", REDACTED_BODY)
-        object.__setattr__(self, "headers", redacted_headers(self.headers, secrets))
-
-    def row(self) -> dict[str, Any]:
-        return {
-            "fetched_at": self.fetched_at,
-            "kind": self.kind,
-            "context_id": self.context_id,
-            "method": self.method,
-            "path": self.path,
-            "query": self.query,
-            "request_sha256": self.request_sha256,
-            "attempt": self.attempt,
-            "status_code": self.status_code,
-            "headers": self.headers,
-            "body": self.body,
-            "body_sha256": self.sha256,
-            "body_size": self.size,
-            "complete": self.complete,
-            "error": self.error,
-        }
 
 
 @dataclass
@@ -298,20 +196,6 @@ def backoff(attempt: int) -> float:
     return http_retry.backoff(attempt, base=BACKOFF_BASE)
 
 
-def kept_headers(headers: httpx.Headers) -> dict[str, str]:
-    return {name: headers[name] for name in KEPT_HEADERS if name in headers}
-
-
-def redacted_headers(headers: Mapping[str, str], secrets: Sequence[str] = ()) -> dict[str, str]:
-    """``headers`` with a credential header, or a value carrying one of ``secrets``, masked."""
-    return {
-        name: REDACTED_HEADER
-        if name.lower() in CREDENTIAL_HEADERS or any(s and s in value for s in secrets)
-        else value
-        for name, value in headers.items()
-    }
-
-
 def decode_response_body(body: bytes) -> Any:
     """Decode only after capture, preserving the existing empty-response contract.
 
@@ -328,6 +212,14 @@ def decode_response_body(body: bytes) -> Any:
     # Raise outside the handler: even implicit exception context may hold body
     # bytes or credentials (JSONDecodeError.doc, UnicodeDecodeError.object).
     raise GarminResponseDecodeError()
+
+
+@dataclass(frozen=True)
+class _GetOptions:
+    kind: str
+    context_id: str | None
+    exchanges: list[GarminExchange]
+    binary: bool = False
 
 
 class GarminClient:
@@ -384,7 +276,7 @@ class GarminClient:
                 return http_retry.RetryFailure()
             exchanges.append(
                 self._capture(
-                    _CaptureRequest(TOKEN_KIND, None, "POST", TOKEN_PATH, None, attempt),
+                    CaptureRequest(TOKEN_KIND, None, "POST", TOKEN_PATH, None, attempt),
                     response,
                     read,
                     key,
@@ -437,14 +329,30 @@ class GarminClient:
         context_id: str | None = None,
         exchanges: list[GarminExchange] | None = None,
     ) -> GarminResponse:
-        """GET ``path``; retries 429/5xx with back-off, renews the token once on 401.
+        """Read JSON with retries; caller-owned exchanges survive decoding failures too."""
+        captures = exchanges if exchanges is not None else []
+        payload = await self._request(path, params, _GetOptions(kind, context_id, captures))
+        return GarminResponse(payload, captures)
 
-        ``exchanges``: a caller-owned list every exchange is appended to, so the caller can
-        archive the responses of a request that ends in an error as well."""
+    async def download_activity(
+        self, identifier: str, *, exchanges: list[GarminExchange] | None = None
+    ) -> bytes:
+        """Download one bounded original ZIP and return its sole FIT, without parsing it."""
+        captures = exchanges if exchanges is not None else []
+        path = "/download-service/files/activity/" + quote(identifier, safe="").replace(".", "%2E")
+        return await self._request(path, None, _GetOptions("activity-files", None, captures, True))
+
+    async def _request(
+        self, path: str, params: Mapping[str, Any] | None, options: _GetOptions
+    ) -> Any:
+        kind, context_id, exchanges = options.kind, options.context_id, options.exchanges
         query = urlencode(sorted((k, str(v)) for k, v in (params or {}).items())) or None
         url = f"{self.base_url}{path}" + (f"?{query}" if query else "")
-        if exchanges is None:
-            exchanges = []
+        diagnostic_path = (
+            "/download-service/files/activity/sha256:" + hashlib.sha256(path.encode()).hexdigest()
+            if options.binary
+            else path
+        )
         renewed = False
 
         async def send(attempt: int):
@@ -454,13 +362,13 @@ class GarminClient:
             key = read_api_key(self.key_file)
             token = await self.token(exchanges, force=renewed and attempt == 0)
             await self._pace()
-            received = await self._get_response(url, token, kind=kind)
+            received = await self._get_response(url, token, kind=kind, binary=options.binary)
             if isinstance(received, http_retry.RetryFailure):
                 return received
             response, read = received
             exchanges.append(
                 self._capture(
-                    _CaptureRequest(kind, context_id, "GET", path, query, attempt),
+                    CaptureRequest(kind, context_id, "GET", diagnostic_path, query, attempt),
                     response,
                     read,
                     token,
@@ -469,14 +377,18 @@ class GarminClient:
             )
             if read.refused:
                 event(logger, "GARMIN_RESPONSE_REFUSED", kind=kind, reason=read.refused)
-                raise GarminResponseRefused(path, read.refused)
+                raise GarminResponseRefused(diagnostic_path, read.refused)
             status = response.status_code
             if status in (200, 204):
                 # 204 (seen live for a day without HRV yet) and an empty 200 body: no data.
-                payload = decode_response_body(read.body)
+                payload = (
+                    extract_fit(read.body) if options.binary else decode_response_body(read.body)
+                )
                 if exchanges[-1].body_redacted:
                     raise GarminCredentialEchoError()
-                return http_retry.Success(GarminResponse(payload, exchanges))
+                if options.binary and body_contains_secret(payload, (key, token)):
+                    raise GarminCredentialEchoError()
+                return http_retry.Success(payload)
             if status == 401 and not renewed:
                 # The token expired or was revoked early: one fresh exchange, then give up.
                 renewed = True
@@ -487,7 +399,7 @@ class GarminClient:
                 raise GarminAuthError("Garmin refused the bearer token twice")
             if http_retry.transient_status(status):
                 return http_retry.RetryFailure(status, response.headers.get("retry-after"))
-            raise GarminRequestError(status, path)
+            raise GarminRequestError(status, diagnostic_path)
 
         return await http_retry.request_with_retry(
             send,
@@ -499,12 +411,12 @@ class GarminClient:
                 notify_exhausted=True,
             ),
             sleep=self.sleep,
-            error=partial(_get_retry_error, path),
+            error=partial(_get_retry_error, diagnostic_path),
             notify=partial(_notify_get_retry, kind),
         )
 
     async def _get_response(
-        self, url: str, token: str, *, kind: str
+        self, url: str, token: str, *, kind: str, binary: bool = False
     ) -> tuple[httpx.Response, ReadBody] | http_retry.RetryFailure:
         """Keep credential-bearing transport errors inside this request boundary.
 
@@ -518,9 +430,12 @@ class GarminClient:
             return await self._send(
                 "GET",
                 url,
-                {"Authorization": f"Bearer {token}", "Accept": "application/json"},
-                max_wire_bytes=MAX_WIRE_BYTES,
-                max_decoded_bytes=MAX_DECODED_BYTES,
+                {
+                    "Authorization": f"Bearer {token}",
+                    "Accept": "*/*" if binary else "application/json",
+                },
+                max_wire_bytes=MAX_ZIP_BYTES if binary else MAX_WIRE_BYTES,
+                max_decoded_bytes=MAX_ZIP_BYTES if binary else MAX_DECODED_BYTES,
             )
         except httpx.HTTPError as exc:
             event(logger, "GARMIN_REQUEST_FAILED", kind=kind, error_type=type(exc).__name__)
@@ -556,7 +471,7 @@ class GarminClient:
 
     def _capture(
         self,
-        request: _CaptureRequest,
+        request: CaptureRequest,
         response: httpx.Response,
         read: ReadBody,
         *secrets: str,
@@ -578,6 +493,7 @@ class GarminClient:
             complete=read.refused is None,
             error=read.refused,
             secrets=secrets,
+            metadata_only=request.kind == "activity-files",
         )
 
 

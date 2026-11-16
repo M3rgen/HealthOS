@@ -28,7 +28,7 @@ class FitImport:
     records: dict[RecordType, list[dict]]
 
 
-def _instant(value: int | None) -> datetime | None:
+def _instant(value: int | float | None) -> datetime | None:
     if value is None:
         return None
     if not 0 <= value < 0xFFFFFFFF:
@@ -36,13 +36,13 @@ def _instant(value: int | None) -> datetime | None:
     return EPOCH + timedelta(seconds=value)
 
 
-def _source(file_id: dict[int, int | None], digest: str) -> dict:
+def _source(file_id: dict[int, int | float | None], digest: str) -> dict:
     if file_id.get(0) != 4 or file_id.get(1) is None:
         raise FitError("FIT etkinlik dosyası gerekli.")
     # Serial distinguishes physical devices; unknown devices are kept conservatively
     # apart by creation time (or the file hash when no creation time was provided).
     serial = file_id.get(3)
-    device: dict[str, int | str | None] = {
+    device: dict[str, int | float | str | None] = {
         "manufacturer": file_id[1],
         "product": file_id.get(2),
         "serial": serial,
@@ -67,7 +67,7 @@ def _source(file_id: dict[int, int | None], digest: str) -> dict:
     }
 
 
-def _session(fields: dict[int, int | None]) -> dict:
+def _session(fields: dict[int, int | float | None]) -> dict:
     start, end = _instant(fields.get(2)), _instant(fields.get(253))
     elapsed = fields.get(7)
     timer = fields.get(8)
@@ -78,7 +78,8 @@ def _session(fields: dict[int, int | None]) -> dict:
     if start is None or end is None or end <= start:
         raise FitError("FIT etkinlik zaman aralığı geçersiz.")
     duration = timer if timer is not None else elapsed
-    sport = fields.get(5)
+    sport_value = fields.get(5)
+    sport = sport_value if isinstance(sport_value, int) else None
     metrics = {}
     if (distance := fields.get(9)) is not None:
         metrics["distanceMillimeters"] = distance * 10  # FIT centimetres -> millimetres

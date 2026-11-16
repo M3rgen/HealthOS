@@ -17,12 +17,9 @@ from app.models.manual import ManualMeasurement
 from app.models.state import RawHealthData
 from app.parsers.common import number, parse_date, payload_for, payload_hash
 from app.parsers.google_daily import DAILY_SPO2_FIELDS, daily_spo2
+from app.services.readers import measurement_windows
 from app.services.readers.dashboard_manual import latest_measurements
-from app.services.readers.measurement_windows import (
-    interval_window,
-    sleep_window,
-    step_window,
-)
+from app.services.readers.measurement_windows import sleep_window, step_window
 from app.services.shared.finite_math import finite_number, finite_scale, finite_sum
 
 from .canonical_sleep import SleepEvidenceAccumulator
@@ -193,9 +190,7 @@ async def _interval_records(
     raw = aliased(RawHealthData)
     source_candidates = select(RawHealthData.google_data_point_id).where(
         RawHealthData.data_type == kind,
-        *interval_window(
-            kind, RawHealthData.source_start_time, RawHealthData.source_end_time, first, stop
-        ),
+        *measurement_windows.raw_interval_window(kind, RawHealthData, first, stop),
     )
     # Sleep belongs only to its current wake day, including raw-only arrivals.
     # Preserve the step candidate union; bound both sides before joining.
@@ -203,7 +198,11 @@ async def _interval_records(
         source_candidates
         if kind == "sleep"
         else select(model.google_data_point_id)
-        .where(*interval_window(kind, model.start_time, model.end_time, first, stop))
+        .where(
+            *measurement_windows.interval_window(
+                kind, model.start_time, model.end_time, first, stop
+            )
+        )
         .union(source_candidates)
     ).subquery()
     return await session.stream(

@@ -28,7 +28,7 @@ from app.services.readers import (
     daily_window,
 )
 from app.services.readers.measurement_windows import (
-    interval_window,
+    raw_interval_window,
     sleep_window,
     step_window,
 )
@@ -77,13 +77,7 @@ async def read_steps(
             ),
         )
         .where(
-            *interval_window(
-                "steps",
-                step_raw.source_start_time,
-                step_raw.source_end_time,
-                window.start,
-                window.stop,
-            ),
+            *raw_interval_window("steps", step_raw, window.start, window.stop),
             Steps.is_quarantined.is_(False),
             calendar.sources.normalized(Steps, "steps"),
         ),
@@ -153,13 +147,7 @@ def _sleep_query(window: DashboardWindow, sources: DashboardSources):
             ),
         )
         .where(
-            *interval_window(
-                "sleep",
-                sleep_raw.source_start_time,
-                sleep_raw.source_end_time,
-                window.start,
-                window.stop,
-            ),
+            *raw_interval_window("sleep", sleep_raw, window.start, window.stop),
             SleepSession.is_quarantined.is_(False),
             sources.normalized(SleepSession, "sleep"),
         )

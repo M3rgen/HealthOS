@@ -10,6 +10,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { chromium } = require('playwright');
 const fx = require('./fixtures.cjs');
+const { rangeAnswer } = require('./synthetic-tiles.cjs');
 
 const VIEWPORTS = require('../../tests/browser/viewport-floors.json').sizes.map(([w, h]) => `${w}x${h}`);
 const LANGUAGES = ['tr', 'en'];
@@ -18,6 +19,20 @@ const README = { viewports: ['1440x900', '390x844'], views: ['overview', 'umay',
   languages: ['en'], scale: 2 };
 const VIEWS = {
   overview: async () => {},
+  plan: async page => {
+    await page.locator('[data-page="plan"]').click();
+    await page.locator('[data-section="today"]').waitFor();
+  },
+  'plan-shopping': async page => {
+    await VIEWS.plan(page);
+    await page.locator('[data-section="shopping"]').click();
+    await page.locator('[data-item-id]').first().check();
+    await page.locator('.plan-save-status').filter({ hasText: /kaydedildi|saved/ }).waitFor();
+  },
+  'empty-plan': { scenario: 'empty-plan', run: async page => {
+    await page.locator('[data-page="plan"]').click();
+    await page.locator('#plan code').waitFor();
+  } },
   'history-drag': async (page) => {
     // Partial drag: the sheet must follow the pointer and keep its released height.
     const handle = await page.locator('#history-toggle').boundingBox();
@@ -71,6 +86,16 @@ const VIEWS = {
   sports: async (page) => {
     await page.locator('[data-page="sports"]').click();
     await page.locator('#workout-rows .workout-day').first().waitFor();
+  },
+  // The Garmin run's detail: map over the synthetic basemap (only this scenario serves one), and
+  // without it, where the route is drawn on its own with a note.
+  'workout-detail': { scenario: 'workout-detail', run: async (page) => {
+    await openTrack(page);
+    await page.locator('.workout-detail-map[data-map-ready="true"]').waitFor({ timeout: 20000 });
+  } },
+  'workout-detail-nomap': async (page) => {
+    await openTrack(page);
+    await page.locator('.workout-detail-map[data-map="route"] .workout-map-note:not(:empty)').waitFor();
   },
   'sports-editor': async (page) => {
     await page.locator('[data-page="sports"]').click();
@@ -196,17 +221,26 @@ function args(argv = process.argv.slice(2)) {
   return out;
 }
 
+async function openTrack(page) {
+  await page.locator('[data-page="sports"]').click();
+  await page.locator('[data-workout-id="w7"] [data-track-open]').click();
+  await page.locator('.workout-chart svg').first().waitFor();
+}
+
 async function mock(page, base, problems, scenario) {
   const origin = new URL(base).origin;
   const data = { ...fx, ...fx.scenario(scenario) };
   const call = (value, q) => typeof value === 'function' ? value(q) : value;
   const json = (route, body, status = 200) => route.fulfill({ status, json: body });
+  let planState = structuredClone(data.plan.state);
   let appearance = data.appearanceSettings; // per page: a PUT is read back by the next GET
   await page.route('**/*', async (route) => {
     const url = new URL(route.request().url());
     const method = route.request().method();
     if (url.origin !== origin) { problems.push(`remote request blocked: ${url.href}`); return route.abort(); }
     const p = url.pathname, q = url.searchParams;
+    if (p === '/api/plan') return json(route, { ...data.plan, state: planState });
+    if (p === '/api/plan/state') { planState = route.request().postDataJSON(); return json(route, planState); }
     if (p === '/health') return json(route, data.health);
     if (p === '/api/dashboard') return json(route, call(data.dashboard, q));
     if (p === '/api/dashboard/history') return json(route, call(data.history, q));
@@ -214,6 +248,13 @@ async function mock(page, base, problems, scenario) {
       ? json(route, { id: 'new', ...route.request().postDataJSON(), source: 'Manuel' }, 201) : json(route, data.measurements);
     if (p === '/api/dashboard/workouts') return method === 'POST'
       ? json(route, { id: 'new', ...route.request().postDataJSON(), source: 'Manuel' }, 201) : json(route, call(data.workouts, q));
+    const track = /^\/api\/dashboard\/workouts\/([^/]+)\/track$/.exec(p);
+    if (track) return json(route, fx.workoutTrack(decodeURIComponent(track[1])));
+    if (p === '/api/map/tiles.pmtiles') {
+      if (!data.mapTiles) return json(route, { detail: 'Harita altlığı kurulu değil / No basemap installed' }, 404);
+      const answer = rangeAnswer(data.mapTiles, route.request().headers().range);
+      return route.fulfill({ status: answer.status, headers: answer.headers, body: answer.body });
+    }
     if (p === '/api/dashboard/export.csv') return route.fulfill({ body: 'date,steps\n', contentType: 'text/csv' });
     if (p === '/api/settings/display') return json(route, { schema_version: 1, preferences: { timezone: 'UTC', motion: false }, updated_at: fx.NOW });
     if (p === '/api/settings/appearance') {

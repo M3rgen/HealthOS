@@ -9,13 +9,14 @@ import { setupCalendar } from './calendar.js';
 import { setupChat } from './chat.js';
 import { paintHealth, paintHealthFailed } from './connection-panel.js';
 import { createDashboardData } from './dashboard-data.js';
-import { clockTime, fullDate, todayKey } from './dates.js';
+import { civilDate, civilParts, clockTime, fullDate, shiftDay, todayKey } from './dates.js';
 import { setupDisplaySettings } from './display-settings.js';
 import { $ } from './dom.js';
 import { duration, escape, num } from './format.js';
 import { setupHistoryPanel } from './history-panel.js';
 import { paintHistory, paintHistoryFailed, setupHistoryRows } from './history-table.js';
 import { languageFallback, t } from './i18n/index.js';
+import { number } from './locale.js';
 import { iconMarkup, renderIcons } from './icons.js';
 import { setupLanguageSelect } from './language-select.js';
 import { setupMeasurementFlags } from './measurement-flags.js';
@@ -33,7 +34,6 @@ import { state } from './state.js';
 import { setupScrollFocus } from './scroll-focus.js';
 import { setupSyncAction } from './sync-action.js';
 import { setupSystemPage } from './system-page.js';
-import { setupWorkouts } from './workouts.js';
 
 renderIcons();
 setupScrollFocus();
@@ -78,11 +78,6 @@ const calendar = setupCalendar({
   },
 });
 const historyPanel = setupHistoryPanel({ request, getZone, getToday, paint: paintHistory });
-const workouts = setupWorkouts({
-  request, getZone, getToday, escape, num, duration,
-  fullDate: value => fullDate(value, state.zone),
-  timeOf: value => clockTime(value, state.zone),
-});
 const measurements = setupMeasurementList({ request, notice, clearNotice });
 
 // Until the first answer (data or failure) the overview's figures pulse, so a slow load does not
@@ -129,18 +124,30 @@ const dashboard = createDashboardData({
   retry: () => refreshPage(),
 });
 const system = setupSystemPage({ request, notice, clearNotice, refresh: dashboard.refresh });
+const planFormat = { civilDate, civilParts, shiftDay, number };
+const loadPlan = () => import('./plan.js')
+  .then(module => module.loadPlan({ notice, request, getToday, format: planFormat }))
+  .catch(pageOutdated);
+// The Sports page, like Plan, loads with its first visit (workouts.js keeps its one controller).
+const workoutOptions = {
+  request, getZone, getToday, escape, num, duration,
+  fullDate: (/** @type {string} */ value) => fullDate(value, state.zone),
+  timeOf: (/** @type {string} */ value) => clockTime(value, state.zone),
+};
+const loadWorkouts = () => import('./workouts.js').then(module => module.loadWorkouts(workoutOptions)).catch(pageOutdated);
 async function refreshPage() {
   await dashboard.refresh();
   if (state.activePage === 'system') await system.load();
-  if (state.activePage === 'sports') await workouts.update();
+  if (state.activePage === 'sports') await loadWorkouts();
+  if (state.activePage === 'plan') await loadPlan();
 }
 
-const pageLoaders = { measurements: measurements.load, system: system.load, sports: workouts.update };
+const pageLoaders = { plan: loadPlan, measurements: measurements.load, system: system.load, sports: loadWorkouts };
 setupPages({
   onChange: () => body.updateMotion(),
   loaders: pageLoaders,
   // The system page waits for /health on a load: onHealthFirstKnown, or the check after the first refresh.
-  firstLoaders: { measurements: measurements.load, sports: workouts.update },
+  firstLoaders: { plan: loadPlan, measurements: measurements.load, sports: loadWorkouts },
 });
 setupMeasurementFlags({ request, notice, reload: () => dashboard.refresh().then(measurements.load) });
 setupMeasurements({
@@ -184,9 +191,10 @@ window.addEventListener('pageshow', event => {
 document.documentElement.dataset.booted = 'true';
 
 const reloadPage = { label: t.common.reload, run: () => location.reload() };
+function pageOutdated() { notice(t.common.pageOutdated, true, 'chunk', '', reloadPage); }
 if (languageFallback) notice(t.common.languageUnavailable, true, 'language', '', reloadPage);
 // A chunk that cannot be fetched after the start, typically a tab left open across an update.
-window.addEventListener('vite:preloadError', () => notice(t.common.pageOutdated, true, 'chunk', '', reloadPage));
+window.addEventListener('vite:preloadError', pageOutdated);
 
 // Asked in parallel with the first refresh, so the first paint never waits for it.
 const firstDisplaySync = settings.sync();

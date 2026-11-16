@@ -53,19 +53,13 @@ const garminRows = status => Object.entries(status.kinds ?? {}).map(([kind, row]
 
 /**
  * GitHub-only Apple extension: the Apple Health import panel loads on the first visit to the
- * System page, outside the initial bundle (docs/PERFORMANCE_BUDGET.md).
+ * System page, outside the initial bundle (docs/PERFORMANCE_BUDGET.md); a failed load is
+ * retried on the next visit.
  * @param {typeof import('./api.js').request} request @param {() => string} getZone
  */
-function lazyApplePanel(request, getZone) {
-  /** @type {Promise<{refresh: () => Promise<void>}> | null} */
-  let panel = null;
-  return () => {
-    panel ??= import('./apple-import.js').then(module =>
-      module.setupAppleImport({ request, getZone, handleUnauthorized, number, dateFormat }),
-    );
-    panel.then(loaded => loaded.refresh()).catch(() => { panel = null; });
-  };
-}
+const refreshApplePanel = (request, getZone) => import('./apple-import.js')
+  .then(module => module.refreshAppleImport({ request, getZone, handleUnauthorized, number, dateFormat }))
+  .catch(() => {});
 
 /**
  * @param {{request: typeof import('./api.js').request,
@@ -78,7 +72,6 @@ export function setupSystemPage({ request, notice, clearNotice, refresh }) {
   const coverage = setupCoverage({ request, getZone, getToday: () => todayKey(state.zone) });
   const webhook = setupWebhookStatus({ request, getZone });
   const devices = setupDevices({ request, getZone });
-  const appleRefresh = lazyApplePanel(request, getZone);
 
   /** @param {string} text */
   const syncMessage = text => morphChildren($('sync-rows'), `<tr><td colspan="4">${escape(text)}</td></tr>`);
@@ -128,7 +121,7 @@ export function setupSystemPage({ request, notice, clearNotice, refresh }) {
       return refresh();
     }
     devices.refresh();
-    appleRefresh();
+    refreshApplePanel(request, getZone);
     const google = sourceEnabled(state.health, 'google');
     if (google) {
       coverage.refresh();

@@ -1,0 +1,23 @@
+# Workout map: read-only mount of your own PMTiles basemap (docs/reference/maps.md).
+#
+# Use it without editing any tracked file, by adding to .env (Compose reads COMPOSE_FILE from it;
+# join several overlays with ":"):
+#   COMPOSE_FILE=docker-compose.yml:docker-compose.map.yml
+#   MAP_TILES_HOST_DIR=/opt/healthos/map
+# The directory holds the file as tiles.pmtiles. It is mounted as a directory, not as the file, so
+# replacing the file with `mv` (a new inode) reaches the running container. The container runs as
+# UID 10001 and must be able to read the file (mode 644 in a directory of mode 755 is enough).
+# Without this overlay, or without the file, the map draws the route without a basemap.
+services:
+  app:
+    environment:
+      MAP_TILES_FILE: /srv/healthos-map/tiles.pmtiles
+    volumes:
+      - type: bind
+        source: ${MAP_TILES_HOST_DIR:?Set MAP_TILES_HOST_DIR to the host directory of tiles.pmtiles}
+        target: /srv/healthos-map
+        read_only: true
+        # A mistyped path must stop `up` and name that path, not make Docker create it as a
+        # root-owned directory.
+        bind:
+          create_host_path: false

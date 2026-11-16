@@ -16,7 +16,7 @@ const normalization = {
 const garminStatus = {
   enabled: true, key_file_present: false, pull_interval_minutes: 120, lookback_days: 3,
   last_success_at: null, last_error: null, last_error_at: null, failing_kinds: [],
-  raw_records: 0, responses: 0, normalization,
+  raw_records: 0, responses: 0, normalization, activity_files: { downloaded: 0, pending: 0, unavailable: 0, invalid: 0 },
   kinds: { steps: { records: 0, newest_key: null, last_success_at: null,
     last_error: null, last_error_at: null, failing: false, backfill: null } },
 };
@@ -28,7 +28,7 @@ const health = {
   pending_notifications: 0, failed_notifications: 0, failed_syncs: 0, stale_streams: [],
   reasons: [], active_sources: ['google'], service: 'healthos', ui_login_disabled: false,
   garmin: { last_success_at: null, last_error_at: null, last_error_code: null,
-    lag_seconds: null, stale_after_seconds: 21600, normalization },
+    lag_seconds: null, stale_after_seconds: 21600, normalization, activity_files: { downloaded: 0, pending: 0, unavailable: 0, invalid: 0 } },
 };
 
 // Precedence (maintainer, 7 Nov 2026): Garmin first for sport activities, the Fitbit Air first for
@@ -140,8 +140,10 @@ const sports = ['Yürüyüş', 'Koşu', 'Bisiklet', 'Yüzme', 'Ağırlık antren
 // Every row names its source twice: `source` is the display label, `source_code` the stable code.
 // `priority`/`group`/`alternatives` come from the activity precedence (Garmin first): a Fitbit
 // session that overlaps a Garmin session is secondary and points at the Garmin row.
+// `has_track`: only the Garmin run (w7) has a recorded track (track-fixture.cjs, GET /workouts/{id}/track).
 const sourceFields = (code) => ({ source: SOURCE_LABELS[code], source_code: code,
-  provider: code === 'GARMIN' ? 'GARMIN' : code === 'MANUAL' ? 'MANUAL' : 'GOOGLE', priority: 'primary', group: null, alternatives: [] });
+  provider: code === 'GARMIN' ? 'GARMIN' : code === 'MANUAL' ? 'MANUAL' : 'GOOGLE', priority: 'primary', group: null, alternatives: [],
+  has_track: false });
 function workouts(params) {
   const month = (params.get('month') || `${TODAY.slice(0, 7)}-01`).slice(0, 7);
   const last = month === TODAY.slice(0, 7) ? Number(TODAY.slice(-2)) : 28;
@@ -157,8 +159,9 @@ function workouts(params) {
       ...sourceFields(i % 4 === 1 ? 'MANUAL' : i === 7 ? 'GARMIN' : 'FITBIT'),
     };
   });
-  // The watch recorded the run (w7); the Fitbit auto-detected a walk over the same minutes.
+  // The watch recorded the run (w7) with its track; the Fitbit auto-detected a walk over the same minutes.
   const run = rows[7];
+  Object.assign(run, { exercise_type: 'RUNNING', has_track: true });
   const overlap = { id: 'w7-fitbit', exercise_type: 'Yürüyüş', start_time: new Date(Date.parse(run.start_time) + 5 * 60000).toISOString(),
     end_time: new Date(Date.parse(run.end_time) - 3 * 60000).toISOString(), duration_seconds: run.duration_seconds - 8 * 60,
     calories_kcal: run.calories_kcal - 60, distance_meters: run.distance_meters - 400,
@@ -256,13 +259,15 @@ const devices = {
     { id: 'garmin', name: 'Garmin', platform: 'GARMIN', provider: 'GARMIN', source_code: 'GARMIN', form_factor: 'WATCH', manufacturer: 'Garmin', application: null,
       recording_method: null, previous_names: [], fingerprints: [], data_types: ['activities', 'daily-summaries', 'heart-rate', 'sleep', 'steps'], data_type_count: 5,
       first_seen: '2026-09-20T06:00:00Z', last_seen: '2026-10-16T14:00:00Z', last_data: '2026-10-16T13:40:00Z', status: 'bagli',
-      garmin_last_pull: '2026-10-16T14:00:00Z', precedence: { activity: 'primary', health: 'secondary' } },
+      garmin_last_pull: '2026-10-16T14:00:00Z', activity_files: { downloaded: 2, pending: 1, unavailable: 0, invalid: 0 }, precedence: { activity: 'primary', health: 'secondary' } },
   ],
 };
 
 // Alternate data sets for edge-case views. 'sync-error' shows the notice
 // banner; 'empty' is a fresh install: Google not set up and no records yet.
 function scenario(name) {
+  if (name === 'empty-plan') return { plan: { plan: null } };
+  if (name === 'workout-detail') return { mapTiles: require('./synthetic-tiles.cjs').syntheticPmtiles() };
   // Two sources disagree on steps and sleep for two days: badges, toggles and the sub-row appear.
   if (name === 'kaynaklar') return { dashboard: dashboardWithSources };
   if (name === 'sync-error') return {
@@ -276,6 +281,7 @@ function scenario(name) {
         days: data.days.map((d) => ({ ...d, steps: null, sleep_seconds: null, resting_bpm: null, hrv_ms: null, spo2: null, status: d.partial ? 'partial' : 'empty' })) };
     };
     return {
+      plan: { plan: null },
       health: { ...health, configuration: 'degraded', last_sync_success: null, latest_health_write: null, last_webhook_received: null, data_freshness: {} },
       dashboard: blank, measurements: [], syncStatus: [], workouts: () => [],
       coverage: (params) => ({ ...coverage(params), supported_data_types: [], types: [], summary: { days_without_value: 0, unknown_days: 7, incomplete_days: 0 } }),
@@ -342,4 +348,13 @@ const uploadBackgroundPng = () => syntheticPng(640, 400, (u, v) => [Math.round(3
 // Includes a script and an id marker: tests assert neither ever reaches the DOM.
 const uploadLogoSvg = () => Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" id="uploaded-svg-marker"><script>window.uploadedSvgRan=true</script><circle cx="24" cy="24" r="18" fill="none" stroke="#48d88c" stroke-width="5"/><path d="M15 24h18" stroke="#48d88c" stroke-width="5" stroke-linecap="round"/></svg>');
 
-module.exports = { NOW, TODAY, health, garminStatus, dashboard, dashboardWithSources, history, measurements, syncStatus, workouts, coverage, webhookStatus, devices, appleStatus, chatAnswer, chatTransfer, scenario, appearanceSettings, syntheticPng, uploadAvatarPng, uploadBackgroundPng, uploadLogoSvg };
+// The single public source for plan previews is the explicitly fictional schema example.
+const plan = { plan: require('../../docs/examples/plan.sample.json'), version: 1, schema_version: 1,
+  imported_at: NOW, state: { start_date: '2026-10-12', checked_item_ids: [] } };
+
+// The track of the Garmin run, and the basemap file: absent (404) unless a scenario installs the
+// synthetic one (synthetic-tiles.cjs), so every other view keeps its requests unchanged.
+const { workoutTrack } = require('./track-fixture.cjs');
+const mapTiles = null;
+
+module.exports = { workoutTrack, mapTiles, plan, NOW, TODAY, health, garminStatus, dashboard, dashboardWithSources, history, measurements, syncStatus, workouts, coverage, webhookStatus, devices, appleStatus, chatAnswer, chatTransfer, scenario, appearanceSettings, syntheticPng, uploadAvatarPng, uploadBackgroundPng, uploadLogoSvg };

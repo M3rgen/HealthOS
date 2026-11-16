@@ -4,7 +4,7 @@ The main line keeps an empty bridge, 20261109_p001, that answers for databases s
 old placeholder identity 20261107_a001 (tests/test_legacy_placeholder.py, run on the main line's
 own revisions). In this tree 20261107_a001 is the real Apple revision: it must stay a revision of
 its own, never be translated or skipped, and the single head must be the extension's merge,
-20261114_a005 (the latest merge with the main line). Synthetic rows only.
+20261115_a007 (the latest merge with the main line). Synthetic rows only.
 """
 
 from datetime import UTC, datetime
@@ -21,11 +21,13 @@ from app.models import apple
 APPLE = "20261107_a001"
 PLACEHOLDER = "20261109_p001"
 BRIDGE_MERGE = "20261109_0029"
-MAIN_HEAD = "20261114_0036"
+MAIN_HEAD = "20261115_0040"
 APPLE_MERGE = "20261111_a002"
-EARLIER_MERGE = "20261112_a003"
-PREVIOUS_MERGE = "20261112_a004"
-HEAD = "20261114_a005"
+OLDEST_MERGE = "20261112_a003"
+OLDER_MERGE = "20261112_a004"
+EARLIER_MERGE = "20261114_a005"
+PREVIOUS_MERGE = "20261115_a006"
+HEAD = "20261115_a007"
 BRANCHPOINT = "20261107_0025"
 NOW = datetime(2026, 11, 7, tzinfo=UTC)
 
@@ -47,8 +49,10 @@ def test_one_head_and_the_placeholder_in_its_place():
     script = ScriptDirectory.from_config(Config("alembic.ini"))
     assert script.get_heads() == [HEAD]
     assert script.get_revision(HEAD).down_revision == (MAIN_HEAD, PREVIOUS_MERGE)
-    assert script.get_revision(PREVIOUS_MERGE).down_revision == ("20261112_0034", EARLIER_MERGE)
-    assert script.get_revision(EARLIER_MERGE).down_revision == ("20261111_0033", APPLE_MERGE)
+    assert script.get_revision(PREVIOUS_MERGE).down_revision == ("20261115_0039", EARLIER_MERGE)
+    assert script.get_revision(EARLIER_MERGE).down_revision == ("20261114_0036", OLDER_MERGE)
+    assert script.get_revision(OLDER_MERGE).down_revision == ("20261112_0034", OLDEST_MERGE)
+    assert script.get_revision(OLDEST_MERGE).down_revision == ("20261111_0033", APPLE_MERGE)
     assert script.get_revision(APPLE_MERGE).down_revision == (BRIDGE_MERGE, APPLE)
     real = script.get_revision(APPLE)
     assert real.down_revision == BRANCHPOINT

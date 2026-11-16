@@ -24,6 +24,12 @@ Defaults:
   updates or `ANALYZE` conflicts with, and dumps one snapshot (what the reconciler commits later
   is in the next backup), as with the reconciliations that already run then.
 
+A reconciliation fetches each data type in windows of at most `RECONCILIATION_SLICE_DAYS` (7)
+days, oldest first, and releases the type's sync lock between two windows. A notification of that
+type waits for one window (heart rate: 20 to 40 minutes) instead of the whole pass (before this,
+a notification could wait almost ten hours behind the 90-day pass), and a due [scheduled catch-up](sync.md#scheduled-catch-up) of the type runs between two
+windows. A shorter slice costs one more Google request per window and type.
+
 These use normal idempotent UPSERTs. Disable in `.env` when another scheduler instance owns the jobs.
 The derived-day refresh (every five minutes) has no switch, so the scheduler keeps running and
 `/health` reports `scheduler: running` even with all three jobs above disabled.

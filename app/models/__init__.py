@@ -4,6 +4,8 @@ from app.models import identity_guards as identity_guards
 from app.models.apple import AppleImport, ApplePayload, AppleRawRecord, AppleSource
 from app.models.derived import DerivedDay
 from app.models.garmin import GarminApiResponse, GarminPullState, GarminRawRecord
+from app.models.garmin_files import GarminActivityFile, GarminActivityFileResult
+from app.models.garmin_tracks import GarminTrack, GarminTrackSession
 from app.models.health import (
     ActiveZoneMinute,
     Distance,
@@ -34,6 +36,7 @@ from app.models.identity_tables import (
 from app.models.manual import ManualMeasurement, ManualWorkout
 from app.models.manual_flags import ManualMeasurementFlagEvent
 from app.models.oauth_credentials import GoogleAccountRebindEvent, OAuthCredentialVersion
+from app.models.plan import PlanState, PlanVersion
 from app.models.raw_rejections import (
     RawHealthDataRejection,
     RawRejectionAck,
@@ -57,6 +60,8 @@ from app.models.state import (
 from app.models.webhook_status import WebhookStatusEvent
 
 __all__ = [
+    "PlanState",
+    "PlanVersion",
     "DerivedDay",
     "HeartHour",
     "HeartPending",
@@ -77,6 +82,10 @@ __all__ = [
     "ExerciseSession",
     "FetchRound",
     "GarminApiResponse",
+    "GarminActivityFile",
+    "GarminActivityFileResult",
+    "GarminTrack",
+    "GarminTrackSession",
     "GarminPullState",
     "GarminRawRecord",
     "HeartRate",

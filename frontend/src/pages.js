@@ -7,7 +7,7 @@ import { t } from './i18n/index.js';
 import { state } from './state.js';
 
 const HOME = 'overview';
-export const PAGES = [HOME, 'measurements', 'system', 'sports'];
+export const PAGES = [HOME, 'measurements', 'system', 'sports', 'plan'];
 const PREFIX = '#/';
 
 /** The page a URL fragment names, or null when it names none. @param {string} hash */

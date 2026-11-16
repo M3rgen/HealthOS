@@ -71,7 +71,9 @@ test('a real production build rejects a static import of body and three.js', t =
 
 test('the real frontend build budgets the model and its textures', () => {
   const report = cliRealBuild();
-  const { figure, deferred, initial } = report;
+  const { figure, deferred, initial, notice } = report;
+  assert.equal(notice, readFileSync(new URL('../../THIRD_PARTY_LICENSES.md', import.meta.url), 'utf8'),
+    'the build ships the third-party licence notices beside index.html');
   assert.ok(figure.files.some(file => file.endsWith('.glb')), 'the body model is measured');
   assert.ok(figure.files.some(file => file.includes('skin-detail')), 'the skin textures are measured');
   assert.ok(figure.bytes > 1_500_000, `figure assets measured as ${figure.bytes} B`);
@@ -87,7 +89,8 @@ function cliRealBuild() {
   try {
     const result = spawnSync(process.execPath, [viteCLI, 'build', '--outDir', out, '--emptyOutDir'], { cwd: frontend, timeout: 180000, encoding: 'utf8' });
     assert.equal(result.status, 0, result.stdout + result.stderr);
-    return JSON.parse(readFileSync(path.join(out, 'performance-budget-report.json'), 'utf8'));
+    const notice = readFileSync(path.join(out, 'THIRD_PARTY_LICENSES.md'), 'utf8');
+    return { ...JSON.parse(readFileSync(path.join(out, 'performance-budget-report.json'), 'utf8')), notice };
   } finally {
     rmSync(out, { recursive: true, force: true });
   }

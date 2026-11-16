@@ -37,7 +37,7 @@ else:
 
 PROJECT_NAME = f"healthos-smoke-{os.getpid()}-{secrets.token_hex(4)}"
 # Apple extension: its merge revision joins the Apple line to the main line.
-EXPECTED_REVISION = "20261114_a005"
+EXPECTED_REVISION = "20261115_a007"
 HOST_PORT = "18080"
 APP_ROLE = "healthos_app"
 ROOT = Path(__file__).resolve().parents[1]
@@ -764,6 +764,7 @@ def main() -> int:
             "RECONCILIATION_ENABLED": "false",
             "WATCHDOG_ENABLED": "false",
             "IDENTITY_RECONCILE_ENABLED": "false",
+            "CATCH_UP_ENABLED": "false",
         }
     )
     cleanup_needed = False

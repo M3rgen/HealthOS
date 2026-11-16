@@ -89,6 +89,7 @@ def repo(tmp_path: Path) -> Repo:
     for script in (
         "github_snapshot.sh",
         "github_snapshot_checks.py",
+        "github_location_checks.py",
         "check_no_extension.sh",
         "hooks/pre-push",
     ):

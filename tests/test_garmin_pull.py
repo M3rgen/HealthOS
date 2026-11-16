@@ -20,7 +20,8 @@ from sqlalchemy.exc import DBAPIError
 from support.garmin import unlocked
 
 from app.core.config import Settings
-from app.garmin.client import REDACTED_BODY, GarminClient
+from app.garmin.client import GarminClient
+from app.garmin.exchange import REDACTED_BODY
 from app.models.garmin import (
     GarminApiResponse,
     GarminHeartSet,
@@ -172,7 +173,7 @@ async def test_incremental_pull_archives_every_exchange_and_record(sessions, fak
 
     assert not summary.failed, summary.as_dict()
     # 7 range kinds take one request each over 4 days; 4 day kinds take 4 each.
-    assert summary.as_dict()["requests"] == 7 + 4 * 4
+    assert summary.as_dict()["requests"] == 7 + 4 * 4 + summary.activity_files.requests
     assert summary.kinds["daily-summaries"].new_records == 4
     assert summary.kinds["steps"].new_records == 4
     assert summary.kinds["heart-rate"].new_records == 4
@@ -181,7 +182,8 @@ async def test_incremental_pull_archives_every_exchange_and_record(sessions, fak
     assert summary.kinds["spo2"].new_records == 0  # the fake has no SpO2 body: empty list
     # Every HTTP exchange (token included) is kept; health bodies byte for byte, the token
     # exchange with a placeholder body (tests/test_garmin_token_redaction.py).
-    assert await count(sessions, GarminApiResponse) == 1 + summary.as_dict()["requests"]
+    expected = 1 + summary.as_dict()["requests"]
+    assert await count(sessions, GarminApiResponse) == expected
     async with sessions() as session:
         token_row = (
             await session.scalars(
@@ -370,13 +372,10 @@ async def test_status_and_daily_read_the_newest_record_per_day(sessions, fake, k
 
     await pull.run()
     status = await pull.status()
-    assert (
-        status["raw_records"] > 0
-        and status["responses"]
-        == status["raw_records"] - status["raw_records"] + status["responses"]
-    )
+    assert status["raw_records"] > 0 and status["responses"] > 0
     assert status["kinds"]["steps"]["newest_key"] == TODAY.isoformat()
-    assert status["last_success_at"] == clock.now.isoformat()
+    # File retrieval follows list completion; it does not change the list checkpoint.
+    assert status["last_success_at"] == status["kinds"]["activities"]["last_success_at"]
     assert status["last_error"] is None
 
     daily = await pull.daily(TODAY - timedelta(days=1), TODAY)

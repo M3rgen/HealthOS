@@ -77,6 +77,16 @@ Changing these requirements is the maintainer's decision.
 
 Never include real health records, OAuth credentials, account identifiers, private hostnames, `.env` files, database dumps, or real-account screenshots in an issue or pull request. Replace data with a synthetic example that still reproduces the problem. Review staged files and commit history before pushing.
 
+**Location data.** A real coordinate, track, FIT/GPX/TCX file, workout time series or place name
+never enters the repository: not in code, tests, fixtures, documentation or commit messages, and
+no log line prints one. Invented tracks come from the synthetic generator in `tests/fit_factory.py`
+and stay inside the box around 0° N 0° E (open sea) named `FICTIONAL_REGION` in
+`scripts/github_location_checks.py`. A test that needs a position outside it assembles the value at
+run time from integer parts, as `tests/test_github_location_publication.py` does. `make verify` and
+the GitHub snapshot reject decimal latitude/longitude pairs, FIT semicircle and E7 integers next to
+their field names, GeoJSON/KML `coordinates` and encoded polylines outside the box; rewrite a false
+positive rather than adding an allowance.
+
 Preserve original source payloads. Google health-data requests must remain read-only. Keep manual entries distinguishable from imported records. AI access must stay explicit and limited to requested analysis.
 
 ## Sensitive reports

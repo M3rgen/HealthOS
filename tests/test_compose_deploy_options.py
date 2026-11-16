@@ -71,6 +71,26 @@ def test_garmin_is_enabled_by_an_override_file_not_by_editing_a_tracked_file():
         ]
 
 
+def test_map_tiles_are_mounted_by_an_override_file_as_a_read_only_directory():
+    base = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+    assert "MAP_TILES_HOST_DIR" not in base and "healthos-map" not in base
+    override = yaml.safe_load((ROOT / "docker-compose.map.yml").read_text(encoding="utf-8"))
+    app = override["services"]["app"]
+    assert set(override["services"]) == {"app"}
+    assert app["environment"] == {"MAP_TILES_FILE": "/srv/healthos-map/tiles.pmtiles"}
+    # The directory, not the file: a replaced file (new inode) still reaches the container.
+    assert app["volumes"] == [
+        {
+            "type": "bind",
+            "source": "${MAP_TILES_HOST_DIR:?Set MAP_TILES_HOST_DIR to the host directory of "
+            "tiles.pmtiles}",
+            "target": "/srv/healthos-map",
+            "read_only": True,
+            "bind": {"create_host_path": False},
+        }
+    ]
+
+
 def test_empty_compatibility_overrides_are_removed():
     for name in ("docker-compose.windows.yml", "docker-compose.linux.example.yml"):
         assert not (ROOT / name).exists()

@@ -8,12 +8,16 @@ if TYPE_CHECKING:
     from . import (
         backup_files,
         backup_status,
+        plan_validation,
+        plans,
         settings,
     )
 
 __all__ = [
     "backup_files",
     "backup_status",
+    "plan_validation",
+    "plans",
     "settings",
 ]
 

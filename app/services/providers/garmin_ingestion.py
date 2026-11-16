@@ -21,7 +21,8 @@ from app.core.provenance import current_context_id
 from app.core.timeutil import as_utc
 from app.db.contracts import SessionFactory, TransactionSessions
 from app.db.dialect import dialect_insert
-from app.garmin.client import GarminClient, GarminError, GarminExchange
+from app.garmin.client import GarminClient, GarminError
+from app.garmin.exchange import GarminExchange
 from app.models.garmin import (
     GarminApiResponse,
     GarminPullState,

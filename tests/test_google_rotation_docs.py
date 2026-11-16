@@ -17,10 +17,11 @@ def test_google_docs_do_not_promise_retired_token_reads(obsolete):
 
 def test_google_upgrade_and_compromise_instructions():
     changelog = (ROOT / "CHANGELOG.md").read_text()
-    release = re.search(
-        rf"^## \[{re.escape(project_version())}\].*?(?=^## |\Z)", changelog, re.M | re.S
-    )
-    assert release is not None and "consent" in release[0].lower()
+    # The upgrade note belongs to the release that introduced reauthorization (0.2.2.1); later
+    # sections need not repeat it, and an interim section may be empty.
+    assert project_version() in changelog
+    releases = re.findall(r"^## \[[^\]]+\].*?(?=^## |\Z)", changelog, re.M | re.S)
+    assert any('"Connect Google"' in text and "consent" in text.lower() for text in releases)
     runbook = (ROOT / "docs/RUNBOOK.md").read_text()
     assert "### If a root key or database dump leaks" in runbook
     upgrade = runbook.split("### Upgrade from v0.2.2", 1)[1].split("\n## ", 1)[0]

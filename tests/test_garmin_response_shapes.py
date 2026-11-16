@@ -13,7 +13,7 @@ from test_garmin_pagination import paginated as paginated
 from test_garmin_pull import KEY, TODAY
 from test_garmin_pull import key_file as key_file
 
-from app.garmin.client import REDACTED_BODY
+from app.garmin.exchange import REDACTED_BODY
 from app.models.garmin import GarminApiResponse, GarminRawRecord, GarminRecordObservation
 from app.models.health import (
     HeartRateVariability,

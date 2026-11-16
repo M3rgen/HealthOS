@@ -16,7 +16,8 @@ from typing import Any
 import httpx
 
 from app.core.config import Settings
-from app.garmin.client import TOKEN_PATH, GarminExchange
+from app.garmin.client import TOKEN_PATH
+from app.garmin.exchange import GarminExchange
 from app.services.providers.garmin_ingestion import GarminPage, GarminSource
 from app.services.providers.garmin_kinds import BY_NAME
 
@@ -172,6 +173,8 @@ class FakeGarmin:
                 return httpx.Response(self.token_status)
             return httpx.Response(200, text=self.token, headers={"content-type": "text/plain"})
         assert request.method == "GET"
+        if path.startswith("/download-service/files/activity/"):
+            return httpx.Response(404)  # This JSON-only fake has no original files.
         queue = self.statuses.get(path)
         status = queue.pop(0) if queue else 200
         if status == 401:

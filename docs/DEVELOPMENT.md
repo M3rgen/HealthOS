@@ -75,6 +75,8 @@ Scheduled workflows re-check code that has not changed: `audit.yml` runs the sam
 
 `npm audit` has two levels. The gate, in `ci.yml` and `audit.yml`, is `npm audit --omit=dev --audit-level=high`: the runtime dependencies that ship to the browser. The full tree, build tooling included, runs in `audit.yml` alone and fails that scheduled audit on a high or critical advisory. The build tooling is not in the image, but Vite builds the bundle that ships, so an advisory in its tree can still reach users. A previous audit found six advisories, two high, in Vite's tree and none in the production tree; the Vite upgrade to 8.3.8 closed the two high ones (see the [changelog](../CHANGELOG.md)).
 
+`THIRD_PARTY_LICENSES.md` holds the licence texts of every library in the browser build. After any change to `frontend/package-lock.json`, run `npm ci` in `frontend` and `python3 scripts/third_party_licenses.py` (`--check` only compares) and commit the result; `tests/test_third_party_licenses.py` (part of `make verify`) fails while the file and the lockfile disagree. The Vite build copies the file next to `index.html` (`frontend/third-party-licenses.js`), so it ships in `app/static` and in the image; the minified bundles keep no licence comments of their own. A package whose npm tarball has no licence text gets a verbatim upstream copy in `frontend/licenses/`.
+
 This publication guard is only for the maintainer clone that publishes `github-main` to GitHub.
 Install the local publication guard with `make hooks` (sets this clone's `core.hooksPath` to
 `scripts/hooks`; replaces any existing hook path). Pushes to `origin` accept only
@@ -98,6 +100,13 @@ its exact path, SHA-256 and provenance to `DATA_FILE_ALLOWLIST` in
 `healthos.githubDataJsonLimit` accepts only 1–100000 bytes and repeatable
 `healthos.githubDataForbidExtension` values add forbidden extensions. Local settings
 cannot add allowances or relax the built-in rules.
+Coordinates in text files stop the snapshot as well (`scripts/github_location_checks.py`):
+decimal latitude/longitude pairs, named (three decimals) or bare (four), FIT semicircle and E7
+integers next to their field names, GeoJSON/KML `coordinates` and encoded polylines. Only
+positions inside `FICTIONAL_REGION`, the invented-track box around 0° N 0° E, pass. Findings
+name the path, line and kind, never the value; `make verify` runs the same check on the working
+tree (`tests/test_github_location_publication.py`). An exception needs a reviewed path, SHA-256,
+content summary and reason in `LOCATION_ALLOWLIST`; there is none.
 Its default commit message is the first `##` version heading and its complete body from the
 publication tree's `CHANGELOG.md`, preserving subheadings and bullet lists without the `##`
 prefix. Explicit messages also reject private branch names and hexadecimal words of 7–64 digits.

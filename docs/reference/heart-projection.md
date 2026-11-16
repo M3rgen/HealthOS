@@ -20,23 +20,35 @@ it on its own. During an authorized maintenance window, on the Compose host (the
 has no `uv`; outside Compose use `python -m app.cli.heart_backfill` in the project venv):
 
 ```sh
-until [ "$(docker compose exec -T postgres psql -U health -d health -Atc \
-    'SELECT ready FROM google_heart_projection_state')" = t ]; do
-  docker compose exec -T app python -m app.cli.heart_backfill --hours 168 || break
-  sleep 1
-done
+docker compose exec -T app python -m app.cli.heart_backfill
 ```
 
-Each invocation processes at most 168 hours that hold heart samples, committing one hour
-and its cursor at a time; empty hours are skipped and get no packet (their reader reads
-the empty raw hour). It prints `İşlenen saat: 0` both when the fill is complete and when a
-sync holds the fence, so the loop checks `ready` instead. Exit status 1 stops the loop. The
-first invocation captures the raw time horizon; cancellation rolls back only the current
-hour. A repeat on a completed horizon does nothing. No initial fill runs in an HTTP request
-or the scheduler. Empty archives complete immediately. This command uses the existing
-`DATABASE_URL`; it adds no settings, dependencies or network service. A local synthetic
-archive of 2,650,588 heart samples (1,584 populated hours) took 80 s on a developer machine
-(PostgreSQL 16) and 136 MB of packets; allow many times longer on the small server.
+Run it outside the nightly jobs (01:45–04:15 UTC) and never during a backup. The first
+invocation captures the raw time horizon under the writer fence. The fill then reads the rest
+of the horizon in one ordered pass from one `REPEATABLE READ` snapshot: sequential scans of the
+raw, normalized and supersession tables, the dashboard eligibility applied as hash joins on
+narrow rows, and one sort by raw source time that carries each payload once, so packets are
+cut hour by hour in bounded memory. Its transaction forbids nested-loop, merge-join and plain
+index-scan plans (per-row index probes are random reads on a rotating disk) and parallel
+workers, and gives each hash or sort 64 MB. Vacuum cannot remove rows newer than that snapshot
+while it runs. Hash joins and the sort use PostgreSQL temporary files; the command refuses to start
+when the file system has less free space than about 1.4 times the raw table (in Compose its
+own file system is the Docker disk that also holds the database volume; elsewhere check the
+database's disk yourself).
+
+Packets and the cursor commit about once per day of data, each in a short transaction that
+tries the writer fence and polls a held one for up to two minutes. Each packet records the hour
+revision seen in the reader's snapshot: a write that commits during the fill bumps its hours,
+so their packets stay dirty, read raw data and are rebuilt by repair. Every 30 seconds it
+prints hours read, packets written and elapsed seconds (counts only). Ctrl-C or `SIGTERM` stops
+it after the current hour (or cancels the open transaction after 15 seconds); exit status 130.
+Running it again resumes at the committed cursor, including a cursor left by the earlier
+per-hour builder. `--hours N` bounds a run to N populated hours, but every run scans the whole
+archive once, so a bounded loop is slower in total. Empty hours get no packet (their reader
+reads the empty raw hour). It prints `İlk dolum tamamlandı.` once `ready` is committed; no
+packet is used before that. A repeat on a completed horizon does nothing. No initial fill runs
+in an HTTP request or the scheduler. Empty archives complete immediately. This command uses the
+existing `DATABASE_URL`; it adds no settings, dependencies or network service.
 
 The existing derived-refresh scheduler repairs at most sixteen dirty hours per run,
 newest first (the dashboard reads recent hours), each in its own transaction. Raw/normalized corrections, quarantine, deletion/revival,

@@ -51,3 +51,20 @@ async def test_health_tool_requires_an_injected_archive_factory(sessions):
     assert result["streams"] == []
     with pytest.raises(RuntimeError, match="session factory"):
         await read_health(None, {"action": "inventory"})
+
+
+@pytest.mark.parametrize(
+    ("url", "connect_args"),
+    [
+        ("postgresql+asyncpg://unused", {"server_settings": {"jit": "off"}}),
+        ("sqlite+aiosqlite:///:memory:", None),
+    ],
+)
+def test_pool_connections_open_without_jit(monkeypatch, url, connect_args):
+    """Reader cost estimates pass the JIT thresholds while reading a few thousand rows."""
+    from app.db import engine as engine_module
+
+    create = Mock(wraps=engine_module.create_async_engine)
+    monkeypatch.setattr(engine_module, "create_async_engine", create)
+    engine_module.create_shared_engine(Settings(_env_file=None, database_url=url))
+    assert create.call_args.kwargs.get("connect_args") == connect_args

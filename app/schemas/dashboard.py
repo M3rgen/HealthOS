@@ -34,6 +34,40 @@ class Workout(TypedDict):
     priority: str
     group: str | None
     alternatives: list[dict[str, Any]]
+    # A ready FIT track exists; the track endpoint takes this row's ``id``.
+    has_track: bool
+
+
+class WorkoutTrackSummary(TypedDict):
+    """Seconds, meters and m/s; ``bounds`` is [south, west, north, east] in degrees."""
+
+    start_time: str | None
+    elapsed_seconds: float
+    moving_seconds: float
+    distance: float
+    average_speed: float | None
+    maximum_speed: float | None
+    ascent: float | None
+    descent: float | None
+    bounds: list[float] | None
+
+
+class WorkoutTrackBody(TypedDict):
+    """Columns are equal-length arrays per field; a channel without data is absent."""
+
+    workout_id: str
+    exercise_type: str | None
+    method_version: int
+    summary: WorkoutTrackSummary
+    source_point_count: int
+    point_count: int
+    samples: dict[str, list[float | None]]
+    laps: dict[str, list[float | None]]
+    events: dict[str, list[float | str | None]]
+
+
+class WorkoutTrackView(TypedDict):
+    track: WorkoutTrackBody | None
 
 
 class DashboardDay(TypedDict):

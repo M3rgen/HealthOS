@@ -23,6 +23,7 @@ from .pipeline_health import PipelineHealthService
 from .scheduler_shutdown import AppScheduler
 from .sync_contracts import (
     ReconciliationRunner,
+    ScheduledCatchUpRunner,
     ScheduledWatchdog,
     UnfinishedWebhooks,
 )
@@ -145,6 +146,20 @@ def build_scheduler(
             **JOB_DEFAULTS,
         )
     _add_google_jobs(scheduler, settings, services)
+    # The reconciliation's frequent sibling: it also runs between the reconciliation's windows,
+    # so the reconciliation carries it (a runner without one, such as a test double, has none).
+    catch_up: ScheduledCatchUpRunner | None = getattr(reconciliation, "catch_up", None)
+    if settings.google_enabled and settings.catch_up_enabled and catch_up is not None:
+        # Freshness without webhooks: each tick catches the due data types up, one at a time,
+        # unless a recent fetch covered them (app/sync/scheduled_catch_up.py).
+        scheduler.add_job(
+            catch_up.run,
+            "interval",
+            seconds=catch_up.tick.total_seconds(),
+            id="scheduled-catch-up",
+            replace_existing=True,
+            **JOB_DEFAULTS,
+        )
     if derived is not None:
         scheduler.add_job(
             derived.run,

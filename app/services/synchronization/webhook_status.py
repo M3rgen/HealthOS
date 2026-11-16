@@ -11,7 +11,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import false, func, select, true
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -41,6 +41,7 @@ REASONS: tuple[Reason, ...] = (
     "processing_failed",
     "batch_processing_failed",
     "processing_interrupted",
+    "catch_up_found",
 )
 PROCESSING_ERRORS = {
     "ingestion_failed",
@@ -65,7 +66,63 @@ VALIDATION_ERRORS = {
 SAMPLED_REASONS: tuple[Reason, ...] = ("authorization_rejected", "receiver_unconfigured")
 SAMPLE_INTERVAL = timedelta(minutes=1)
 SILENCE_THRESHOLD = timedelta(days=7)
+# Google normally notifies within minutes of an upload: a catch-up that only beat the
+# notification to a record is no silence.
+NOTIFICATION_GRACE = timedelta(minutes=15)
 logger = logging.getLogger(__name__)
+
+
+def receiver_configured(settings: Settings) -> bool:
+    return bool(
+        settings.google_health_webhook_endpoint_uri
+        and settings.google_health_webhook_authorization
+        and settings.google_health_webhook_authorization != "CHANGE_ME"
+    )
+
+
+async def catch_up_silence(
+    session: AsyncSession, settings: Settings, last_notification: datetime | None, now: datetime
+) -> dict[str, Any]:
+    """`webhook_silent`: no notification, while the scheduled catch-up still finds new records.
+
+    A quiet night (no upload, so no notification and nothing found) is no silence. Only rounds
+    that began at least the threshold after the last notification, and are older than
+    NOTIFICATION_GRACE without a notification since, count. Value-free: times and counts.
+    """
+    threshold = timedelta(minutes=settings.webhook_silent_after_minutes)
+    last = as_utc(last_notification)
+    found = WebhookStatusEvent.occurred_at
+    window = found >= last + threshold if last is not None else false()
+    rounds, latest, silent_rounds = (
+        await session.execute(
+            select(
+                func.count(),
+                func.max(found),
+                func.count().filter(window, found <= now - NOTIFICATION_GRACE),
+            ).where(
+                WebhookStatusEvent.reason == "catch_up_found",
+                found > last if last is not None else true(),
+            )
+        )
+    ).one()
+    return {
+        "silent": bool(receiver_configured(settings) and silent_rounds),
+        "last_notification_at": last,
+        "threshold_minutes": settings.webhook_silent_after_minutes,
+        "catch_up_rounds_with_new_records": rounds,
+        "last_found_at": as_utc(latest),
+    }
+
+
+async def webhook_silent(
+    session: AsyncSession, settings: Settings, last_notification: datetime | None, now: datetime
+) -> bool:
+    """Cheap for /health: no query while a notification is recent or none ever arrived."""
+    threshold = timedelta(minutes=settings.webhook_silent_after_minutes)
+    last = as_utc(last_notification)
+    if last is None or now - last < threshold or not receiver_configured(settings):
+        return False
+    return (await catch_up_silence(session, settings, last, now))["silent"]
 
 
 class WebhookStatusService:
@@ -84,11 +141,7 @@ class WebhookStatusService:
 
     @property
     def configured(self) -> bool:
-        return bool(
-            self.settings.google_health_webhook_endpoint_uri
-            and self.settings.google_health_webhook_authorization
-            and self.settings.google_health_webhook_authorization != "CHANGE_ME"
-        )
+        return receiver_configured(self.settings)
 
     async def start(self) -> None:
         # Called at application startup, never by GET. The first configured startup
@@ -155,11 +208,15 @@ class WebhookStatusService:
         waiting_since = first.get("receiver_started", self.started_at)
         silence_since = received or waiting_since
         silent = self.configured and now - silence_since >= SILENCE_THRESHOLD
+        # Notifications stopped while Google still holds new records (scheduled catch-up).
+        missed = not silent and await webhook_silent(session, self.settings, received, now)
         state = (
             "unconfigured"
             if not self.configured
             else "silent"
             if silent
+            else "missed"
+            if missed
             else "never_received"
             if received is None
             else "receiving"
@@ -174,7 +231,7 @@ class WebhookStatusService:
             ),
             "silence": {
                 "state": state,
-                "warning": silent,
+                "warning": silent or missed,
                 "since": silence_since if self.configured else None,
                 "never_received": received is None,
                 "threshold_seconds": int(SILENCE_THRESHOLD.total_seconds()),

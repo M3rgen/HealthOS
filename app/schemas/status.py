@@ -18,6 +18,13 @@ class GarminNormalization(TypedDict):
     last_error_code: str | None
 
 
+class GarminActivityFiles(TypedDict):
+    downloaded: int
+    pending: int
+    unavailable: int
+    invalid: int
+
+
 class GarminHealth(TypedDict):
     last_success_at: str | None
     last_error_at: str | None
@@ -25,6 +32,7 @@ class GarminHealth(TypedDict):
     lag_seconds: int | None
     stale_after_seconds: int
     normalization: GarminNormalization
+    activity_files: GarminActivityFiles
 
 
 class PipelineHealth(TypedDict):
@@ -148,6 +156,7 @@ class GarminStatus(TypedDict):
     raw_records: NotRequired[int]
     responses: NotRequired[int]
     normalization: NotRequired[GarminNormalization]
+    activity_files: NotRequired[GarminActivityFiles]
 
 
 # `from` is an existing wire key, not a Python identifier.

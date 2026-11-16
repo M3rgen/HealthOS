@@ -21,13 +21,14 @@ from test_garmin_pull import TODAY, Clock, service
 
 from app.core import bounded_http
 from app.garmin import client as garmin
-from app.garmin.client import TOKEN_KIND as TOKEN_EXCHANGE
 from app.garmin.client import (
     GarminClient,
     GarminResponseDecodeError,
     GarminResponseRefused,
     GarminUnavailableError,
 )
+from app.garmin.exchange import REDACTED_BODY
+from app.garmin.exchange import TOKEN_KIND as TOKEN_EXCHANGE
 from app.models.garmin import GarminApiResponse, GarminRawRecord
 
 KEY = "synthetic-personal-api-key"
@@ -333,7 +334,7 @@ async def test_body_failure_preserves_backfill_and_archive(
                 assert rows[-1].error == "response_too_large"
                 expected = b"" if encoding == "gzip" else wire
                 assert not rows[-1].complete
-                assert rows[-1].body == (garmin.REDACTED_BODY if expected else b"")
+                assert rows[-1].body == (REDACTED_BODY if expected else b"")
                 assert rows[-1].body_size == len(expected)
                 assert rows[-1].body_sha256 == hashlib.sha256(expected).hexdigest()
             else:

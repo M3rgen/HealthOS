@@ -12,6 +12,11 @@ import tempfile
 from collections.abc import Iterator
 from pathlib import Path
 
+if __package__:
+    from . import github_location_checks as locations
+else:  # run as a script by github_snapshot.sh
+    import github_location_checks as locations
+
 # Generic private-network markers only. A maintainer's own markers (account names, home paths,
 # host names) belong in the local, repeatable `healthos.githubForbidPattern` setting, never in
 # this public file: listing them here, even split into pieces, would publish them.
@@ -224,6 +229,22 @@ def check_data_files(entries: list[tuple[bytes, bytes, bytes]]) -> None:
         reject("data files in publication tree; no snapshot commit created")
 
 
+def check_locations(entries: list[tuple[bytes, bytes, bytes]]) -> None:
+    """Coordinates outside the fictional region stop publication (github_location_checks.py)."""
+    found = False
+    for name, data in tree_blobs(entries):
+        allowance = locations.LOCATION_ALLOWLIST.get(name)
+        if allowance and hashlib.sha256(data).hexdigest() == allowance[0]:
+            continue
+        for line, kind in locations.find_locations(data):
+            found = True
+            # Path, line and kind only: printing the value would publish it in a log.
+            path = repr(name.decode("utf-8", errors="replace"))
+            print(f"github_snapshot: location {path} line {line}: {kind}", file=sys.stderr)
+    if found:
+        reject("coordinates outside the fictional region in publication tree; no snapshot commit")
+
+
 def scan_tree(entries: list[tuple[bytes, bytes, bytes]]) -> None:
     scanner = shutil.which("gitleaks")
     if scanner is None:
@@ -256,6 +277,7 @@ def main() -> None:
             entries.append((kind, oid, path))
     check_patterns(tree, entries)
     check_data_files(entries)
+    check_locations(entries)
     scan_tree(entries)
     print(message, end="")
 

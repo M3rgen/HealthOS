@@ -1,0 +1,30 @@
+{
+  "schema": 1,
+  "meta": {"title": "Örnek kişi Deniz için uydurma plan", "subtitle": "Tamamen sentetik örnek; öneri değildir", "date": "2026-01-01", "language": "tr", "warning": "Örnek sayılar ve metinler kişisel sağlık tavsiyesi değildir."},
+  "targets": {
+    "cards": [{"label": "Örnek enerji", "value": "2000 kcal", "description": "Uydurma hedef kartı"}],
+    "adjustment_rules": ["Örnek ayar kuralı: değişiklikleri uzmanla görüş."]
+  },
+  "day_types": [{
+    "id": "example-work", "name": "Örnek çalışma günü", "weekdays": [1, 2, 3, 4, 5],
+    "meals": [{"label": "Örnek öğün 1", "name": "Örnek kase", "content": "Uydurma tahıl ve sebze öğünü", "kcal": 500, "protein_g": 20, "ingredients": ["Örnek tahıl 100 g", "Örnek sebze 200 g"], "preparation": "Örnek yapılış: pişir ve karıştır."}]
+  }],
+  "notes": [{"day_type_id": "example-work", "items": ["Örnek gün notu: öğün sırasını kişisel düzenine uyarla."]}],
+  "batch_cooking": {
+    "recipes": [{"name": "Örnek tencere", "summary": "Uydurma toplu hazırlık tarifi", "ingredients": ["Örnek bakliyat 200 g"], "preparation": "Örnek tarif adımı: yeterince pişir.", "portions": "Örnek porsiyon notu: iki kaba ayır."}],
+    "storage_rules": ["Örnek saklama kuralı: uygun koşulları uzmanla doğrula."],
+    "substitution_rules": ["Örnek değişim kuralı: eşdeğer seçimi uzmanla görüş."]
+  },
+  "shopping": {
+    "groups": [{"name": "Örnek kuru gıdalar", "items": [{"id": "example-grain", "name": "Örnek tahıl paketi", "quantity": "1 örnek paket", "estimated_price": 10, "currency": "EUR", "store": "Uydurma Örnek Market"}]}],
+    "one_off": [{"id": "example-box", "name": "Örnek saklama kabı", "quantity": "2 örnek adet", "estimated_price": 20, "currency": "EUR", "store": "Uydurma Örnek Dükkân"}]
+  },
+  "training": {
+    "weekly_schedule": [{"weekday": 1, "content": "Örnek hafif seans günü", "session_ids": ["example-session"]}, {"weekday": 2, "content": "Örnek dinlenme günü", "session_ids": []}],
+    "sessions": [{"id": "example-session", "name": "Örnek seans A", "exercises": [{"movement": "Örnek otur kalk", "sets_reps": "2 × 10", "note": "Örnek hareket notu: tekniği uzmanla öğren."}]}],
+    "progressions": [{"name": "Örnek ilerleme", "rows": [{"week_start": 1, "week_end": 2, "content": "Örnek alışma dönemi", "duration": "20 örnek dakika"}]}],
+    "rules": ["Örnek antrenman kuralı: uygunluğu uzmanla değerlendir."]
+  },
+  "measurements": ["Örnek ölçüm zamanı: haftalık değerlendirmede mevcut elle ölçüm akışını kullan."],
+  "assumptions": [{"title": "Örnek varsayım", "text": "Deniz uydurma bir kişidir; bu belge yalnız yazılım örneğidir."}]
+}

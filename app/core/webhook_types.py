@@ -45,4 +45,7 @@ Reason = Literal[
     "processing_failed",
     "batch_processing_failed",
     "processing_interrupted",
+    # A scheduled catch-up found new records (app/sync/scheduled_catch_up.py); with no
+    # notification for a while, the `webhook_silent` evidence.
+    "catch_up_found",
 ]

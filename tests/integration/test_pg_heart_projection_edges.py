@@ -15,6 +15,7 @@ from app.services.dashboard_views.dashboard import dashboard_data
 from app.services.providers.ingestion_readers import GOOGLE_ARCHIVE
 from app.services.readers import (
     current_heart,
+    heart_fill,
     heart_maintenance,
     refresh_heart_hours,
 )
@@ -120,18 +121,18 @@ async def test_interrupted_builder_rolls_back_cursor_and_resumes(pg_sessions, mo
         heart("later", at=T0 + timedelta(hours=1), bpm=63),
     )
     assert await backfill_heart_hours(pg_sessions, limit=1) == 1
-    original = heart_maintenance._pack
+    original = heart_fill.write
 
-    async def broken(session, bucket):
+    async def broken(*args):
         raise RuntimeError("synthetic interrupted hour")
 
-    monkeypatch.setattr(heart_maintenance, "_pack", broken)
+    monkeypatch.setattr(heart_fill, "write", broken)
     with pytest.raises(RuntimeError, match="interrupted"):
         await backfill_heart_hours(pg_sessions)
     async with pg_sessions() as session:
         state = await session.get(HeartProjectionState, 1)
         assert not state.ready and state.next_hour == T0 + timedelta(hours=1)
-    monkeypatch.setattr(heart_maintenance, "_pack", original)
+    monkeypatch.setattr(heart_fill, "write", original)
     assert await backfill_heart_hours(pg_sessions) == 1
 
 

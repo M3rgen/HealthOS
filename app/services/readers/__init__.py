@@ -18,6 +18,7 @@ if TYPE_CHECKING:
         dashboard_rows,
         dashboard_sources,
         dashboard_window,
+        heart_fill,
         heart_maintenance,
         heart_projection,
         manual_validation,
@@ -40,6 +41,7 @@ if TYPE_CHECKING:
 __all__ = [
     "current_heart",
     "heart_projection",
+    "heart_fill",
     "heart_maintenance",
     "current_sleep",
     "current_steps",

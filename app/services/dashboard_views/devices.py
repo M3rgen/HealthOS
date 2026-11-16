@@ -183,6 +183,7 @@ def garmin_device(
         "garmin_last_pull": summary["last_pull"].isoformat() if summary.get("last_pull") else None,
         "status": thresholds.status(newest, now),
         "precedence": precedence(GARMIN, policy),
+        "activity_files": summary.get("activity_files"),
     }
 
 
@@ -418,7 +419,7 @@ async def device_report(
     devices = build_devices(
         await load_device_chains(session), now=now, thresholds=thresholds, policy=policy
     )
-    garmin, summary = GARMIN_OFF, await archive_summary(session)
+    garmin, summary = GARMIN_OFF, await archive_summary(session, now)
     if summary is not None:
         garmin = GARMIN_OK
         devices.append(

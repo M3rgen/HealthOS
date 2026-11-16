@@ -29,6 +29,12 @@ was sent.
 **Appearance.** Logo, Umay portrait and background presets, or your own image. Presets follow you
 across devices; uploads stay in the browser.
 
+![Workout detail: an invented run drawn on an invented basemap beside pace, heart rate and elevation charts, summary cards and a legend](media/workout-detail.png)
+
+**Workout detail.** A workout with a recorded track opens with its route on your own basemap,
+charts on a time or distance axis and the summary; the charts and the route share one cursor.
+The run and the basemap are both invented around 0° N 0° E ([workout map](reference/maps.md)).
+
 ## Mobile
 
 <p><img src="media/dashboard-mobile.png" alt="HealthOS mobile dashboard with synthetic records" width="360" />&nbsp;<img src="media/umay-chat-mobile.png" alt="Umay chat on a phone with a synthetic weekly summary" width="360" /></p>

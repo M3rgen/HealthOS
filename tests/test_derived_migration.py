@@ -11,7 +11,16 @@ from support import sqlite_guards
 
 from app.core.config import get_settings
 from app.db.guards import definitions
-from app.models import apple, derived_invalidation, garmin, oauth_credentials, raw_rejections
+from app.models import (
+    apple,
+    derived_invalidation,
+    garmin,
+    garmin_files,
+    garmin_tracks,
+    oauth_credentials,
+    plan,
+    raw_rejections,
+)
 
 
 def _migration(suffix, day="20261025"):
@@ -119,10 +128,14 @@ async def test_upgrade_and_downgrade_preserve_all_existing_triggers(tmp_path, mo
             )
             session.add(WebhookStatusEvent(reason="signature_valid", occurred_at=T0))
         command.downgrade(config, "20261025_0019")
-        # Tables of later migrations (0022, 0023, 0024, a001, 0026, 0027) do not exist at 0019.
+        # Tables of later migrations (0022, 0023, 0024, a001, 0026, 0027, 0037) do not exist
+        # at 0019.
         newer = {
             "derived_day_pending",
             "display_preferences",
+            *plan.TABLES,
+            *garmin_files.TABLES,
+            *garmin_tracks.TABLES,
             garmin.STATE,
             garmin.NORMALIZATION_STATE,
             *oauth_credentials.TABLES,
@@ -135,7 +148,7 @@ async def test_upgrade_and_downgrade_preserve_all_existing_triggers(tmp_path, mo
         # Later tables' guards are expected at head only; verify names them missing at 0019.
         later = {
             name: (table, sql)
-            for module in (raw_rejections, garmin, oauth_credentials, apple)
+            for module in (raw_rejections, garmin, oauth_credentials, plan, garmin_files, apple)
             for name, (table, sql) in sqlite_guards.definitions(module.GUARDS).items()
         }
         at_0019 = [

@@ -20,6 +20,7 @@ LOCK_NAMESPACES = MappingProxyType(
         "identity_backfill": 0x48454932,  # HEI2; backfill and owner decisions
         "identity_deferrals": 0x48454933,  # HEI3; deferred-deletion bookkeeping
         "manual_flags": 0x48464C31,  # HFL1; measurement/flag pair
+        "plan": 0x48504C31,  # HPL1; private plan imports and UI state
         "credentials": 0x48454331,  # HEC1; OAuth writes
         "sync_run": 0x48455331,  # HES1; per Google data type
         "notification": 0x48455731,  # HEW1; independent of data-type runs

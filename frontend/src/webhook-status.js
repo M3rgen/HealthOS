@@ -43,6 +43,8 @@ function summaryText(status, date) {
     never_received: strings.summaries.neverReceived,
     receiving: strings.summaries.receiving(date(status.last_notification_at)),
     silent: silence.never_received ? strings.summaries.silentNever : strings.summaries.silent,
+    // Notifications stopped while the scheduled catch-up still finds new records.
+    missed: strings.summaries.missed(date(status.last_notification_at)),
   };
   return summaries[silence.state] ?? strings.unknownState;
 }

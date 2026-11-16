@@ -9,7 +9,7 @@ const text = t.workouts;
 /**
  * @typedef {{id: string | number, source: string, source_code?: string, exercise_type: string, start_time: string, end_time: string,
  *   duration_seconds: number | null, calories_kcal: number | null, distance_meters: number | null, priority?: string,
- *   group?: string | number | null, alternatives?: unknown[]}} WorkoutRow
+ *   group?: string | number | null, alternatives?: unknown[], has_track?: boolean}} WorkoutRow
  * @typedef {{escape: (value: unknown) => string, num: (value: number | null | undefined, digits?: number) => string,
  *   duration: (seconds: number | null | undefined) => string, fullDate: (value: string) => string, timeOf: (value: string) => string}} WorkoutFormat
  */
@@ -17,7 +17,7 @@ const text = t.workouts;
 /** @param {WorkoutRow} row */
 const secondary = row => row.priority === 'secondary';
 /** @param {WorkoutRow} row */
-const titleOf = row => exerciseLabel(row.exercise_type) || text.untitled;
+export const titleOf = row => exerciseLabel(row.exercise_type) || text.untitled;
 /** @param {WorkoutFormat} format @param {WorkoutRow} row */
 const keyAttributes = ({ escape }, row) =>
   `data-source="${escape(row.source)}" data-workout-id="${escape(row.id)}" data-key="${escape(`${row.source}:${row.id}`)}"`;
@@ -44,6 +44,13 @@ function values({ escape, num, duration }, row) {
       </dl>`;
 }
 
+/** The way into the detail view, for a row whose recorded track the server can send. @param {WorkoutFormat} format @param {WorkoutRow} row */
+function trackButton({ escape, timeOf }, row) {
+  if (!row.has_track) return '';
+  return `<button type="button" class="button outline workout-track-open" data-track-open
+      aria-label="${escape(text.trackOpenLabel(titleOf(row), timeOf(row.start_time)))}">${escape(text.trackOpen)}</button>`;
+}
+
 /**
  * @param {WorkoutFormat} format @param {WorkoutRow} row @param {string} day @param {string} zone
  * @param {WorkoutRow[]} [others] @returns {string}
@@ -54,7 +61,7 @@ function card(format, row, day, zone, others = []) {
   return `<article><div class="workout-entry-heading"><h4>${escape(titleOf(row))}</h4>
       <span class="workout-badges">${badges(format, row, others)}</span></div>
       <p class="workout-time">${time(format, row.start_time)} – ${endDate}${time(format, row.end_time)}</p>
-      ${values(format, row)}${alternatives(format, row, others, day, zone)}</article>`;
+      ${values(format, row)}${trackButton(format, row)}${alternatives(format, row, others, day, zone)}</article>`;
 }
 
 /**

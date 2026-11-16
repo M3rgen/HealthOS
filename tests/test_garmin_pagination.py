@@ -154,7 +154,8 @@ async def test_pull_failure_keeps_evidence_and_retries_failed_chunk(
     pull, fake, clock = paginated
     respond(fake, [[activity(100, TODAY)]])
     assert not (await pull.run(["activities"])).failed
-    before, success = await evidence(sessions), clock.now.isoformat()
+    before = await evidence(sessions)
+    success = (await pull.status())["kinds"]["activities"]["last_success_at"]
     clock.now += timedelta(minutes=1)
     since = TODAY - timedelta(days=90)
     pages = FAILURES[case]

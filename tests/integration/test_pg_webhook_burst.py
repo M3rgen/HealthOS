@@ -43,6 +43,9 @@ class Incremental:
         finally:
             self.active -= 1
 
+    async def catch_up(self, data_type, *, check_owner=None):
+        """Covered already: these tests count notified windows."""
+
 
 def limited(sessions):
     sessions.kw["bind"].update_execution_options(ownership_concurrency=LIMIT)

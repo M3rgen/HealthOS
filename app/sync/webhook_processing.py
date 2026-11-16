@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -37,6 +37,7 @@ from app.services.synchronization.webhook_metadata import (
     parse_webhook_body,
 )
 from app.services.synchronization.webhook_status import WebhookStatusService
+from app.sync.catch_up import catch_up_after_notification
 from app.sync.errors import error_code, error_summary
 from app.sync.incremental import IncrementalSync, stale_running_cutoff
 from app.sync.local_lock import LocalLock
@@ -322,6 +323,12 @@ class WebhookBatchProcessor:
             await self._record_element_failure(element_hash, data_type, exc, sessions)
             result = NotificationStatus.failed
         await self._finalize_related_batches(element_hash, sessions)
+        if result == NotificationStatus.completed:
+            # Google may name a narrowed or stale range; a late upload outside it must
+            # not wait for reconciliation (app/sync/catch_up.py). Never fails the element.
+            await catch_up_after_notification(
+                self.incremental, data_type, element_hash, _owner_check(sessions)
+            )
         return result
 
     async def _record_element_failure(
@@ -362,15 +369,7 @@ class WebhookBatchProcessor:
         windows: list[tuple[datetime | None, datetime | None]],
         sessions: TransactionSessions,
     ) -> None:
-        async def check_owner() -> None:
-            # A lost backend must never reconnect through the application's pool.
-            # IncrementalSync also checks this after waiting for data-type ownership.
-            try:
-                async with sessions.begin():
-                    pass
-            except SQLAlchemyError as exc:
-                raise OwnershipLost("webhook ownership connection was lost") from exc
-
+        check_owner = _owner_check(sessions)
         for window_start, window_end in windows:
             async with sessions.begin() as session:
                 await session.execute(
@@ -527,6 +526,19 @@ class WebhookBatchProcessor:
             total.failed_elements += result.failed_elements
             total.rejected_elements += result.rejected_elements
         return total
+
+
+def _owner_check(sessions: TransactionSessions) -> Callable[[], Awaitable[None]]:
+    async def check_owner() -> None:
+        # A lost backend must never reconnect through the application's pool.
+        # IncrementalSync also checks this after waiting for data-type ownership.
+        try:
+            async with sessions.begin():
+                pass
+        except SQLAlchemyError as exc:
+            raise OwnershipLost("webhook ownership connection was lost") from exc
+
+    return check_owner
 
 
 def _stale(verified_at: datetime | None, now: datetime) -> bool:

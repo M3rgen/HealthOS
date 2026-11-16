@@ -23,7 +23,6 @@ from support.garmin import unlocked
 
 from app.core.config import Settings
 from app.garmin.client import (
-    KEPT_HEADERS,
     MAX_ATTEMPTS,
     TOKEN_PATH,
     GarminAuthError,
@@ -33,6 +32,7 @@ from app.garmin.client import (
     GarminRequestError,
     GarminUnavailableError,
 )
+from app.garmin.exchange import KEPT_HEADERS
 from app.models.garmin import GarminPullState, GarminRawRecord
 
 KEY = "synthetic-personal-api-key-0123456789"

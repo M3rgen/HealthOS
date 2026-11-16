@@ -42,6 +42,8 @@ VALUES = {
         "decision": "'link'",
     },
     "webhook_events": {"raw_json": "'{}'"},
+    "garmin_activity_files": {"size": "14"},
+    "garmin_activity_file_results": {"status": "'not_found'"},
 }
 
 

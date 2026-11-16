@@ -7,6 +7,7 @@ Timestamp fields are shared decoding state: even an otherwise ignored message ca
 set the base for a later compressed timestamp and must use the same wire contract.
 """
 
+import math
 import struct
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -68,6 +69,13 @@ PROFILE = {
     },
     20: {3: (1, 0x02)},  # record: heart_rate uint8
 }
+# Optional track scalars use finite numeric decoding; unsupported base types and arrays
+# are omitted. The original import contracts stay strict.
+TRACK_FIELDS = {
+    20: {0, 1, 2, 4, 5, 6, 7, 13, 73, 78},
+    19: {2, 7, 8, 9, 13, 14, 15, 16, 110, 111},
+    21: {0, 1},
+}
 # Base id -> (struct code, invalid sentinel). Unknown base ids can still be skipped.
 BASE_TYPES = {
     0: ("B", 0xFF),
@@ -77,6 +85,8 @@ BASE_TYPES = {
     4: ("H", 0xFFFF),
     5: ("i", 0x7FFFFFFF),
     6: ("I", 0xFFFFFFFF),
+    8: ("f", None),
+    9: ("d", None),
     10: ("B", 0),
     11: ("H", 0),
     12: ("I", 0),
@@ -87,12 +97,12 @@ BASE_TYPES = {
 }
 
 
-def _value(data: bytes, field: Field, endian: str) -> int | None:
+def _value(data: bytes, field: Field, endian: str) -> int | float | None:
     base = BASE_TYPES.get(field.base & 0x1F)
     if base is None or struct.calcsize(base[0]) != field.size:
-        return None  # Arrays and noninteger fields are not activity scalars.
+        return None  # Arrays and unsupported base types are not activity scalars.
     value = struct.unpack(endian + base[0], data)[0]
-    return None if value == base[1] else value
+    return None if value == base[1] or not math.isfinite(value) else value
 
 
 def _validate_profile(global_number: int, fields: tuple[Field, ...]) -> None:
@@ -146,9 +156,13 @@ class Reader:
                 developer_size += size
         return Definition(global_number, endian, fields, developer_size)
 
-    def values(self, definition: Definition, compressed: bool) -> dict[int, int | None]:
+    def values(self, definition: Definition, compressed: bool) -> dict[int, int | float | None]:
         values = {}
-        wanted = PROFILE.get(definition.global_number, {}).keys() | COMMON_FIELDS.keys()
+        wanted = (
+            PROFILE.get(definition.global_number, {}).keys()
+            | COMMON_FIELDS.keys()
+            | TRACK_FIELDS.get(definition.global_number, set())
+        )
         for field in definition.fields:
             if compressed and field.number == 253:
                 continue
@@ -179,7 +193,7 @@ def _reader(data: bytes) -> Reader:
     return Reader(data, data[0], end)
 
 
-def messages(data: bytes) -> Iterator[tuple[int, dict[int, int | None]]]:
+def messages(data: bytes) -> Iterator[tuple[int, dict[int, int | float | None]]]:
     """Yield activity fields in wire order, validating even ignored messages to EOF.
 
     A compressed timestamp replaces the first uint32 timestamp field and uses the
@@ -217,6 +231,6 @@ def messages(data: bytes) -> Iterator[tuple[int, dict[int, int | None]]]:
             offset = header & 0x1F
             values[253] = (timestamp & ~0x1F) + offset + (32 if offset < timestamp & 0x1F else 0)
         moment = values.get(253)
-        if moment is not None:
+        if isinstance(moment, int):
             timestamp = moment
         yield definition.global_number, values

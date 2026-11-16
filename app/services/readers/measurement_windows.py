@@ -10,6 +10,8 @@ from datetime import datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from sqlalchemy import func
+
 from app.models.health import SleepSession
 
 from .current_sleep import current_sleep, sleep_wake_window
@@ -21,6 +23,19 @@ def interval_window(kind: str, left: Any, right: Any, start: datetime, stop: dat
     if kind == "sleep":
         return sleep_wake_window(right, start, stop)
     return left < stop, right > start
+
+
+def raw_interval_window(kind: str, raw: Any, start: datetime, stop: datetime):
+    """``interval_window`` on a raw row's source bounds, plus the bound its index can use.
+
+    The ``(data_type, source_start_time)`` index bounds an interval only from above, so
+    every older interval of the type is fetched and dropped. Both windows require
+    ``source_end_time >= start``, so the end is present and ``COALESCE(end, start) >= start``
+    holds for every row they keep: the added predicate selects nothing else, and lets
+    ``ix_raw_health_data_type_freshness`` start the scan at ``start``.
+    """
+    left, right = raw.source_start_time, raw.source_end_time
+    return (*interval_window(kind, left, right, start, stop), func.coalesce(right, left) >= start)
 
 
 @dataclass(frozen=True)

@@ -1,10 +1,11 @@
 import { errorText } from './api.js';
 import { enhanceMonthInput } from './calendar.js';
 import { civilDate, dateKey, zonedInstant } from './dates.js';
-import { $, setAttr, setText } from './dom.js';
+import { $, closest, setAttr, setText } from './dom.js';
 import { morphChildren } from './dom-morph.js';
 import { t } from './i18n/index.js';
-import { createWorkoutMarkup } from './workouts-markup.js';
+import { sourceLabel } from './data-types.js';
+import { createWorkoutMarkup, titleOf } from './workouts-markup.js';
 
 const text = t.workouts;
 
@@ -91,6 +92,32 @@ function setupMonthField(month, getToday) {
 }
 
 /**
+ * A workout's "Route and charts" button opens its detail view (workout-detail.js, loaded then).
+ * @param {{rowsElement: HTMLElement, panel: HTMLElement, status: HTMLElement, request: typeof import('./api.js').request,
+ *   update: () => Promise<void>, fullDate: (value: string) => string, timeOf: (value: string) => string}} parts
+ * @returns {{shown: import('./workouts-markup.js').WorkoutRow[]}} the rows on screen, which paintRows keeps current
+ */
+function wireTrackDetail({ rowsElement, panel, status, request, update, fullDate, timeOf }) {
+  /** @type {{shown: import('./workouts-markup.js').WorkoutRow[]}} */
+  const tracks = { shown: [] };
+  /** @param {import('./workouts-markup.js').WorkoutRow} row */
+  function open(row) {
+    const when = `${fullDate(row.start_time)} · ${timeOf(row.start_time)}–${timeOf(row.end_time)} · ${sourceLabel(row.source_code, row.source)}`;
+    import('./workout-detail.js')
+      .then(module => module.openWorkoutDetail({
+        request, row, list: panel, words: { title: titleOf(row), when }, refresh: update, gone: message => setText(status, message),
+      }))
+      .catch(() => setText(status, t.common.pageOutdated));
+  }
+  rowsElement.addEventListener('click', event => {
+    const id = closest(event, '[data-track-open]')?.closest('[data-workout-id]')?.getAttribute('data-workout-id');
+    const row = tracks.shown.find(candidate => String(candidate.id) === id);
+    if (row) open(row);
+  });
+  return tracks;
+}
+
+/**
  * @param {{request: typeof import('./api.js').request, getZone: () => string, getToday: () => string}
  *   & import('./workouts-markup.js').WorkoutFormat} options
  */
@@ -124,8 +151,10 @@ export function setupWorkouts({request,getZone,getToday,escape,num,duration,full
     setText(status, rows.length ? text.count(num(shown), folded ? num(folded) : '') : text.empty);
     return html;
   }
+  const tracks = wireTrackDetail({ rowsElement, panel, status, request, update, fullDate, timeOf });
   /** @param {import('./workouts-markup.js').WorkoutRow[]} rows @param {string} zone @param {string} key */
   function paintRows(rows, zone, key) {
+    tracks.shown = rows;
     morphChildren(rowsElement, workoutDaysMarkup(rows, zone));
     if (paintedFor !== key) timeline.scrollTop = 0;
     paintedFor = key; hideRetry();
@@ -137,8 +166,7 @@ export function setupWorkouts({request,getZone,getToday,escape,num,duration,full
     const selectedMonth = month.value, zone = getZone(), key = `${selectedMonth}|${zone}`;
     const current = () => token === version && month.value === selectedMonth && getZone() === zone;
     if (paintedFor !== key) showLoading();
-    setText($('workout-zone'), text.zoneNote(zone));
-    setText($('workout-timezone'), text.entryZone(zone));
+    setText($('workout-zone'), text.zoneNote(zone)); setText($('workout-timezone'), text.entryZone(zone));
     try {
       if (!validMonth()) throw new Error(text.invalidMonth);
       /** @type {import('./workouts-markup.js').WorkoutRow[]} */
@@ -154,10 +182,17 @@ export function setupWorkouts({request,getZone,getToday,escape,num,duration,full
     }
   }
   wireMonthSteps(month, validMonth, update);
-  retry.addEventListener('click', update);
   setupWorkoutForm({ request, getZone, month, update });
   $('workout-timezone').textContent = text.entryZone(getZone());
-  month.addEventListener('change', update);
+  retry.addEventListener('click', update); month.addEventListener('change', update);
   controls();
   return {update};
+}
+
+/** @type {{update: () => Promise<void>} | undefined} */
+let active;
+/** The page's one controller, made on its first visit; every later call refreshes the list. @param {Parameters<typeof setupWorkouts>[0]} options */
+export function loadWorkouts(options) {
+  active ??= setupWorkouts(options);
+  return active.update();
 }

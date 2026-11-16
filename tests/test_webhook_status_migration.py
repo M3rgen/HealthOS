@@ -13,7 +13,16 @@ from sqlalchemy.orm import Session
 from support import sqlite_guards
 
 from app.core.config import get_settings
-from app.models import apple, garmin, oauth_credentials, raw_rejections, webhook_status
+from app.models import (
+    apple,
+    garmin,
+    garmin_files,
+    garmin_tracks,
+    oauth_credentials,
+    plan,
+    raw_rejections,
+    webhook_status,
+)
 from app.models.state import WebhookEvent
 from app.models.webhook_status import WebhookStatusEvent
 
@@ -52,8 +61,12 @@ def test_upgrade_keeps_raw_archive_and_populated_diagnostics_refuse_downgrade(
             "google_heart_projection_state",
             "derived_day_pending",
             "display_preferences",
+            "plan_versions",
+            "plan_state",
             *raw_rejections.TABLES,
             *garmin.TABLES,
+            *garmin_files.TABLES,
+            *garmin_tracks.TABLES,
             garmin.STATE,
             garmin.NORMALIZATION_STATE,
             *oauth_credentials.TABLES,
@@ -140,7 +153,15 @@ def test_guard_upgrade_and_downgrade_preserve_populated_evidence(tmp_path, monke
             **old_triggers,
             **{
                 name: sql
-                for module in (webhook_status, raw_rejections, garmin, oauth_credentials, apple)
+                for module in (
+                    webhook_status,
+                    raw_rejections,
+                    garmin,
+                    oauth_credentials,
+                    plan,
+                    garmin_files,
+                    apple,
+                )
                 for name, (_, sql) in sqlite_guards.definitions(module.GUARDS).items()
             },
         }

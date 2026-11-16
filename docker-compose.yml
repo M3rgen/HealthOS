@@ -100,6 +100,11 @@ services:
       RECONCILIATION_DAILY_HOUR_UTC:
       RECONCILIATION_WEEKLY_DAY:
       RECONCILIATION_WEEKLY_DAYS:
+      RECONCILIATION_SLICE_DAYS:
+      CATCH_UP_ENABLED:
+      CATCH_UP_FREQUENT_MINUTES:
+      CATCH_UP_OTHER_MINUTES:
+      WEBHOOK_SILENT_AFTER_MINUTES:
       RECONCILIATION_WEEKLY_HOUR_UTC:
       IDENTITY_RECONCILE_HOUR_UTC:
       IDENTITY_RECONCILE_MINUTE:
@@ -110,6 +115,8 @@ services:
       GARMIN_API_KEY_FILE:
       GARMIN_PULL_INTERVAL_MINUTES:
       GARMIN_LOOKBACK_DAYS:
+      GARMIN_ACTIVITY_FILES_PER_RUN:
+      GARMIN_ACTIVITY_FILE_INTERVAL_SECONDS:
       GARMIN_DEVICE_NAME:
       APPLE_RECEIVER_ENABLED:
       APPLE_RECEIVER_TOKEN_FILE:
@@ -118,6 +125,7 @@ services:
       APPLE_RECEIVER_REQUESTS_PER_MINUTE:
       APPLE_IMPORT_MAX_UPLOAD_BYTES:
       APPLE_IMPORT_MAX_UNCOMPRESSED:
+      MAP_TILES_FILE:
       SOURCE_PRECEDENCE_ACTIVITY:
       SOURCE_PRECEDENCE_HEALTH:
       WATCHDOG_INTERVAL_SECONDS:
@@ -163,6 +171,7 @@ services:
       # The optional Apple Health receiver (Health Auto Export, off by default) adds its token
       # mount through docker-compose.apple.yml (install.sh / install.ps1 set it up; by hand,
       # create the token with `healthos apple-token`).
+      # The optional workout-map basemap adds its mount through docker-compose.map.yml.
     volumes: &app-volumes
       # Mount the directory, not an inode replaced atomically by backup.sh.
       # Never mount BACKUP_HOST_DIR or encryption keys into the app.

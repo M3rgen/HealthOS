@@ -15,8 +15,9 @@ from decimal import Decimal
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import func, select
+from sqlalchemy import ColumnElement, Select, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import InstrumentedAttribute
 
 from app.core.providers import GARMIN
 from app.core.timeutil import as_utc
@@ -33,6 +34,7 @@ from app.services.readers.reading import ArchiveBounds, WorkoutRecord
 from app.services.shared.finite_math import finite_number
 
 from .garmin_daily_values import SCALARS, scalar_values
+from .garmin_file_archive import file_counts
 from .garmin_heart_values import heart_values
 from .garmin_sleep_values import iter_sleep_days
 from .garmin_steps import step_values
@@ -150,7 +152,48 @@ async def activity_windows(
     return [(as_utc(begin), as_utc(end)) for begin, end in rows.tuples()]
 
 
-async def archive_summary(session: AsyncSession) -> dict[str, Any] | None:
+# The physical time of a Garmin record in each normalized table Cihazlarım reads.
+NEWEST_COLUMNS = (
+    (HeartRate, HeartRate.timestamp),
+    (Steps, Steps.end_time),
+    (SleepSession, SleepSession.end_time),
+    (ExerciseSession, ExerciseSession.end_time),
+)
+# How far back the ordered walk looks before the exact whole-archive maximum is asked.
+RECENT = timedelta(days=30)
+type Dated = type[HeartRate | Steps | SleepSession | ExerciseSession]
+
+
+def _current(model: Dated) -> tuple[ColumnElement[bool], ...]:
+    return model.provider == GARMIN, current_row(model), model.is_quarantined.is_(False)
+
+
+def newest_since(
+    model: Dated, column: InstrumentedAttribute[datetime], since: datetime
+) -> Select[tuple[datetime]]:
+    """The newest ``column`` at or after ``since`` of a current, non-quarantined Garmin row,
+    as an ordered walk that stops at the first qualifying row. ``max()`` cannot do this:
+    ``current_row``'s ``NOT EXISTS`` becomes an anti-join, which keeps PostgreSQL from
+    answering ``max()`` from an index, so it checked every Garmin row of the table first;
+    the walk down ``ix_heart_rate_timestamp`` checks only rows newer than the answer."""
+    return select(column).where(*_current(model), column >= since).order_by(column.desc()).limit(1)
+
+
+async def newest_current(
+    session: AsyncSession, model: Dated, column: InstrumentedAttribute[datetime], now: datetime
+) -> datetime | None:
+    """The newest ``column`` of a current, non-quarantined Garmin row: the walk over the
+    last ``RECENT`` (the usual answer), else the whole-archive ``max()`` (a source silent for
+    longer, or none). Either way the same rows qualify, so the result is exact."""
+    found = await session.scalar(newest_since(model, column, now - RECENT))
+    if found is not None:
+        return found
+    return await session.scalar(select(func.max(column)).where(*_current(model)))
+
+
+async def archive_summary(
+    session: AsyncSession, now: datetime | None = None
+) -> dict[str, Any] | None:
     """What Cihazlarım shows for the Garmin source: the kinds with records, the first archive
     time, the last successful pull and the newest normalized data time; None when the archive
     has no Garmin record at all."""
@@ -168,19 +211,8 @@ async def archive_summary(session: AsyncSession) -> dict[str, Any] | None:
     if not kinds:
         return None
     pulls = (await session.scalars(select(GarminPullState.last_success_at))).all()
-    newest = [
-        await session.scalar(
-            select(func.max(column)).where(
-                model.provider == GARMIN, current_row(model), model.is_quarantined.is_(False)
-            )
-        )
-        for model, column in (
-            (HeartRate, HeartRate.timestamp),
-            (Steps, Steps.end_time),
-            (SleepSession, SleepSession.end_time),
-            (ExerciseSession, ExerciseSession.end_time),
-        )
-    ]
+    now = now or datetime.now(UTC)
+    newest = [await newest_current(session, *pair, now) for pair in NEWEST_COLUMNS]
     dated = [as_utc(value) for value in newest if value is not None]
     successes = [as_utc(value) for value in pulls if value is not None]
     return {
@@ -188,6 +220,7 @@ async def archive_summary(session: AsyncSession) -> dict[str, Any] | None:
         "first_seen": min(as_utc(first) for _, first in kinds),
         "last_pull": max(successes) if successes else None,
         "last_data": max(dated) if dated else None,
+        "activity_files": await file_counts(session),
     }
 
 

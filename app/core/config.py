@@ -122,6 +122,9 @@ class Settings(BaseSettings):
     # Enable only behind a proxy that replaces X-Forwarded-Proto (docs/UI_AUTH.md).
     app_trust_proxy_headers: bool = False
     backup_status_file: Path | None = None
+    # The operator's own PMTiles basemap, served to the workout map from /api/map/tiles.pmtiles
+    # (docs/reference/maps.md). Unset or missing: the map draws the route without a basemap.
+    map_tiles_file: Path | None = None
     manual_write_max_body_bytes: int = Field(
         default=4096,
         ge=1024,
@@ -178,6 +181,20 @@ class Settings(BaseSettings):
     reconciliation_weekly_hour_utc: int = Field(default=3, ge=0, le=23)
     reconciliation_daily_days: int = Field(default=7, ge=1)
     reconciliation_weekly_days: int = Field(default=90, ge=1)
+    # A reconciliation fetches a data type in windows of at most this many days and releases
+    # the type's lock between them, so a webhook or a catch-up waits for one window, not the
+    # whole 90-day pass (app/sync/reconciliation.py).
+    reconciliation_slice_days: int = Field(default=7, ge=1, le=90)
+    # Scheduled catch-up (app/sync/scheduled_catch_up.py): every Google data type's incremental
+    # window is fetched on a timer, independent of webhooks, unless a recent complete fetch
+    # already covered it. Frequent types (heart rate, sleep, steps, ...) every FREQUENT
+    # minutes, the others every OTHER minutes.
+    catch_up_enabled: bool = True
+    catch_up_frequent_minutes: int = Field(default=15, ge=5, le=1_440)
+    catch_up_other_minutes: int = Field(default=120, ge=15, le=1_440)
+    # /health `webhook_silent`: no notification for this long, and a scheduled catch-up found
+    # new records since (a quiet night without new data is no silence).
+    webhook_silent_after_minutes: int = Field(default=120, ge=30, le=10_080)
     # The nightly identity reconciler (identity-backfill --incremental): decides source
     # chains and links duplicate rows. It starts when the scheduled Google reconciliations
     # have ended; at the hour and minute below only when RECONCILIATION_ENABLED is false. A data
@@ -212,6 +229,8 @@ class Settings(BaseSettings):
     garmin_api_key_file: Path = Path("~/.config/garmin/connect-personal-api-key")
     garmin_pull_interval_minutes: int = Field(default=120, ge=15, le=1440)
     garmin_lookback_days: int = Field(default=3, ge=1, le=28)
+    garmin_activity_files_per_run: int = Field(default=10, ge=1, le=100)
+    garmin_activity_file_interval_seconds: float = Field(default=5.0, ge=1.0, le=300.0)
     # What the Garmin source is called in Cihazlarım (the Personal API exposes no device model).
     garmin_device_name: str = Field(default="Garmin", min_length=1, max_length=120)
 

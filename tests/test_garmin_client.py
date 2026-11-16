@@ -20,7 +20,6 @@ from app.garmin import client as garmin
 from app.garmin.client import (
     MAX_ATTEMPTS,
     MIN_INTERVAL,
-    REDACTED_BODY,
     TOKEN_PATH,
     GarminAuthError,
     GarminClient,
@@ -32,6 +31,7 @@ from app.garmin.client import (
     retry_after,
     token_expiry,
 )
+from app.garmin.exchange import REDACTED_BODY
 
 KEY = "synthetic-personal-api-key-0123456789"
 NOW = datetime(2026, 11, 7, 12, 0, tzinfo=UTC)

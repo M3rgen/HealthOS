@@ -9,6 +9,97 @@ in this file when they were made; the 0.2 entry was written afterwards from the 
 > There is no 0.3, 0.4 or 0.5 release: 0.2 is newer than every snapshot labelled 0.5.0, and the
 > releases since are 0.2.1, 0.2.2 and so on.
 
+## [0.2.4] - 2026-11-15
+
+A personal plan page, Garmin workout tracks with a map and charts, and a location guard for the
+public snapshot. 0.2.3.1 was an unpublished interim number; its changes are listed here.
+
+Upgrade notes:
+
+- Migrations `20261115_0037` to `20261115_0040` only add tables; the track tables are disposable read models rebuilt from the archived FIT files ([notes](docs/MIGRATIONS.md)).
+- After upgrading, run `python -m app.cli.garmin_activity_files --limit N` to fetch the original files of earlier Garmin workouts and `python -m app.cli.garmin_tracks --rebuild` once to derive their tracks.
+- The map basemap is optional and never downloaded for you: cut your own region to a PMTiles file and set `MAP_TILES_FILE` ([maps](docs/reference/maps.md)). Without it the route is drawn on its own.
+- Import a plan with `python -m app.cli.plan_import <file.json>` ([plan](docs/reference/plan.md)); the repository ships only a fictional example.
+- The initial heart projection fill is one ordered pass instead of one query per hour: `python -m app.cli.heart_backfill` now fills the whole horizon by default (`--hours N` still bounds a run), reads the archive sequentially, refuses to start without free space for PostgreSQL's temporary files (about 1.4 times the raw table), prints counts every 30 seconds and stops cleanly at a committed hour on Ctrl-C or `SIGTERM`; running it again resumes, also over packets written by 0.2.3. Run it outside the nightly jobs and the backup ([heart projection](docs/reference/heart-projection.md)). The 0.2.3 note said the fill runs newest hours first; it runs oldest first, and only the scheduler's repair takes the newest dirty hour first.
+- The flat `app.services.<module>` import aliases (deprecated since 0.2.2.1) are removed. `scripts/backup.sh` and the systemd backup unit already use the package paths; your own scripts that import or run, for example, `app.services.backup_files` must switch to `app.services.operations.backup_files` ([architecture](docs/ARCHITECTURE.md)).
+
+Not proven: the basemap with a real regional PMTiles file (tested with a synthetic one); Garmin file history older than 90 days; the webhook catch-up and the scheduled catch-up against the real Google API.
+
+- Open a workout with a track on the Sports page in its own detail view: the route on a map with start,
+  finish and lap boundaries, charts of speed or pace, heart rate and elevation (other channels
+  only when recorded) on a time or distance axis with timer pauses, summary cards and the lap
+  table; chart and route share one cursor, also from the keyboard. The basemap is the operator's
+  own PMTiles file (`MAP_TILES_FILE`, `GET /api/map/tiles.pmtiles` with byte ranges, overlay
+  `docker-compose.map.yml`); without it, outside it or without WebGL2 the route is drawn on its
+  own. Adds MapLibre GL JS 6.18.0 and PMTiles 4.5.0, loaded only with the map; the Sports page
+  now loads with its first visit, so the first page load is smaller (docs/reference/maps.md).
+
+- Serve a workout's FIT track at `GET /api/dashboard/workouts/{id}/track`: summary, laps with
+  sample positions, timer events and equal-length sample columns in SI units, streamed with
+  `no-store`; `max_points` (100–50,000) thins deterministically with per-channel LTTB that keeps
+  the ends and lap boundaries. Workout rows gain `has_track`; a listed workout without a track
+  answers `{"track": null}`, another source `404`. Manual uploads are linked to their workouts
+  in a disposable read model (migration `20261115_0040`); run
+  `python -m app.cli.garmin_tracks --rebuild` once after upgrading to link earlier uploads.
+
+- Derive Garmin FIT tracks (columnar samples, laps, timer events and summaries) once per
+  FIT content and method from downloaded and manually imported originals, as a disposable
+  read model (migration `20261115_0039`); a projection failure never undoes the archived
+  file. Add a seeded synthetic track generator and the resumable, count-only
+  `python -m app.cli.garmin_tracks --rebuild` command.
+
+- Archive original Garmin activity FIT files after list pulls, with bounded ZIP validation,
+  append-only content versions, permanent 404/410 evidence, per-list-version `invalid`
+  results for refused bodies (reason, digest and size only) and paced, resumable downloads.
+  Add the count-only `python -m app.cli.garmin_activity_files --limit N [--dry-run]` backfill;
+  `/health`, Garmin status and device status expose downloaded/pending/unavailable/invalid counts.
+  Migration `20261115_0038` and whole-database backups preserve every file and outcome.
+- The public snapshot and `make verify` reject coordinates in text files: decimal
+  latitude/longitude pairs (named or bare), FIT semicircle and E7 integers next to their field
+  names, GeoJSON/KML `coordinates` and encoded polylines. Only invented positions inside a small
+  box around 0° N 0° E pass; findings show the path, line and kind, never the value. PRIVACY and
+  CONTRIBUTING state the location-data rule.
+
+- Add a lazily loaded Plan page with daily meals, recipes, shopping totals and shared check marks,
+  training progressions, measurement shortcuts and assumptions. Program dates and shopping state
+  save optimistically with rollback on failure. Previews use only the fictional example document.
+
+- After a processed Google webhook, HealthOS also fetches the data type's incremental window (the last successful sync minus the type's safety window, up to now), at most once per type per 30 minutes and only when no completed fetch already covered it. A record uploaded late, outside the range Google keeps naming, no longer waits for the six-hour reconciliation ([webhooks](docs/reference/webhooks.md)). A failed catch-up does not change the notification's outcome.
+- Add a strictly validated private plan document, append-only version storage, local JSON import
+  and authenticated plan/state API; migration `20261115_0037` preserves every earlier version.
+- Devices (`GET /api/devices`) no longer times out on a large archive: the Garmin source's newest
+  record time walks back from the newest rows of the last 30 days on the timestamp index and
+  stops at the first current, non-quarantined row, instead of checking every Garmin heart sample
+  (about 28 seconds on 10 million rows and rotating disks); the result is unchanged. A source
+  silent for longer still gets the exact whole-archive maximum. No migration.
+- The dashboard (`GET /api/dashboard`) answers in under a second once the database is warm, and
+  reads about half as many pages when it is cold. The application's pool now opens its
+  connections with JIT off: the readers' per-row eligibility subqueries pushed planner cost
+  estimates past the JIT thresholds, and on two cores each such statement spent 0.6-1.0 s
+  compiling for milliseconds of work (about 6 s of a 6.8 s request on a copy of a 10-million-row
+  archive). The Google step and sleep windows also bound their raw rows from below through the
+  existing `ix_raw_health_data_type_freshness` index instead of reading every older interval of
+  the type; the selected rows are unchanged. The coverage panel (`GET /api/sync/coverage`)
+  gains the same JIT saving. No migration.
+
+- Google data no longer depends on webhooks for freshness. A scheduled catch-up (job
+  `scheduled-catch-up`, every 5 minutes) fetches each data type's incremental window on a timer:
+  frequent types (heart rate, sleep, steps, ...) every `CATCH_UP_FREQUENT_MINUTES` (15), the
+  others every `CATCH_UP_OTHER_MINUTES` (120), staggered and one type at a time. A type covered by
+  a recent fetch (a notification's catch-up, a reconciliation) costs no request, a busy type is
+  tried on the next tick, and credential or transient Google failures pause it with a doubling
+  delay instead of repeating. Reconciliation fetches each type in windows of
+  `RECONCILIATION_SLICE_DAYS` (7) and releases the type's lock between them, so a notification
+  waits for one window, not the 90-day pass, and a due catch-up runs between windows.
+  `/health` reports `webhook_silent` (and `healthos webhook-status` its evidence, the panel the
+  state `missed`) when no notification arrived for `WEBHOOK_SILENT_AFTER_MINUTES` (120) while the
+  catch-up kept finding new records (docs/reference/sync.md#scheduled-catch-up).
+- Ship third-party licence notices: `THIRD_PARTY_LICENSES.md` (licence, copyright lines and full
+  text of every library in the interface build) is generated from the installed packages by
+  `scripts/third_party_licenses.py`, checked against `frontend/package-lock.json` in `make verify`,
+  and copied into the build and the Docker image. The workout map credits Protomaps beside
+  OpenStreetMap.
+
 ## [0.2.3] - 2026-11-14
 
 Everything merged since v0.2.2.1. This closes the fifth hardening pass; it follows the four-part
@@ -17,7 +108,7 @@ interim release and returns to a three-part version.
 Upgrade notes:
 
 - Migration `20261112_0035` adds Garmin time evidence and `20261114_0036` adds the Google heart projection (`google_heart_hours`, `google_heart_projection_state`, `google_heart_pending`). Both run in the `migrate` service, only add tables and triggers, change no existing row and refuse a downgrade that would discard their contents ([notes](docs/MIGRATIONS.md)). `20261114_0036` takes its locks with a five-second timeout and fails cleanly instead of queueing behind a long transaction.
-- The heart projection is filled on request: `python -m app.cli.heart_backfill --hours 168` (resumable, newest hours first). Until it reports `ready`, the dashboard reads heart rate from the raw archive exactly as before ([heart projection](docs/reference/heart-projection.md)). Its effect on PostgreSQL 17 with rotating disks has not been measured, so the production performance target remains unverified.
+- The heart projection is filled on request: `python -m app.cli.heart_backfill --hours 168` (resumable, oldest hours first). Until it reports `ready`, the dashboard reads heart rate from the raw archive exactly as before ([heart projection](docs/reference/heart-projection.md)). Its effect on PostgreSQL 17 with rotating disks has not been measured, so the production performance target remains unverified.
 - Upgrading directly from v0.2.2 still pauses Google sync until you use "Connect Google" once for fresh consent; records and backups are kept ([steps](docs/RUNBOOK.md#upgrade-from-v022)).
 - `/health` answers `503` with `HEALTH_DATABASE_UNAVAILABLE` (`error_type=read_timeout`) when its database read exceeds the limit. `/api/status` and the other browser read routes answer `504`.
 

@@ -139,6 +139,7 @@ export interface ElementsById {
   'overview-state-detail': HTMLParagraphElement;
   'overview-state-sample': HTMLButtonElement;
   'overview-state-title': HTMLElement;
+  'plan': HTMLElement;
   'profile-title': HTMLElement;
   'profile-values': HTMLDivElement;
   'queue-state': HTMLSpanElement;

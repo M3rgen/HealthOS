@@ -1,3 +1,4 @@
+import { pages } from './page-labels-tr.js';
 import { platforms } from './platforms-tr.js';
 
 // Turkish interface text: `tr` holds script text; `trPage` fills index.html at build/dev time
@@ -7,13 +8,7 @@ import { platforms } from './platforms-tr.js';
 /** @typedef {string | ((...args: I18nArg[]) => string) | { [key: string]: I18nValue }} I18nValue */
 export const tr = /** @satisfies {Record<string, I18nValue>} */ ({
   // Menu pages: the tab title shows the open page.
-  pages: {
-    overview: 'Genel bakış',
-    measurements: 'Ölçümler',
-    system: 'Sistem',
-    sports: 'Spor',
-    title: page => `${page} · HealthOS`,
-  },
+  pages,
   // ── Dashboard: overview cards, day table, sync, measurements, system status, shared words ──
   notice: {
     close: 'Bildirimi kapat',
@@ -435,6 +430,7 @@ export const tr = /** @satisfies {Record<string, I18nValue>} */ ({
       receiving: date => `Son doğrulanmış bildirim: ${date}.`,
       silentNever: 'Bildirim gelmiyor: izleme başladığından beri en az 7 gün geçti; henüz bildirim alınmadı.',
       silent: 'Bildirim gelmiyor: en az 7 gündür doğrulanmış teslim yok.',
+      missed: date => `Bildirimler kesildi ama Google'da yeni veri var: son doğrulanmış bildirim ${date}; zamanlanmış yakalama veriyi çekmeye devam ediyor.`,
     },
     rows: {
       lastNotification: 'Son doğrulanmış bildirim',
@@ -478,6 +474,7 @@ export const tr = /** @satisfies {Record<string, I18nValue>} */ ({
       processing_failed: 'İşleme hatası',
       batch_processing_failed: 'Toplu bildirim işleme hatası',
       processing_interrupted: 'Yarım kalan işleme kurtarıldı',
+      catch_up_found: 'Zamanlanmış yakalamanın bulduğu yeni veri',
     },
   },
   // ── Umay chat, its per-turn transfer receipt, metric history dialog ──
@@ -581,6 +578,9 @@ export const tr = /** @satisfies {Record<string, I18nValue>} */ ({
     otherSources: count => `Diğer kaynaklar (${count})`,
     otherSourcesLabel: type => `${type} için diğer kaynaklar`,
     dayLabel: date => `${date} antrenmanları`,
+    // The button of a workout with a recorded track; its name also says which workout it opens.
+    trackOpen: 'Rota ve grafikler',
+    trackOpenLabel: (name, time) => `${name}, ${time}: rota ve grafikleri aç`,
     // Keys are the exercise codes Google and Garmin send; a typed name is shown as it is.
     exerciseTypes: {
       WALKING: 'Yürüyüş', RUNNING: 'Koşu', RUN_WALK: 'Koşu-yürüyüş', TREADMILL_RUNNING: 'Koşu bandı',
@@ -773,6 +773,7 @@ export const trPage = {
   'system.about.data': 'Veritabanını sen işletirsin; barındırılan bir hizmet, proje hesabı ya da telemetri yoktur. Google ve Garmin’den yalnız okunur, hiçbir şey geri yazılmaz.',
   'system.about.umayTitle': 'Umay açıksa OpenAI’ye gidenler',
   'system.about.umay': 'Yalnız sen bir soru sorduğunda gönderilir: Umay’ın talimatları, mesajın (saat dilimin ve yerel saatinle birlikte), aynı bağlantıda daha önce yazdıklarından en fazla 8 KiB alıntı ve Umay’ın istediği arşiv parçaları (veri türleri ve sayıları, günlük özetler, özgün Google kayıtları, kapsama, cihazlar, yorum özetleri). Veritabanının kendisi, erişim anahtarları, yedekler ve loglar asla gönderilmez; her yanıtın aktarım özeti neyin gönderildiğini gösterir.',
+  'topbar.plan': 'Plan',
   'sports.sports.label': 'Spor',
   'sports.spor': 'Spor',
   'sports.cihazlardanGelenVeElle': 'Cihazlardan gelen ve elle girilen antrenmanlar',

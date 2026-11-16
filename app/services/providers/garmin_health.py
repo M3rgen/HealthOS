@@ -9,8 +9,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import Settings
 from app.core.timeutil import as_utc
 from app.models.garmin import GarminPullState
-from app.schemas.status import GarminNormalization
+from app.schemas.status import GarminActivityFiles, GarminNormalization
 
+from .garmin_file_archive import file_counts
 from .garmin_kinds import KIND_NAMES
 from .garmin_normalization import ERROR_CODE, read_status
 
@@ -23,6 +24,7 @@ class GarminHealthSnapshot:
     stale_after_seconds: int
     reasons: tuple[str, ...]
     normalization: GarminNormalization
+    activity_files: GarminActivityFiles
 
 
 async def read_health(
@@ -64,4 +66,5 @@ async def read_health(
         stale_after_seconds=stale_after,
         reasons=tuple(reasons),
         normalization=normalization,
+        activity_files=await file_counts(session),
     )

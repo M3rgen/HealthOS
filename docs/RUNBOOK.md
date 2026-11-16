@@ -547,7 +547,10 @@ api /api/webhooks/status | python3 -m json.tool
   valid notification element, not counted as an old replay. It is neither processing success
   nor the latest data write. In the older archive, only the verification time of a delivery that
   has its raw bytes and a valid element counts as evidence.
-- `silence`: the service computes the seven-day threshold. The first configured application
+- `silence`: the service computes the seven-day threshold. The state `missed` (with `warning`)
+  means notifications stopped while the scheduled catch-up kept finding new records
+  ([criterion](reference/webhooks.md#silence-while-google-holds-data)); the counter
+  `catch_up_found` counts the catch-up rounds that found new records. The first configured application
   start begins the waiting period; a new installation is not immediately treated as silent. An
   unconfigured receiver, no delivery received yet, the threshold being exceeded and the status
   endpoint being unreachable are shown separately in the panel. A challenge, malformed traffic,
@@ -583,6 +586,14 @@ api /api/webhooks/status | python3 -m json.tool
   signature, body or health value.
 
 Symptoms: the dashboard's newest records lag by hours, or `/health` reports `stale`/`degraded`.
+Since the [scheduled catch-up](reference/sync.md#scheduled-catch-up) fetches every data type on a
+timer, silent notifications no longer delay the data by hours; they show up as the `/health`
+reason `webhook_silent` (no notification for `WEBHOOK_SILENT_AFTER_MINUTES`, while the catch-up
+keeps finding new records) and as the state `missed` in the panel
+([criterion](reference/webhooks.md#silence-while-google-holds-data)). On 15 November 2026
+notifications that had arrived several times an hour stopped at once for more than six hours
+while the endpoint stayed reachable (an unauthenticated POST got 401) and Google held new records;
+the cause is unknown, and the subscription lives on Google's side, where HealthOS cannot query it.
 
 1. **App state.**
 
@@ -592,15 +603,23 @@ Symptoms: the dashboard's newest records lag by hours, or `/health` reports `sta
    ```
 
    Look at `last_webhook_received`, `last_webhook_processed`, `pending_notifications`,
-   `failed_notifications`, `stale_streams` and `reasons`. `stale` means every frequent stream
+   `failed_notifications`, `stale_streams` and `reasons`. `webhook_silent` in `reasons` (and
+   `webhook_silent.silent: true` with its `last_notification_at`, `catch_up_rounds_with_new_records`
+   and `last_found_at` in `webhook-status`) means Google holds data it did not announce: go on
+   with steps 3 and 4; the catch-up keeps the data current meanwhile. `stale` means every frequent stream
    (heart rate, steps, activity, energy) is older than `PIPELINE_STALE_THRESHOLD_MINUTES`.
    Received but not processed points at the app or Google API; not received points at the path
    from Google.
 2. **Logs.**
 
    ```sh
-   docker compose logs --since 24h app | grep -E 'WEBHOOK_|WATCHDOG_|RECONCILIATION_|TOKEN_REFRESHED|RATE_LIMITED'
+   docker compose logs --since 24h app | grep -E 'WEBHOOK_|WATCHDOG_|RECONCILIATION_|SCHEDULED_CATCH_UP_|TOKEN_REFRESHED|RATE_LIMITED'
    ```
+
+   `SCHEDULED_CATCH_UP_COMPLETED` with `records` above 0 while no `WEBHOOK_ELEMENT_PROCESSED`
+   appears is the silence itself. `SCHEDULED_CATCH_UP_PAUSED` with `reason=credentials` means the
+   Google connection needs a new consent (step 4); with `reason=google`, Google answered 429/5xx
+   or could not be reached, and the catch-up retries after a doubling pause.
 
    `WEBHOOK_SIGNATURE_INVALID` with `reason=authorization` means the subscriber's secret and `.env`
    differ. `WEBHOOK_VERIFICATION_UNAVAILABLE` means Google's public keyset could not be fetched:
@@ -613,6 +632,11 @@ Symptoms: the dashboard's newest records lag by hours, or `/health` reports `sta
    an unauthenticated POST must return 401.
 4. **Google side.** Check that the subscriber still exists and points at the same URI. Testing-mode
    OAuth refresh tokens expire after seven days, which stops both webhook follow-up reads and syncs.
+   HealthOS has no command that queries or renews the subscription. If it is gone or points
+   elsewhere, register it again as at installation: `healthos webhook-readiness`, then the
+   subscriber registration in [DEPLOYMENT.md](DEPLOYMENT.md#7-webhook-through-cloudflare-tunnel)
+   (step 4) and [CLOUDFLARE_TUNNEL.md](CLOUDFLARE_TUNNEL.md). The first verified delivery
+   afterwards clears `webhook_silent`.
 5. **Recover.** Retry stored but unprocessed notifications, then fill the gap from Google:
 
    ```sh

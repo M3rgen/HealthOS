@@ -29,8 +29,9 @@ CLI and hand-written SQL alike (`healthos verify` checks that the guards are in 
 | Google records jsonb cannot hold, set apart instead of stored ([below](#records-jsonb-cannot-hold)) | `raw_health_data_rejections` | append-only (trigger); one row per record of one stored exchange, linked to its `raw_api_responses` row, with the parsed record (`element_json`, ASCII escapes) |
 | The maintainer's acknowledgement of rejected records; rejected records per retrieval page | `raw_rejection_acks`, `retrieval_event_rejections` | append-only (trigger) |
 | Manual measurements and workouts | `manual_measurements`, `manual_workouts` | append-only: the UI only adds entries; a correction is a new entry (for the same measurement time the newest entry wins) |
-| Exact HTTP response bodies from the Garmin Connect Personal API ([below](garmin.md#garmin-connect-personal-api)) | `garmin_api_responses` | append-only (trigger); SHA-256 of the received bytes (a token exchange keeps a placeholder body) |
+| HTTP evidence from the Garmin Connect Personal API ([below](garmin.md#garmin-connect-personal-api)) | `garmin_api_responses` | append-only (trigger); SHA-256 of received bytes; JSON bodies preserved except credentials, token and original-file exchanges keep placeholder bodies |
 | Every distinct payload of a Garmin record (per kind and calendar day or activity) | `garmin_raw_records` | append-only (trigger); a changed payload is a new row, the earlier row stays; readers take the newest |
+| Original Garmin activity FIT versions and completed download/404/410/invalid evidence (a refused body keeps only a reason code, digest and size) | `garmin_activity_files`, `garmin_activity_file_results` | append-only (trigger); identical content reuses a version, changed content appends; included byte for byte in whole-database backup/restore; location traces are private |
 | Garmin rows of the normalized tables (`provider = 'GARMIN'`, key `garmin:<kind>:<key>`) | `steps`, `heart_rate`, `sleep_sessions`, `exercise_sessions`, â€¦ | rebuilt from `garmin_raw_records` by comparison (unchanged rows untouched, changed rows updated in place); the raw archive stays the truth |
 | Health Auto Export request bodies ([Apple Health](apple.md#apple-health-github-version)) | `apple_payloads` | append-only (trigger); one row per distinct body (SHA-256), never `Authorization` |
 | Every distinct version of an Apple Health record (export.xml or Health Auto Export) | `apple_raw_records` | append-only (trigger); a changed payload of the same record is a new row; readers take the newest |
@@ -172,6 +173,10 @@ Normalized tables (`heart_rate`, `steps`, `sleep_sessions`, `scalar_metrics`, â€
 `analytics_*` views are **derived** from the current raw payloads and can be rebuilt from
 `raw_health_data` at any time, so their UPSERTs overwrite in place and that is acceptable: no
 received data lives only there.
+`garmin_tracks` (FIT track packages, [Garmin FIT tracks](garmin-tracks.md)) and
+`garmin_track_sessions` (which upload produced which FIT workout) are derived in the same sense
+from `garmin_activity_files` and manual FIT rows: they carry no guard and a downgrade may drop
+them. The packages hold location traces, so they are as private as the originals.
 
 A normalized row carries the key of its raw row, so a duplicate raw row has a duplicate normalized
 row. Those rows are not deleted, flagged or rewritten: whether a row counts is decided in one

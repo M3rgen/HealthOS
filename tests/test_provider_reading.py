@@ -367,8 +367,10 @@ async def test_garmin_archive_rebuild_removes_stale_legacy_members_and_preserves
         read = await garmin_samples(session, START, STOP, true())
         assert read.samples == [(START, 61, "GARMIN")]
         assert read.summary_source == "GARMIN" and read.resolve_minutes
-        summary = await archive_summary(session)
-        assert summary is not None and summary["last_data"] == START
+        # The recent walk and, for a source silent past it, the whole-archive maximum.
+        for now in (STOP, STOP + timedelta(days=400)):
+            summary = await archive_summary(session, now)
+            assert summary is not None and summary["last_data"] == START
         kept = (
             await session.execute(
                 select(HeartRate.__table__).where(HeartRate.id.in_([row.id for row in before]))

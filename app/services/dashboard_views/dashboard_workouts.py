@@ -49,6 +49,7 @@ def workout_dict(row: ManualWorkout | ExerciseSession, source: str) -> Workout:
         "priority": PRIMARY,
         "group": None,
         "alternatives": [],
+        "has_track": False,
     }
 
 
@@ -180,5 +181,7 @@ async def list_workouts(
         )
     ).all()
     rows.extend(workout_dict(row, "Manuel") for row in manual)
+    for row in rows:
+        row.setdefault("has_track", False)  # Only FIT-backed readers can have a track.
     place_workouts(rows)
     return sorted(rows, key=lambda row: row["start_time"], reverse=True)

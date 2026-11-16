@@ -31,7 +31,7 @@ The backend is the `app` package. Each subpackage is one layer:
 | Interface | `app/api` | HTTP routes: parse the request, call a service, shape the response. | `services`, `schemas`, `core`, `google_health` and `garmin` client error types and data-type lists, the `db` session dependency; `runtime` for injected engines |
 | Interface | `app/cli` | The `healthos` command line (Typer). | `services`, `runtime` (builds the engines), `db`, `core`; no `models`, and it builds no query of its own |
 | Application | `app/services` (subpackages below) | Everything the product does: storing pages, identity, readers, dashboard, coverage, precedence, Umay's tools, backups status, scheduling, the `IngestionSource` contract between sources and engines. | `parsers`, `models`, `schemas`, `db`, `google_health`, `garmin`, `apple`, `core` |
-| Retrieval | `app/sync` | The Google retrieval engines: incremental sync, backfill, reconciliation, checkpoints, deletion marking (through `app/services/archive/source_deletions.py`), the pipeline watchdog and webhook processing. Incremental sync and backfill share one fetch/store/receipt cycle (`app/sync/page_cycle.py`). | `services` (storage, receipt, report and pipeline operations), `models`, `db`, `google_health`, `core` |
+| Retrieval | `app/sync` | The Google retrieval engines: incremental sync, backfill, reconciliation, the scheduled catch-up, checkpoints, deletion marking (through `app/services/archive/source_deletions.py`), the pipeline watchdog and webhook processing. Incremental sync and backfill share one fetch/store/receipt cycle (`app/sync/page_cycle.py`). | `services` (storage, receipt, report and pipeline operations), `models`, `db`, `google_health`, `core` |
 | Parsing | `app/parsers` | Return record kinds, normalized values and v2 identities; text helpers also inspect ORM classes supplied as arguments. | `core`; no `models` imports |
 | Clients | `app/google_health`, `app/garmin` | HTTP clients, OAuth, pagination, response decoding, webhook signature checks. No database access. | `core` |
 | Apple parsing (published release) | `app/apple` | The GitHub-only Apple extension's streaming `export.zip`/`export.xml` reader and Health Auto Export parser. No database access. | `core`, `google_health` (its strict JSON reader) |
@@ -60,14 +60,12 @@ Service packages are ordered `umay > synchronization > dashboard_views > provide
 | `app.services.operations` | Local settings, backup publication and backup status |
 | `app.services.shared` | Finite arithmetic, civil query selections and pg_dump round-trip comparison |
 
-Flat `app.services.<module>` imports are compatibility aliases deprecated since **0.2.2.1**;
-remove them in **0.2.4**, after the 0.2.3 release. They refer to the same module objects, preserving
-caller overrides and exception/type identity. Application imports use the new packages.
-`app.services._compat` resolves aliases lazily from the package interfaces, without
-duplicating the implementation files. Only the backup command retains a file shim.
-The recursive layer guards scan their implementations and interfaces with the same
-restrictions and exception counts. Path-specific budgets and dialect guards also point to
-the implementations. The backup alias still supports its existing `python -m` invocation.
+Flat `app.services.<module>` imports were compatibility aliases from 0.2.2.1 through 0.2.3 and
+were removed in **0.2.4**: import every module through its package (for example
+`app.services.shared.query_ranges`); the backup command runs as
+`python -m app.services.operations.backup_files`. The recursive layer guards scan the
+implementations and interfaces with the same restrictions and exception counts. Path-specific
+budgets and dialect guards also point to the implementations.
 
 Schema changes live in `migrations/` (Alembic, a revision graph with one head; the
 `20261107_0025` branchpoint is merged at `20261109_0029`). The interface is a separate
@@ -149,8 +147,12 @@ flowchart LR
     U -.->|optional, via the bridge| O[OpenAI]
 ```
 
-- **Google.** The scheduler runs the daily and weekly reconciliations; a signed webhook stores
-  its exact body in `webhook_events` and triggers a fetch of the notified window; a backfill
+- **Google.** The scheduler runs the daily and weekly reconciliations and, every 5 minutes, the
+  [scheduled catch-up](reference/sync.md#scheduled-catch-up) of each data type's incremental
+  window, so freshness never depends on webhooks; a signed webhook stores
+  its exact body in `webhook_events` and triggers a fetch of the notified window, then at most
+  every 30 minutes per type a catch-up of the incremental window
+  ([webhooks](reference/webhooks.md#webhooks)); a backfill
   walks history by type and time window. Every response body is kept byte for byte
   (`raw_api_responses`), even when the request fails part-way. Each page then goes to the
   storage service, which writes each record's current payload (`raw_health_data`, earlier

@@ -9,6 +9,7 @@ import pytest
 from garmin_records import FakeGarmin, activity, store_page
 from sqlalchemy import event, select
 from support.garmin import unlocked
+from support.garmin_files import Clock
 from test_garmin_activity_ids import LONG_IDS, PREFIX
 from test_garmin_activity_legacy_ids import legacy_page, legacy_row
 from test_garmin_activity_results import EVIDENCE, snapshot
@@ -31,10 +32,14 @@ PATH = BY_NAME["activities"].request(DAY, DAY)[0]
 def pull_at(sessions, tmp_path, fake, now=NOW):
     key = tmp_path / "synthetic-key"
     key.write_text("synthetic-key")
+    clock = Clock()
+    clock.now = now
     return unlocked(
         Settings(_env_file=None, garmin_lookback_days=1),
         sessions,
-        client=GarminClient(key, http=httpx.AsyncClient(transport=fake.transport())),
+        client=GarminClient(
+            key, http=httpx.AsyncClient(transport=fake.transport()), clock=clock, sleep=clock.sleep
+        ),
         clock=lambda: now,
     )
 

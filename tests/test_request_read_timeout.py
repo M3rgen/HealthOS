@@ -401,3 +401,30 @@ def test_read_assertions_do_not_allow_other_controls(statement):
     assert read_statements([statement]) == [statement]
     with pytest.raises(AssertionError):
         only_reads(None, None, statement, None, None, False)
+
+
+async def test_workout_track_read_is_limited_and_times_out_privately(
+    application, controls, monkeypatch, caplog
+):
+    from app.api import dashboard
+
+    path = "/api/dashboard/workouts/00000000-0000-4000-8000-000000000001/track"
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(application), base_url="http://localhost"
+    ) as client:
+        missing = await client.get(path)
+
+        async def cancelled(session, workout_id):
+            await session.execute(text("SELECT 1"))
+            raise DBAPIError(
+                "private query", {"value": "private"}, SimpleNamespace(sqlstate="57014")
+            )
+
+        monkeypatch.setattr(dashboard, "workout_track", cancelled)
+        response = await client.get(path)
+    assert missing.status_code == 404
+    assert controls.count(READ_TIMEOUT_CONTROL) == 2
+    assert response.status_code == 504
+    assert response.json() == {"detail": "Database read timed out. Please try again."}
+    assert response.headers["cache-control"] == "no-store"
+    assert "private" not in response.text and "private" not in caplog.text

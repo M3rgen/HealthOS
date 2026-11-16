@@ -54,7 +54,51 @@ printf 'header = "Authorization: Bearer %s"\n' "$APP_UI_TOKEN" | curl --config -
 printf 'header = "Authorization: Bearer %s"\n' "$APP_UI_TOKEN" | curl --config - http://127.0.0.1:8000/sync/status
 ```
 
-Default overlaps are 60 minutes for heart rate, 12 hours for steps/activity streams, 72 hours for sleep/temperature derivations, seven days for daily metrics, and 24 hours otherwise. UPSERT makes every replay safe; a changed payload keeps the previous one as a [version](identity-and-versions.md#raw-record-versions).
+A completed webhook notification runs the same window for its data type at most once per 30
+minutes ([webhook catch-up](webhooks.md#webhooks)); the [scheduled catch-up](#scheduled-catch-up)
+runs it on a timer, whether notifications arrive or not. Default overlaps are 60 minutes for heart rate, 12 hours for steps/activity streams, 72 hours for sleep/temperature derivations, seven days for daily metrics, and 24 hours otherwise. UPSERT makes every replay safe; a changed payload keeps the previous one as a [version](identity-and-versions.md#raw-record-versions).
+
+### Scheduled catch-up
+
+Webhooks only speed things up; freshness does not depend on them. On 15 November 2026 Google
+stopped notifying for hours while it held new records (a manual `healthos sync sleep` found a new
+night, `healthos sync heart-rate` thousands of samples), and only the nightly reconciliation would
+have fetched them. The job `scheduled-catch-up` (every 5 minutes, `CATCH_UP_ENABLED`,
+`app/sync/scheduled_catch_up.py`) therefore catches every Google data type up on a timer: the
+incremental window above, from the last successful sync minus the type's overlap up to now.
+
+- **Interval.** The frequent types (heart rate, sleep, steps, distance, activity level, active
+  energy, total calories, active minutes, exercise) every `CATCH_UP_FREQUENT_MINUTES` (15), the
+  others (daily summaries, weight, ECG, ...) every `CATCH_UP_OTHER_MINUTES` (120). The types are
+  staggered over their interval and caught up one at a time, never in a burst.
+- **No extra requests while notifications work.** A type is skipped without a request when a
+  complete fetch that reached back to the window's start and up to the recent past began within
+  its interval, and at least within 45 minutes: a notification's catch-up (at most every
+  30 minutes, so every 42 minutes with notifications every 14), a reconciliation, `healthos sync`
+  or an earlier round. While a type's notifications arrive at least every 15 minutes the timer
+  only reads the retrieval receipts; it fetches what no notification announced. A frequent type
+  is therefore fetched every 45 minutes when its notifications stop (worst case about an hour
+  from upload), another type every 2 hours. With every type fetched (notifications silent, the
+  37 built-in types: 9 frequent, 28 others) that is about 620 list requests a day (288 + 336),
+  a few per tick; types that send no notifications at all (for example total calories, active
+  energy) cost the same while notifications work. Google's published per-user limit is
+  300 requests a minute.
+- **Busy types are not waited for.** A type whose sync lock another run holds (a reconciliation
+  window, a backfill window, a notification, the identity reconciler) is skipped and tried on the
+  next tick; nothing queues. A reconciliation fetches a type in windows of
+  `RECONCILIATION_SLICE_DAYS` (7) and, between two windows, lets a due catch-up of that type run,
+  so recent records do not wait for the whole 90-day pass ([Reconciliation](reconciliation.md#reconciliation)).
+- **Failures.** A Google connection that needs a new consent (or any credential failure) and
+  transient Google failures (429, 5xx, network) pause every type: 5 minutes, doubling up to an
+  hour, one `SCHEDULED_CATCH_UP_PAUSED` warning at the start and `SCHEDULED_CATCH_UP_RESUMED` at
+  the end. The credentials are checked before a fetch changes any sync state, so a lost
+  connection leaves the sync states as they were. Any other failure backs off its own type (twice
+  its interval, doubling up to a day; `SCHEDULED_CATCH_UP_FAILED` once, a failed sync state until
+  the next success).
+- **Evidence.** Each round logs `SCHEDULED_CATCH_UP_COMPLETED` with the number of new or changed
+  records (`SCHEDULED_CATCH_UP_BUSY` for a skipped busy type); its responses and records carry the
+  source `catch-up`. A round that found new records also adds the value-free diagnostic event
+  `catch_up_found`, the evidence of [`webhook_silent`](webhooks.md#silence-while-google-holds-data).
 
 ### Source deletions
 

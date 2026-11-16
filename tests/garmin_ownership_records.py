@@ -11,7 +11,8 @@ from sqlalchemy import select
 from app.core.config import Settings
 from app.core.timeutil import as_utc
 from app.db.contracts import OwnershipLost
-from app.garmin.client import REDACTED_BODY, GarminClient
+from app.garmin.client import GarminClient
+from app.garmin.exchange import REDACTED_BODY
 from app.models.garmin import (
     GarminActivityResult,
     GarminApiResponse,

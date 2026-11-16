@@ -19,6 +19,36 @@ exact raw request bytes, and every array element gets independent durable extrac
 health-user validation, global content-hash deduplication, processing state, and retry history.
 Returning HTTP 204 proves durable acceptance only; `processed_at` is set after every valid element
 in the batch completes. A failed element remains retryable without re-running successful elements.
+
+Each element fetches the interval Google names. Google sometimes keeps naming a narrow or older
+interval (for example the same night's earlier session) while another record of that type,
+uploaded after the last full fetch, lies outside it. After its own interval, a completed element
+therefore also catches its data type up: it fetches the [incremental window](sync.md#incremental-sync)
+(from the last successful sync minus the type's overlap, up to now), unless a completed fetch of
+the type that reached back as far began within the last 30 minutes (an earlier catch-up, a
+reconciliation or `healthos sync`; the evidence is the retrieval receipts). The decision is made
+under the type's sync lock, so concurrent notifications catch up once. A late upload therefore
+arrives with the next notification of its type, at most about 30 minutes later, instead of with the
+next reconciliation; with notifications every 14 minutes this costs one extra request in three. A
+failed catch-up never changes the element's result (`WEBHOOK_CATCH_UP_FAILED` in the log, a failed
+sync state until the next success); the next notification, the
+[scheduled catch-up](sync.md#scheduled-catch-up) or a reconciliation fetches the window.
+
+### Silence while Google holds data
+
+Notifications are an accelerator, not the guarantee: freshness comes from the
+[scheduled catch-up](sync.md#scheduled-catch-up), which fetches every data type on a timer. When
+notifications stop while Google still holds new records, `/health` lists the reason
+`webhook_silent` (status `degraded`), `healthos webhook-status` shows `webhook_silent.silent: true`
+and **Sistem → Durum → Google bildirimleri** shows the state `missed` (the API's
+`silence.state`). The criterion is "no notification and the catch-up found new data", so a quiet
+night (nothing uploaded, nothing notified) is no silence: no notification for
+`WEBHOOK_SILENT_AFTER_MINUTES` (120), and a scheduled catch-up that began at least that long after
+the last notification found new records at least 15 minutes ago (a catch-up that only beat a
+notification to a record is not counted). `webhook-status` also gives the last notification, the
+threshold, the number of catch-up rounds that found new records since then (`catch_up_found`
+diagnostic events; values are never shown) and the last such round. The next notification clears
+it. What to check: [The webhook went quiet](../RUNBOOK.md#the-webhook-went-quiet).
 The documented deployment has one subscriber, registered using short-lived service-account
 impersonation; no service-account key is stored. Its id is the default of
 `GOOGLE_HEALTH_WEBHOOK_SUBSCRIBER_ID`, `personal-health-mirror`. The project number is

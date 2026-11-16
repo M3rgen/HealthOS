@@ -3,7 +3,7 @@
 // show the Health Auto Export receiver's state. One import at a time; the panel stays usable
 // on every viewport (long messages scroll inside the panel). GitHub-only Apple extension.
 // It imports no module of the initial bundle: the System page hands it the helpers it needs
-// (`setupAppleImport`), so the bundler never splits a shared chunk out of the initial code.
+// (`refreshAppleImport`), so the bundler never splits a shared chunk out of the initial code.
 import { en, tr } from './i18n/apple.js';
 
 /**
@@ -250,7 +250,7 @@ async function refresh(panel, status, day) {
  * @param {AppleTools} given
  * @returns {{refresh: () => Promise<void>}}
  */
-export function setupAppleImport(given) {
+function setupAppleImport(given) {
   tools = given;
   // The page's language, which i18n/index.js sets on <html> before any module renders.
   strings = document.documentElement.lang === 'en' ? en : tr;
@@ -268,4 +268,16 @@ export function setupAppleImport(given) {
   });
   window.addEventListener('pagehide', () => stopPolling(panel));
   return { refresh: () => refresh(panel, status, day) };
+}
+
+/** @type {{refresh: () => Promise<void>} | null} */
+let opened = null;
+
+/**
+ * Sets the panel up on the first call and refreshes it on every call (each System page visit).
+ * @param {AppleTools} given
+ */
+export function refreshAppleImport(given) {
+  opened ??= setupAppleImport(given);
+  return opened.refresh();
 }

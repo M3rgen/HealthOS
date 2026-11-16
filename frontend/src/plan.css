@@ -1,0 +1,153 @@
+/* Loaded with plan.js, so the first page load carries none of it. The layer order itself is
+   declared in style.css; the import resolves only after this sheet has loaded. */
+@layer components {
+  #plan:not([hidden]) {
+    overflow: visible;
+    gap: 10px;
+  }
+  #plan > .plan-content {
+    flex: 1 1 0;
+    min-height: 0;
+    min-width: 0;
+    overflow: auto;
+    overscroll-behavior: contain;
+    scrollbar-width: thin;
+    padding: 4px 8px min(72px, 10dvh) 4px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    overflow-wrap: anywhere;
+  }
+  .plan-content > * {
+    flex-shrink: 0;
+    min-width: 0;
+  }
+  .plan-heading {
+    min-width: 0;
+    max-height: 18dvh;
+    overflow: auto;
+    overflow-wrap: anywhere;
+  }
+  .plan-heading h1 {
+    font-size: 1.25rem;
+  }
+  .plan-heading p {
+    color: var(--muted);
+    font-size: 0.875rem;
+  }
+  .plan-nav {
+    order: 0;
+    display: flex;
+    overflow: auto;
+    gap: 6px;
+    min-height: 44px;
+    max-width: 100%;
+  }
+  .plan-nav .button {
+    white-space: nowrap;
+  }
+  .plan-card {
+    padding: 18px;
+    display: grid;
+    gap: 12px;
+  }
+  .plan-card h3 {
+    font-weight: 650;
+  }
+  .plan-content p, .plan-content li {
+    white-space: pre-wrap;
+    line-height: 1.55;
+  }
+  .plan-content ul {
+    padding-left: 24px;
+    margin: 6px 0;
+  }
+  .plan-content li + li {
+    margin-top: 8px;
+  }
+  .plan-disclosure > button {
+    text-align: left;
+    justify-content: flex-start;
+    width: 100%;
+  }
+  .plan-disclosure > button::before {
+    content: '+';
+    flex: none;
+  }
+  .plan-disclosure > button[aria-expanded='true']::before {
+    content: '−';
+  }
+  .plan-disclosure > div:not([hidden]) {
+    padding: 12px 4px;
+    display: grid;
+    gap: 12px;
+  }
+  .plan-total, .plan-current {
+    font-weight: 650;
+    color: var(--amber);
+  }
+
+  .plan-date {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 12px;
+  }
+  .plan-date input {
+    min-width: 0;
+    max-width: 100%;
+  }
+  .plan-table {
+    overflow-x: auto;
+    max-width: 100%;
+  }
+  .plan-table table {
+    min-width: 32rem;
+    table-layout: fixed;
+  }
+  .plan-table th, .plan-table td {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    min-width: 0;
+    vertical-align: top;
+  }
+  .plan-table caption {
+    text-align: left;
+    padding: 10px 0;
+    font-weight: 600;
+  }
+  .plan-shopping-item {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    min-height: 44px;
+    cursor: pointer;
+  }
+  .plan-shopping-item input {
+    flex: none;
+    width: 24px;
+    height: 24px;
+    min-height: 24px;
+    accent-color: var(--amber);
+  }
+  .plan-shopping-item > span {
+    display: grid;
+    gap: 4px;
+    min-width: 0;
+  }
+  .plan-shopping-item:has(:checked) strong {
+    text-decoration: line-through;
+    color: var(--muted);
+  }
+  .plan-warning {
+    border-left: 3px solid var(--amber);
+    padding: 12px;
+  }
+  .plan-save-status:empty {
+    display: none;
+  }
+  .plan-content code {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+}

@@ -20,7 +20,7 @@ COLD_IMPORT_SCRIPT = textwrap.dedent(
     from app.models import identity, identity_constants, identity_guards, identity_tables
     from app.models import derived_invalidation, manual_flags, raw_versions, retrieval
     from app.models import apple, garmin, oauth_credentials, raw_rejections, webhook_status
-    from app.models import heart_invalidation
+    from app.models import heart_invalidation, garmin_files
 
     assert not any(name.startswith('support.') for name in sys.modules)
     from support import sqlite_guards
@@ -63,7 +63,7 @@ COLD_IMPORT_SCRIPT = textwrap.dedent(
             Base.metadata.create_all(engine, checkfirst=False)
             models = (raw_versions, identity_guards, manual_flags, raw_rejections,
                       retrieval, webhook_status, derived_invalidation, garmin,
-                      oauth_credentials, heart_invalidation, apple)
+                      oauth_credentials, heart_invalidation, garmin_files, apple)
             expected = tuple(sql for model in models for sql in (
                 sqlite_guards.ddl(model) if dialect == 'sqlite' else model.POSTGRESQL_DDL))
             assert set(expected) <= set(statements)
@@ -73,11 +73,11 @@ COLD_IMPORT_SCRIPT = textwrap.dedent(
                         if sql.startswith(('CREATE TRIGGER', 'CREATE CONSTRAINT TRIGGER'))]
             if dialect == 'postgresql':
                 # + Apple's 4 (two append-only tables)
-                assert len(triggers) - len(heart_invalidation.GUARDS.pg) == 105
+                assert len(triggers) - len(heart_invalidation.GUARDS.pg) == 111
                 assert len(functions) - len(heart_invalidation.GUARDS.functions) == 27
                 assert max(functions) < min(triggers)
             else:
-                assert len(triggers) == 100  # + Apple's 4
+                assert len(triggers) == 106  # + Apple's 4
             views = [i for i, sql in enumerate(statements) if sql.startswith('CREATE VIEW')]
             assert max(triggers) < min(views)
             counts = Counter(statements)
@@ -118,6 +118,7 @@ COLD_IMPORT_SCRIPT = textwrap.dedent(
         "apple",
         "heart_invalidation",
         "heart_projection",
+        "garmin_files",
     ],
 )
 def test_cold_imports_register_models_and_guards_once(first):

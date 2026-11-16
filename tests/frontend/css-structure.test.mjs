@@ -23,20 +23,22 @@ test('style.css declares the layer order before any rule and imports every sheet
   assert.deepEqual(imports.filter(([, path]) => !path.startsWith('./')).map(([, path]) => path), ['@fontsource-variable/inter/opsz.css']);
   for (const [, path, layer] of layered) assert.ok(LAYERS.includes(layer), `${path} is imported without a known layer`);
   const imported = new Set(layered.map(([, path]) => path.slice(2)));
-  for (const sheet of sheets.filter(name => !['style.css', 'body.css'].includes(name)))
+  for (const sheet of sheets.filter(name => !['style.css', 'body.css', 'plan.css', 'workout-detail.css'].includes(name)))
     assert.ok(imported.has(sheet), `${sheet} is not imported (with a layer) by style.css`);
   // Layers follow the declared order in the import list too, so reading top-down matches the cascade.
   const order = layered.map(([, , layer]) => LAYERS.indexOf(layer));
   assert.deepEqual(order, [...order].sort((a, b) => a - b));
 });
 
-test('body.css, loaded later with the 3D viewer, puts its rules into the components layer', () => {
-  const css = read('body.css').replace(/\/\*[\s\S]*?\*\//g, '').trim();
-  assert.match(css, /^@layer components \{[\s\S]*\}$/);
+test('body.css, plan.css and workout-detail.css, loaded later with their views, put their rules into the components layer', () => {
+  for (const sheet of ['body.css', 'plan.css', 'workout-detail.css']) {
+    const css = read(sheet).replace(/\/\*[\s\S]*?\*\//g, '').trim();
+    assert.match(css, /^@layer components \{[\s\S]*\}$/, sheet);
+  }
 });
 
 test('JavaScript modules do not import stylesheets themselves (import order is not a cascade tool)', () => {
-  const allowed = { 'main.js': ['./style.css'], 'body.js': ['./body.css'] };
+  const allowed = { 'main.js': ['./style.css'], 'body.js': ['./body.css'], 'plan.js': ['./plan.css'], 'workout-detail.js': ['./workout-detail.css'] };
   for (const file of readdirSync(SRC).filter(name => name.endsWith('.js'))) {
     const css = [...read(file).matchAll(/^import\s+'([^']+\.css)';/gm)].map(match => match[1]);
     assert.deepEqual(css, allowed[file] ?? [], `${file} imports CSS`);

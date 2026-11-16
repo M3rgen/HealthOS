@@ -208,6 +208,8 @@ async def test_default_google_jobs_and_routes_are_retained(monkeypatch, sessions
             "pipeline-watchdog",
             "pipeline-freshness-refresh",
             "derived-refresh",
+            # Carried by the reconciliation: freshness that does not wait for a webhook.
+            "scheduled-catch-up",
         }
         assert {
             "/auth/google/start",

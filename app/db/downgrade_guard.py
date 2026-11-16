@@ -20,10 +20,11 @@ from sqlalchemy import text
 
 from app.db.dialect import database_operation
 
-# Dropped even with rows: rebuilt from the archive (derived_days and Google heart packets),
-# their initial-fill cursor (google_heart_projection_state), operational timestamps with
-# a row seeded by their own migration (reliability_state), a resumable pull's bookkeeping
-# (garmin_pull_state) and one display setting (display_preferences).
+# Dropped even with rows: rebuilt from the archive (derived_days, Google heart packets,
+# Garmin FIT track packages and their workout links), their initial-fill cursor
+# (google_heart_projection_state), operational timestamps with a row seeded by their own
+# migration (reliability_state), a resumable pull's bookkeeping (garmin_pull_state) and one
+# display setting (display_preferences).
 DISPOSABLE_TABLES = frozenset(
     {
         "derived_days",
@@ -31,6 +32,8 @@ DISPOSABLE_TABLES = frozenset(
         "google_heart_projection_state",
         "display_preferences",
         "garmin_pull_state",
+        "garmin_tracks",
+        "garmin_track_sessions",
         "reliability_state",
     }
 )

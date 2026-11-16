@@ -10,6 +10,7 @@ from app.services.archive.storage import store_records
 
 from .fit_decode import FitError
 from .fit_records import FitImport, parse_fit
+from .garmin_tracks import refresh_import
 
 
 @dataclass
@@ -32,11 +33,14 @@ async def import_fit_bytes(session: AsyncSession, data: bytes) -> FitImportResul
 async def import_fit(session: AsyncSession, parsed: FitImport) -> FitImportResult:
     """Caller owns the transaction; file bytes and projections commit or roll back together.
 
-    Raw-file bytes use existing version/immutability guards, so no table or migration
-    is needed. Reuploads reuse the content-addressed file row and normal v2 identities
-    for sessions/samples, including the existing reconciliation and supersession rules.
+    Raw-file bytes keep their existing version/immutability guards. Reuploads reuse
+    the content-addressed file row and track package, alongside normal v2 identities
+    for sessions/samples and the existing reconciliation and supersession rules. A
+    track projection failure is deferred to ``--rebuild`` and never fails the import;
+    the upload's workouts are linked to its content for the track API.
     """
     await store_records(session, FIT_FILE, [parsed.file], source=FIT_SOURCE)
+    await refresh_import(session, parsed)
     result = FitImportResult(parsed.sha256)
     for spec, records in parsed.records.items():
         for offset in range(0, len(records), 500):

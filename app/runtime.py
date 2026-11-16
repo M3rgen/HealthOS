@@ -30,6 +30,7 @@ from app.sync.backfill import BackfillService
 from app.sync.incremental import IncrementalSync
 from app.sync.ownership import garmin_ownership
 from app.sync.reconciliation import ReconciliationService
+from app.sync.scheduled_catch_up import ScheduledCatchUp
 from app.sync.watchdog import PipelineWatchdog
 from app.sync.webhook_processing import WebhookBatchProcessor
 
@@ -131,7 +132,18 @@ def build_runtime(settings: Settings, sessions: async_sessionmaker) -> Runtime:
     source = GoogleSource(google)
     incremental = IncrementalSync(settings, sessions, source, mirror_specs)
     backfill = BackfillService(settings, sessions, source, mirror_specs)
-    reconciliation = ReconciliationService(incremental, sessions)
+    webhook_status = WebhookStatusService(settings, sessions)
+    catch_up = (
+        ScheduledCatchUp(settings, incremental, webhook_status)
+        if settings.catch_up_enabled
+        else None
+    )
+    reconciliation = ReconciliationService(
+        incremental,
+        sessions,
+        slice_days=settings.reconciliation_slice_days,
+        catch_up=catch_up,
+    )
     frequent_types = {
         "heart-rate",
         "activity-level",
@@ -143,7 +155,6 @@ def build_runtime(settings: Settings, sessions: async_sessionmaker) -> Runtime:
     }.intersection(mirror_specs)
     pipeline_health = PipelineHealthService(settings, sessions, frequent_types)
     watchdog = PipelineWatchdog(settings, sessions, pipeline_health, reconciliation)
-    webhook_status = WebhookStatusService(settings, sessions)
     return Runtime(
         credentials=credentials,
         oauth=oauth,

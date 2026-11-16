@@ -22,6 +22,7 @@
       <button class="nav-button" data-page="measurements" data-i18n="topbar.olcumler">{{i18n:topbar.olcumler}}</button>
       <button class="nav-button" data-page="system" data-i18n="topbar.sistem">{{i18n:topbar.sistem}}</button>
       <button class="nav-button" data-page="sports" data-i18n="topbar.spor">{{i18n:topbar.spor}}</button>
+      <button class="nav-button" data-page="plan" data-i18n="topbar.plan">{{i18n:topbar.plan}}</button>
     </nav>
     <div class="header-meta"><button type="button" id="header-date" popovertarget="date-calendar" aria-label="{{i18n:topbar.header-date.label}}" aria-controls="date-calendar" aria-expanded="false" data-i18n-aria-label="topbar.header-date.label"><span class="button-icon" data-icon="calendar"></span><span id="header-date-text"></span><span id="header-date-short"></span></button></div>
   </header>
@@ -209,6 +210,7 @@
         </div>
       </div>
     </section>
+    <section id="plan" class="page" role="region" aria-label="{{i18n:topbar.plan}}" data-i18n-aria-label="topbar.plan" hidden><h1 data-i18n="topbar.plan">{{i18n:topbar.plan}}</h1></section>
     <section id="sports" class="page" role="region" aria-label="{{i18n:sports.sports.label}}" hidden data-i18n-aria-label="sports.sports.label">
       <div class="section-title"><span class="section-icon" data-icon="workout"></span><div>
           <h1 data-i18n="sports.spor">{{i18n:sports.spor}}</h1>
@@ -225,7 +227,7 @@
         </nav>
         <p id="workout-zone" class="fine-print"></p>
         <div class="workout-state"><p id="workout-status" role="status"></p><button type="button" id="workout-retry" class="button outline" hidden data-i18n="sports.workout-retry">{{i18n:sports.workout-retry}}</button></div>
-        <div id="workout-timeline" data-scroll-focus role="region" aria-label="{{i18n:sports.workout-timeline.label}}" data-i18n-aria-label="sports.workout-timeline.label" aria-describedby="workout-zone" aria-busy="false">
+        <div id="workout-timeline" data-scroll-focus role="region" aria-label="{{i18n:sports.workout-timeline.label}}" data-i18n-aria-label="sports.workout-timeline.label" aria-describedby="workout-zone" aria-busy="true">
           <ol id="workout-rows" class="workout-days" aria-label="{{i18n:sports.workout-rows.label}}" data-i18n-aria-label="sports.workout-rows.label"></ol>
         </div>
         <details id="workout-editor">

@@ -7,6 +7,7 @@ import json
 import typer
 
 from app.cli._context import context
+from app.services.synchronization.webhook_reporting import silence_report
 from app.services.synchronization.webhook_reporting import webhook_status as receipt_status
 
 
@@ -19,11 +20,13 @@ def webhook_status() -> None:
     """Show secret-safe local webhook receipt and processing status."""
 
     async def command():
+        settings = context.settings()
         async with context.sessions() as session:
             report = await receipt_status(session)
-        return {"readiness": context.settings().webhook_readiness, **report}
+            silence = await silence_report(session, settings)
+        return {"readiness": settings.webhook_readiness, **report, "webhook_silent": silence}
 
-    typer.echo(json.dumps(context.run(command()), indent=2))
+    typer.echo(json.dumps(context.run(command()), indent=2, default=str))
 
 
 def webhook_replay_pending() -> None:

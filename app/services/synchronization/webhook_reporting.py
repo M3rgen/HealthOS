@@ -1,9 +1,13 @@
 """Secret-safe webhook receipt and processing totals."""
 
+from datetime import UTC, datetime
+
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import Settings
 from app.models.state import WebhookEvent, WebhookNotification
+from app.services.synchronization.webhook_status import catch_up_silence
 
 
 async def webhook_status(session: AsyncSession) -> dict:
@@ -33,3 +37,9 @@ async def webhook_status(session: AsyncSession) -> dict:
         "incremental_sync_attempts": sync_attempts,
         "incremental_sync_successes": sync_successes,
     }
+
+
+async def silence_report(session: AsyncSession, settings: Settings) -> dict:
+    """No notification while the scheduled catch-up keeps finding new records (counts only)."""
+    last = await session.scalar(select(func.max(WebhookEvent.created_at)))
+    return await catch_up_silence(session, settings, last, datetime.now(UTC))

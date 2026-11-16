@@ -22,6 +22,7 @@ from . import apple_readers
 from .garmin_readers import activity_windows, daily_values, workouts
 from .garmin_readers import archive_bounds as garmin_bounds
 from .garmin_readers import heart_rate_samples as provider_heart
+from .garmin_track_sources import mark_tracks
 
 
 async def google_heart(
@@ -55,7 +56,7 @@ def provider_archive(
     async def provider_workouts(
         session: AsyncSession, start: datetime, stop: datetime
     ) -> list[WorkoutRecord]:
-        return await workouts(session, start, stop, provider)
+        return await mark_tracks(session, await workouts(session, start, stop, provider))
 
     async def samples(
         session: AsyncSession, start: datetime, stop: datetime, source_filter: ColumnElement[bool]

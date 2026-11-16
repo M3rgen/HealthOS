@@ -11,7 +11,14 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
-from app.models import apple, garmin, oauth_credentials, raw_rejections
+from app.models import (
+    apple,
+    garmin,
+    garmin_files,
+    garmin_tracks,
+    oauth_credentials,
+    raw_rejections,
+)
 from app.models.reconciliation import ReconciliationResult, ReconciliationRun
 from app.services.synchronization import reconciliation_reports as reports
 
@@ -36,8 +43,12 @@ def test_populated_report_prevents_downgrade_and_survives_upgrade_check(tmp_path
             "google_heart_projection_state",
             "derived_day_pending",
             "display_preferences",
+            "plan_versions",
+            "plan_state",
             *raw_rejections.TABLES,
             *garmin.TABLES,
+            *garmin_files.TABLES,
+            *garmin_tracks.TABLES,
             garmin.STATE,
             garmin.NORMALIZATION_STATE,
             *oauth_credentials.TABLES,

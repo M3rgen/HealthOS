@@ -70,6 +70,6 @@ def test_upgrading_the_whole_chain_generates_no_statement_that_loses_data(monkey
     statements, bodies = split_function_bodies(ddl)
     assert bodies  # the triggers really were generated
     statements, merges = MERGE_BOOKKEEPING.subn("", statements)
-    assert merges == 4  # 0029 and the Apple extension's merges, as Alembic's offline plan runs them
+    assert merges == 5  # 0029 and the Apple extension's merges, as Alembic's offline plan runs them
     assert LOSES_DATA.findall(statements) == []
     assert set().union(*map(removals_in, bodies)) <= ALLOWED_IN_FUNCTIONS

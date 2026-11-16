@@ -1,0 +1,441 @@
+/* Loaded with workout-detail.js, so the first page load carries none of it. The detail panel takes
+   the timeline's place inside #sports; its body scrolls inside itself and the page never does.
+   Wide screens put the map beside the charts, narrow or short ones stack everything in one
+   scrolling column. The few MapLibre rules the map needs are here too (no MapLibre controls). */
+@layer components {
+  .workout-detail {
+    flex: 1 1 0;
+    min-height: 340px;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin-bottom: 0;
+    padding: 16px 20px 18px;
+  }
+  .workout-detail-head {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    min-width: 0;
+  }
+  .workout-detail-back {
+    flex-shrink: 0;
+  }
+  .workout-detail-heading {
+    min-width: 0;
+  }
+  .workout-detail-heading h2 {
+    margin: 0;
+    font-size: 1.125rem;
+    overflow-wrap: anywhere;
+  }
+  .workout-detail-when {
+    margin: 2px 0 0;
+    color: var(--muted);
+    font-size: 0.8125rem;
+    overflow-wrap: anywhere;
+  }
+  .workout-detail-state {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .workout-detail-status {
+    margin: 0;
+    color: var(--muted);
+    font-size: 0.875rem;
+  }
+  .workout-detail-status:empty {
+    display: none;
+  }
+  .workout-detail-body {
+    flex: 1 1 0;
+    min-height: 0;
+    display: grid;
+    grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr);
+    gap: 18px;
+  }
+  .workout-detail-body[hidden] {
+    display: none;
+  }
+  .workout-detail-map {
+    position: relative;
+    min-height: 0;
+    min-width: 0;
+    border-radius: var(--radius-control);
+    border: 1px solid var(--line-soft);
+    background: var(--inset);
+    overflow: hidden;
+  }
+  .workout-detail-map[data-map="none"] {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+  }
+  .workout-map-canvas,
+  .workout-map-gl {
+    position: absolute;
+    inset: 0;
+  }
+  .workout-map-canvas {
+    touch-action: pan-y;
+  }
+  .workout-detail-map:not([data-map="basemap"]) .workout-map-gl {
+    visibility: hidden;
+  }
+  .workout-map-note:empty {
+    display: none;
+  }
+  .workout-detail-map:not([data-map="none"]) .workout-map-note {
+    position: absolute;
+    left: 10px;
+    top: 10px;
+    right: 10px;
+    width: fit-content;
+    margin: 0;
+    padding: 6px 10px;
+    border-radius: 8px;
+    background: color-mix(in srgb, var(--page) 88%, transparent);
+    border: 1px solid var(--line-soft);
+    color: var(--text);
+  }
+  .workout-map-overlay {
+    position: absolute;
+    inset: 10px 10px 8px auto;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    justify-content: space-between;
+    pointer-events: none;
+  }
+  .workout-map-tools {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 6px;
+  }
+  .workout-map-tools .button,
+  .workout-map-credit {
+    pointer-events: auto;
+    background: color-mix(in srgb, var(--page) 90%, transparent);
+  }
+  .workout-map-tool {
+    width: 44px;
+    min-width: 44px;
+    padding: 0;
+    justify-content: center;
+  }
+  .workout-map-tool svg {
+    width: 20px;
+    height: 20px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+  .workout-map-credit {
+    margin: 0;
+    padding: 2px 8px;
+    border-radius: 6px;
+    font-size: 0.75rem;
+  }
+  .workout-map-credit a {
+    color: var(--text);
+  }
+  .workout-route {
+    display: block;
+  }
+  .workout-route text {
+    fill: var(--muted);
+    font-size: 0.6875rem;
+  }
+  .workout-route-casing {
+    fill: none;
+    stroke: var(--button-ink);
+    stroke-width: 7;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    opacity: 0.85;
+  }
+  .workout-route-line {
+    fill: none;
+    stroke: var(--amber);
+    stroke-width: 3.5;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+  .workout-route-start,
+  .workout-route-end,
+  .workout-route-lap {
+    stroke-width: 2;
+  }
+  .workout-route-start {
+    fill: var(--success);
+    stroke: var(--button-ink);
+  }
+  .workout-route-end {
+    fill: var(--heart-icon);
+    stroke: var(--button-ink);
+  }
+  .workout-route-lap {
+    fill: var(--surface);
+    stroke: var(--amber);
+  }
+  .workout-route-cursor {
+    fill: var(--text);
+    stroke: var(--amber);
+    stroke-width: 3;
+  }
+  .workout-route-scale {
+    fill: none;
+    stroke: var(--muted);
+    stroke-width: 1.5;
+  }
+  .workout-detail-side {
+    min-height: 0;
+    min-width: 0;
+    overflow: auto;
+    overscroll-behavior: contain;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    padding: 0 6px min(72px, 10dvh) 0;
+  }
+  .workout-detail-side > * {
+    flex-shrink: 0;
+  }
+  .workout-detail-summary {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(118px, 1fr));
+    gap: 8px;
+    margin: 0;
+  }
+  .workout-detail-summary > div {
+    padding: 8px 10px;
+    border-radius: var(--radius-control);
+    background: var(--surface-2);
+    border: 1px solid var(--edge);
+    min-width: 0;
+  }
+  .workout-detail-summary dt {
+    color: var(--muted);
+    font-size: 0.75rem;
+  }
+  .workout-detail-summary dd {
+    margin: 2px 0 0;
+    font-size: 1rem;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+  .workout-detail-controls {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 18px;
+  }
+  .workout-detail-controls:empty {
+    display: none;
+  }
+  .workout-detail-toggle {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .workout-detail-toggle-label {
+    color: var(--muted);
+    font-size: 0.8125rem;
+    margin-right: 4px;
+  }
+  .workout-detail-choice {
+    min-height: 36px;
+    padding: 6px 14px;
+    border-radius: 9px;
+    border: 1px solid var(--line);
+    background: transparent;
+    color: var(--muted);
+    font: inherit;
+    font-size: 0.8125rem;
+    font-weight: 550;
+    cursor: pointer;
+  }
+  .workout-detail-choice[aria-pressed="true"] {
+    border-color: var(--amber-line);
+    background: var(--surface-2);
+    color: var(--text);
+  }
+  .workout-charts {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 4px 2px;
+    border-radius: var(--radius-control);
+    touch-action: pan-y;
+  }
+  .workout-charts:focus-visible {
+    outline: 2px solid var(--amber);
+    outline-offset: 2px;
+  }
+  .workout-chart {
+    margin: 0;
+  }
+  .workout-chart figcaption {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    font-size: 0.8125rem;
+    color: var(--muted);
+  }
+  .workout-chart figcaption > span:first-child::before {
+    content: "";
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    margin-right: 6px;
+    border-radius: 50%;
+    background: var(--series);
+  }
+  .workout-chart-value {
+    color: var(--text);
+    font-variant-numeric: tabular-nums;
+  }
+  .workout-chart-plot {
+    height: 88px;
+  }
+  .workout-chart svg,
+  .workout-chart-axis svg {
+    display: block;
+    overflow: visible;
+  }
+  .workout-chart text,
+  .workout-chart-axis text {
+    fill: var(--muted);
+    font-size: 0.6875rem;
+    font-variant-numeric: tabular-nums;
+  }
+  .workout-chart-base {
+    stroke: var(--line);
+  }
+  .workout-chart-guide {
+    stroke: var(--line);
+    stroke-dasharray: 2 4;
+    opacity: 0.8;
+  }
+  .workout-chart-pause {
+    fill: var(--edge-strong);
+  }
+  .workout-chart-lap {
+    stroke: var(--amber-line);
+    stroke-dasharray: 3 3;
+  }
+  .workout-chart-cursor path {
+    stroke: var(--text);
+    opacity: 0.55;
+  }
+  .workout-chart-cursor circle {
+    stroke: var(--surface);
+    stroke-width: 2;
+  }
+  .workout-chart-axis {
+    height: 20px;
+  }
+  .workout-detail-legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 14px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    color: var(--muted);
+    font-size: 0.75rem;
+  }
+  .workout-detail-legend li::before {
+    content: "";
+    display: inline-block;
+    width: 9px;
+    height: 9px;
+    margin-right: 6px;
+    border-radius: 50%;
+    vertical-align: -1px;
+  }
+  .workout-detail-legend [data-mark="start"]::before {
+    background: var(--success);
+  }
+  .workout-detail-legend [data-mark="end"]::before {
+    background: var(--heart-icon);
+  }
+  .workout-detail-legend [data-mark="lap"]::before {
+    border: 2px solid var(--amber);
+  }
+  .workout-detail-legend [data-mark="pause"]::before {
+    border-radius: 2px;
+    background: var(--edge-strong);
+    border: 1px solid var(--line);
+  }
+  .workout-laps h3 {
+    margin: 0 0 6px;
+    font-size: 0.9375rem;
+  }
+  .workout-laps td,
+  .workout-laps th {
+    font-variant-numeric: tabular-nums;
+  }
+  .maplibregl-map {
+    overflow: hidden;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .maplibregl-canvas {
+    position: absolute;
+    left: 0;
+    top: 0;
+  }
+  .maplibregl-canvas-container.maplibregl-interactive {
+    cursor: grab;
+    user-select: none;
+  }
+  .maplibregl-canvas-container.maplibregl-interactive:active {
+    cursor: grabbing;
+  }
+  .maplibregl-canvas-container.maplibregl-touch-drag-pan,
+  .maplibregl-canvas-container.maplibregl-touch-drag-pan .maplibregl-canvas {
+    touch-action: none;
+  }
+  .maplibregl-canvas:focus-visible {
+    outline: 2px solid var(--amber);
+    outline-offset: -2px;
+  }
+  @media (max-width: bp(w900)), (max-height: 30em) {
+    .workout-detail-body {
+      display: flex;
+      flex-direction: column;
+      overflow: auto;
+      overscroll-behavior: contain;
+      gap: 14px;
+    }
+    .workout-detail-body > * {
+      flex-shrink: 0;
+    }
+    .workout-detail-map {
+      height: clamp(220px, 42dvh, 360px);
+    }
+    .workout-detail-map[data-map="none"] {
+      height: auto;
+    }
+    .workout-detail-side {
+      overflow: visible;
+    }
+  }
+  @media (max-width: bp(w540)) {
+    .workout-detail {
+      padding: 14px 14px 16px;
+    }
+    .workout-detail-head {
+      align-items: flex-start;
+      flex-direction: column;
+      gap: 8px;
+    }
+  }
+}

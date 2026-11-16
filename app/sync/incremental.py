@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Awaitable, Callable
-from contextlib import nullcontext
+from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import asynccontextmanager, nullcontext
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
@@ -24,6 +24,7 @@ from app.models.state import JobStatus, SyncState, fetch_round_start
 from app.services.providers.ingestion import PageSource
 from app.services.synchronization.reconciliation_reports import record_changes, reporting
 from app.services.synchronization.retrieval import ReceiptWriter
+from app.sync.catch_up import TypeBusy, recently_covered
 from app.sync.checkpoints import incremental_start
 from app.sync.errors import error_code, error_summary, is_transient
 from app.sync.ownership import CheckedSessions, OwnershipLost, run_ownership
@@ -122,6 +123,72 @@ class IncrementalSync:
         with provenance(context_id=current_context_id() or new_context_id("sync")):
             return await self._run(data_type, requested_start, requested_end, check_owner)
 
+    async def catch_up(
+        self,
+        data_type: str,
+        *,
+        check_owner: Callable[[], Awaitable[None]] | None = None,
+        wait: bool = True,
+        within: timedelta | None = None,
+        prepare: Callable[[], Awaitable[None]] | None = None,
+    ) -> StoreStats | None:
+        """Fetch the incremental window unless a recent complete fetch already covered it.
+
+        Decided under the data type's run ownership, so concurrent notifications of one
+        type catch up once (app/sync/catch_up.py). ``None`` when nothing was fetched.
+        The scheduled catch-up passes ``wait=False`` (TypeBusy instead of queueing behind
+        another owner), its own ``within`` (recently_covered), and ``prepare``, which runs only
+        when a fetch is due, before any sync state changes: it checks the Google credentials.
+        """
+        with provenance(context_id=current_context_id() or new_context_id("sync")):
+            async with self._ownership(data_type, check_owner, wait=wait) as sessions:
+                now = datetime.now(UTC)
+                start = await self._catch_up_start(sessions, data_type, now, within)
+                if start is None:
+                    return None
+                if prepare is not None:
+                    await prepare()
+                return await self._run_rounds(sessions, data_type, start, now)
+
+    async def _catch_up_start(
+        self,
+        sessions: TransactionSessions,
+        data_type: str,
+        now: datetime,
+        within: timedelta | None = None,
+    ) -> datetime | None:
+        async with sessions.begin() as session:
+            state = await session.get(SyncState, data_type)
+            start = incremental_start(
+                state.last_successful_sync if state is not None else None,
+                self.settings.safety_window(data_type),
+                now,
+            )
+            max_days = self.specs[data_type].max_window_days
+            if max_days:
+                # Rollup types reject longer windows; reconciliation covers the rest.
+                start = max(start, now - timedelta(days=max_days))
+            if await recently_covered(session, data_type, start, now, within):
+                return None
+        return start
+
+    @asynccontextmanager
+    async def _ownership(
+        self,
+        data_type: str,
+        check_owner: Callable[[], Awaitable[None]] | None,
+        *,
+        wait: bool = True,
+    ) -> AsyncIterator[TransactionSessions]:
+        if data_type not in self.specs:
+            raise ValueError(f"Unsupported data type: {data_type}")
+        async with run_ownership(self.sessions, data_type, wait=wait) as sessions:
+            if sessions is None:
+                if not wait:
+                    raise TypeBusy(data_type)
+                raise OwnershipLost("sync run ownership was not acquired")
+            yield CheckedSessions(sessions, check_owner) if check_owner is not None else sessions
+
     async def _run(
         self,
         data_type: str,
@@ -129,65 +196,66 @@ class IncrementalSync:
         requested_end: datetime | None,
         check_owner: Callable[[], Awaitable[None]] | None = None,
     ) -> StoreStats:
-        if data_type not in self.specs:
-            raise ValueError(f"Unsupported data type: {data_type}")
-        async with run_ownership(self.sessions, data_type) as sessions:
-            if sessions is None:
-                raise OwnershipLost("sync run ownership was not acquired")
-            if check_owner is not None:
-                sessions = CheckedSessions(sessions, check_owner)
-            spec = self.specs[data_type]
+        async with self._ownership(data_type, check_owner) as sessions:
             request_end = requested_end or datetime.now(UTC)
-            rounds, requested = await self._prepare_rounds(
-                sessions, data_type, requested_start, request_end
-            )
-            total = StoreStats()
-            budget = PageBudget()
-            try:
-                for round_start, round_end, page_token in rounds:
-                    # Finish a foreign checkpoint without attributing its differences to
-                    # this reconciliation's requested range. Keep the public stats contract.
-                    scope = (
-                        nullcontext() if (round_start, round_end) == requested else reporting(None)
+            return await self._run_rounds(sessions, data_type, requested_start, request_end)
+
+    async def _run_rounds(
+        self,
+        sessions: TransactionSessions,
+        data_type: str,
+        requested_start: datetime | None,
+        request_end: datetime,
+    ) -> StoreStats:
+        spec = self.specs[data_type]
+        rounds, requested = await self._prepare_rounds(
+            sessions, data_type, requested_start, request_end
+        )
+        total = StoreStats()
+        budget = PageBudget()
+        try:
+            for round_start, round_end, page_token in rounds:
+                # Finish a foreign checkpoint without attributing its differences to
+                # this reconciliation's requested range. Keep the public stats contract.
+                scope = nullcontext() if (round_start, round_end) == requested else reporting(None)
+                with scope:
+                    await self._fetch_round(
+                        spec,
+                        window=FetchWindow(round_start, round_end, page_token),
+                        run=SyncRun(data_type, sessions, total, budget),
                     )
-                    with scope:
-                        await self._fetch_round(
-                            spec,
-                            window=FetchWindow(round_start, round_end, page_token),
-                            run=SyncRun(data_type, sessions, total, budget),
-                        )
-                await self._set_outcome(sessions, data_type, JobStatus.completed)
-                self._finish(data_type, total, failed=False)
-                event(
-                    logger,
-                    "SYNC_COMPLETED",
-                    data_type=data_type,
-                    records=total.inserted + total.updated,
-                )
-                return total
-            except PaginationPaused:
-                await self._set_outcome(sessions, data_type, JobStatus.pending)
-                # Preserve the existing outcome contract: an incomplete invocation is
-                # never reported as success, even though its pages committed normally.
-                self._finish(data_type, total, failed=True)
-                event(logger, "SYNC_PAUSED", data_type=data_type)
-                raise
-            except Exception as exc:
-                try:
-                    await self._set_outcome(sessions, data_type, JobStatus.failed, exc)
-                except OwnershipLost:
-                    # A replacement owner may already be resuming; never fail its state.
-                    pass
-                self._finish(data_type, total, failed=True)
-                event(
-                    logger,
-                    "SYNC_FAILED",
-                    data_type=data_type,
-                    error_type=type(exc).__name__,
-                    error_code=error_code(exc),
-                    transient=is_transient(exc),
-                )
-                raise
+            await self._set_outcome(sessions, data_type, JobStatus.completed)
+            self._finish(data_type, total, failed=False)
+            event(
+                logger,
+                "SYNC_COMPLETED",
+                data_type=data_type,
+                records=total.inserted + total.updated,
+            )
+            return total
+        except PaginationPaused:
+            await self._set_outcome(sessions, data_type, JobStatus.pending)
+            # Preserve the existing outcome contract: an incomplete invocation is
+            # never reported as success, even though its pages committed normally.
+            self._finish(data_type, total, failed=True)
+            event(logger, "SYNC_PAUSED", data_type=data_type)
+            raise
+        except Exception as exc:
+            try:
+                await self._set_outcome(sessions, data_type, JobStatus.failed, exc)
+            except OwnershipLost:
+                # A replacement owner may already be resuming; never fail its state.
+                pass
+            self._finish(data_type, total, failed=True)
+            event(
+                logger,
+                "SYNC_FAILED",
+                data_type=data_type,
+                error_type=type(exc).__name__,
+                error_code=error_code(exc),
+                transient=is_transient(exc),
+            )
+            raise
 
     async def _prepare_rounds(
         self,

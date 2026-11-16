@@ -22,13 +22,20 @@ import uuid
 from pathlib import Path
 
 import pytest
+from fit_factory import track_activity
 from identity_records import HEART, STEPS, heart, steps, store
-from sqlalchemy import text
+from sqlalchemy import select, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from support.garmin_files import NOW, seed_activities
+from support.plans import sample
 
+from app.models.garmin import GarminRawRecord
+from app.schemas.plan import PlanStateBody
 from app.services.archive.raw_history_verification import verify_guards
+from app.services.operations.plans import import_document, put_state
+from app.services.providers.garmin_file_archive import FileOutcome, store_file_result
 
 pytestmark = pytest.mark.integration
 
@@ -181,6 +188,13 @@ async def test_encrypted_backup_restores_every_table_identically(
     await store(pg_sessions, HEART, heart(60))
     await store(pg_sessions, HEART, heart(61))  # a second version: raw_health_data_versions
     await store(pg_sessions, STEPS, steps(120))
+    await _seed_activity_files(pg_sessions)
+    async with pg_sessions.begin() as session:
+        await import_document(session, {"schema": 1})
+        await import_document(session, sample())
+        await put_state(
+            session, PlanStateBody(start_date="2026-01-01", checked_item_ids=["example-grain"])
+        )
 
     url = make_url(database_url)
     target = f"healthos_restore_{uuid.uuid4().hex[:10]}"
@@ -216,6 +230,10 @@ async def test_encrypted_backup_restores_every_table_identically(
         env |= {"PGHOST": url.host or "", "PGPORT": str(url.port or 5432)}
     try:
         before = await _table_digests(pg_sessions)
+        assert before["plan_versions"][0] == 2 and before["plan_state"][0] == 1
+        assert before["garmin_activity_files"][0] == 1
+        assert before["garmin_tracks"][0] == 1
+        assert before["garmin_activity_file_results"][0] == 3
         written = (await asyncio.to_thread(_run, "backup.sh", env)).strip().splitlines()[-1]
         backup = Path(written) if Path(written).is_absolute() else ROOT / written
         assert backup.suffix == ".gpg" and backup.read_bytes()[:5] != b"PGDMP"
@@ -234,10 +252,7 @@ async def test_encrypted_backup_restores_every_table_identically(
             assert await _table_digests(restored) == before
             async with restored() as session:
                 assert await verify_guards(session) == []
-            # The append-only guard came through the dump: a restored archive still refuses.
-            with pytest.raises(DBAPIError):
-                async with restored.begin() as session:
-                    await session.execute(text("DELETE FROM raw_health_data"))
+            await _assert_restored_guards(restored)
         finally:
             await engine.dispose()
     finally:
@@ -250,3 +265,30 @@ async def test_encrypted_backup_restores_every_table_identically(
 async def _alembic_version(sessions) -> str:
     async with sessions() as session:
         return await session.scalar(text("SELECT version_num FROM alembic_version"))
+
+
+async def _seed_activity_files(pg_sessions):
+    await seed_activities(pg_sessions, 3)
+    outcomes = {
+        "1": FileOutcome("downloaded", track_activity(5)),
+        "2": FileOutcome("not_found"),
+        "3": FileOutcome("invalid", None, "not_fit", "b" * 64, 20),
+    }
+    async with pg_sessions.begin() as session:
+        for row in await session.scalars(
+            select(GarminRawRecord).where(GarminRawRecord.kind == "activities")
+        ):
+            await store_file_result(session, row.id, row.key, outcomes[row.key], NOW)
+
+
+async def _assert_restored_guards(restored):
+    # The immutable guards must survive the dump for both old and new archives.
+    for table in (
+        "raw_health_data",
+        "plan_versions",
+        "garmin_activity_files",
+        "garmin_activity_file_results",
+    ):
+        with pytest.raises(DBAPIError):
+            async with restored.begin() as session:
+                await session.execute(text(f"DELETE FROM {table}"))

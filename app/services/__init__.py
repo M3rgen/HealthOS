@@ -1,13 +1,10 @@
 """Application services, grouped by responsibility.
 
-Use the subpackage interfaces for new imports. Flat module paths are compatibility
-aliases that emit DeprecationWarning with the replacement path on first import. They
-have been deprecated since 0.2.2.1; remove in 0.2.4, after the 0.2.3 release.
+Import modules through their subpackage, e.g. ``app.services.shared.query_ranges``. The flat
+``app.services.<module>`` aliases were removed in 0.2.4.
 """
 
 from typing import TYPE_CHECKING
-
-from ._compat import install as _install
 
 if TYPE_CHECKING:
     from . import (
@@ -35,5 +32,3 @@ __all__ = [
     "synchronization",
     "umay",
 ]
-
-_install(__name__, __all__)

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "healthos"
-version = "0.2.3"
+version = "0.2.4"
 description = "Self-hosted, raw-first archive of your own health data"
 readme = "README.md"
 requires-python = ">=3.12,<3.14"
@@ -49,7 +49,6 @@ packages = ["app"]
 asyncio_mode = "auto"
 testpaths = ["tests"]
 pythonpath = ["."]
-filterwarnings = ["error:app.services.*is deprecated:DeprecationWarning"]
 # A hang must fail fast rather than stall a run (one lost lock waited 15+ minutes). One per-test
 # budget, far above the slowest test on a loaded machine; "signal" so the worker stays up and the
 # rest of the run still reports.

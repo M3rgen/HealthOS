@@ -7,7 +7,7 @@ from garmin_records import TOKEN
 from test_garmin_token_redaction import KEY
 from test_garmin_token_redaction import echo_body as echo_body
 
-from app.garmin.client import body_contains_secret
+from app.garmin.exchange import body_contains_secret
 from app.garmin.secret_scan import json_strings
 
 

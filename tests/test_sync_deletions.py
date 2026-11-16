@@ -267,7 +267,8 @@ async def test_widened_webhook_window_never_moves_the_watermark_past_now(session
         Settings(), sessions, GoogleSource(client), {"exercise": REGISTRY["exercise"]}
     )
     begin = datetime.now(UTC).replace(microsecond=0) - timedelta(hours=1)
-    client.responses = [Page([], None)]
+    # The notified window, then the type's catch-up (app/sync/catch_up.py).
+    client.responses = [Page([], None), Page([], None)]
     await webhook_delete(
         sessions,
         service,
@@ -277,5 +278,7 @@ async def test_widened_webhook_window_never_moves_the_watermark_past_now(session
     )
     async with sessions() as session:
         state = await session.get(SyncState, "exercise")
-    assert client.windows[-1][1] > datetime.now(UTC)  # civil start times run ahead of UTC
+    notified, caught_up = client.windows
+    assert notified[1] > datetime.now(UTC)  # civil start times run ahead of UTC
+    assert caught_up[1] <= datetime.now(UTC)
     assert as_utc(state.last_successful_sync) <= datetime.now(UTC)

@@ -32,6 +32,13 @@ that concerns your health.
   retention.
 - **Nothing personal in the repository.** Real health records, secrets, logs, backups and local
   verification outputs are excluded from this repository; screenshots and fixtures are synthetic.
+- **No real location in the repository.** A workout track is the most sensitive record HealthOS
+  keeps. No real coordinate, track, FIT/GPX/TCX file, workout time series or place name enters
+  the code, tests, fixtures, documentation or commit messages, and logs name no coordinate. Tests
+  use invented positions inside a small box around 0° N 0° E, in open sea. The public snapshot and
+  `make verify` stop on any other coordinate in a text file: decimal latitude/longitude pairs, FIT
+  semicircle or E7 integers next to their field names, GeoJSON/KML `coordinates` and encoded
+  polylines ([details](DEVELOPMENT.md#continuous-integration-and-releases)).
 
 ## What leaves your machine
 

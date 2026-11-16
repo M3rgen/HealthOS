@@ -1,3 +1,4 @@
+import asyncio
 import csv
 import io
 import uuid
@@ -9,13 +10,21 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import Response
+from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, field_validator, model_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import ManualWriteRoute, require_job_request
+from app.core.fit import MAX_FIT_RECORDS
 from app.db.session import get_session
-from app.schemas.dashboard import Dashboard, History, Measurement, MeasurementFlag, Workout
+from app.schemas.dashboard import (
+    Dashboard,
+    History,
+    Measurement,
+    MeasurementFlag,
+    Workout,
+    WorkoutTrackView,
+)
 from app.services.archive.manual_flags import REASON_LENGTH, TEST_FLAG
 from app.services.dashboard_views.dashboard import dashboard_data
 from app.services.dashboard_views.dashboard_history import HistoryPageNotFound, history_data
@@ -23,6 +32,13 @@ from app.services.dashboard_views.dashboard_workouts import create_workout, list
 
 # Compatibility for callers of the original API helper.
 from app.services.dashboard_views.dashboard_workouts import place_workouts as place_workouts
+from app.services.providers.garmin_track_view import (
+    MIN_POINTS,
+    TrackNotFound,
+    plan_track,
+    track_document,
+    workout_track,
+)
 from app.services.readers.dashboard_manual import (
     MeasurementNotFound,
     create_measurement,
@@ -115,6 +131,31 @@ async def workouts(
     if first > current:
         raise HTTPException(422, "Gelecek ay seçilemez.")
     return await list_workouts(session, first, zone)
+
+
+@router.get("/workouts/{workout_id}/track", response_model=WorkoutTrackView)
+async def workout_track_view(
+    workout_id: uuid.UUID,
+    max_points: int | None = Query(None, ge=MIN_POINTS, le=MAX_FIT_RECORDS),
+    session: AsyncSession = Depends(get_session),
+) -> Response | WorkoutTrackView:
+    """A listed FIT workout's track (docs/reference/api.md); ``{"track": null}`` without one.
+
+    The read ends before the body is produced; the body streams in bounded chunks.
+    """
+    try:
+        track = await workout_track(session, workout_id)
+    except TrackNotFound as exc:
+        raise HTTPException(404, str(exc)) from exc
+    await session.rollback()  # Read-only: release the connection before streaming.
+    if track is None:
+        return {"track": None}
+    plan = await asyncio.to_thread(plan_track, track.stored, max_points)
+    return StreamingResponse(
+        track_document(track, plan),
+        media_type="application/json",
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 def check_zone(timezone: str) -> ZoneInfo:

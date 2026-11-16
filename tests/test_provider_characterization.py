@@ -29,72 +29,72 @@ from app.services.readers.dashboard_queries import DashboardQuery
 
 # Platform candidates and selected hourly evidence intentionally change these digests.
 EXPECTED = {
-    ("UTC", False, "live"): "d61e0fd1a3a9b342ea1ff7a0d16e70100528e57e267c8cfea05e1af37ad4f985",
+    ("UTC", False, "live"): "bd44ad79d2d70c2c98dc954498140d13776ae88e2e27fb9c13e42454ea4c11dd",
     (
         "Europe/Paris",
         False,
         "live",
-    ): "d25ac5f34b1b352e2e61e2c22d22de18b5d7d8e38b54e5516bed8542e6affaae",
+    ): "0124abc0fa75d7e7ccae5d003e382bb1a9b16e9b4587835e15483dc6ef61d333",
     (
         "America/New_York",
         False,
         "live",
-    ): "56e85c43a3369e26c9fb8dbec2dc4ad0b3f8592bc9c6122e07f26163ca23d3b0",
-    ("UTC", True, "live"): "d3dac45e6bd1ac0bbcff58e9c226d488cf569bcce37466d5b45b04b16313bedc",
+    ): "8c5bd086de182fcb18d6cd509d127cddfa3d0d85543f88d62cce85910e984988",
+    ("UTC", True, "live"): "49573af5ad9fe1422dfa8607d6584d83f3a946495a3c993a370961bf802a4a48",
     (
         "Europe/Paris",
         True,
         "live",
-    ): "7c55a60142f0cb37b4e30be8fb40c9b992b439c82fcc057a333c288399784958",
+    ): "aaf05b6322842a47e532e56e63aa4d65d5ba58148442d217f62bd776dcaff09d",
     (
         "America/New_York",
         True,
         "live",
-    ): "940cdcc07d10241f6ff2c0565f1da298f7595cb04ec2997c68c720a99c4189a2",
-    ("UTC", False, "deleted"): "b9c45e8ea05c78b3f78a7192c7fc018ecd69e0ee7e5e2fb1edfd369d85555f9c",
+    ): "20f0572c2ce9d59ba60e2963c732cf4ac4f5d1364bafd8b89687f0b993431311",
+    ("UTC", False, "deleted"): "fb0e1f29948688a176651e4ded5be9a8c3070c287a8e5d673e68291e0a2601fa",
     (
         "Europe/Paris",
         False,
         "deleted",
-    ): "52cbec2446f69057c4b9cda3211cc30ff9bc273a943f41bac75dbca23582de09",
+    ): "707834a1c1d6d1652dc2bfab2da3329349c3be373b9e3824b82986b1cca76563",
     (
         "America/New_York",
         False,
         "deleted",
-    ): "98612b65cf4bad971a836144c757115bec65f144997ebdb8817171cc532cacdc",
-    ("UTC", True, "deleted"): "141bb62ba76faa684ab0f4a594b1514b1ea879d8a2ae4741a21eb8cd4f198099",
+    ): "d6a963fbc4693df1790fbf36eef090d46f9481efafe3316fa04af5b7dc76dedd",
+    ("UTC", True, "deleted"): "27c496c266d60b7e4aa84aa46819852af95ea69916f841bf02330c290ac5a520",
     (
         "Europe/Paris",
         True,
         "deleted",
-    ): "d000b1b360b06e19c78764e58497f17f36efc4406bba76893648a57b27d7e787",
+    ): "d2fb296537f82d7097ad6207a2f966b43ec1580b5ce84dd0ab90d226cf156372",
     (
         "America/New_York",
         True,
         "deleted",
-    ): "e5eb714016bf1d05f594fc8b40262a82de73a8dad9a3123a1c8331c56e283326",
-    ("UTC", False, "valid"): "d61e0fd1a3a9b342ea1ff7a0d16e70100528e57e267c8cfea05e1af37ad4f985",
+    ): "749f5f881a6a5c6ca157611c4d1ca2e565ffb9bfdf2c2e2c484ae5bb18644f4c",
+    ("UTC", False, "valid"): "bd44ad79d2d70c2c98dc954498140d13776ae88e2e27fb9c13e42454ea4c11dd",
     (
         "Europe/Paris",
         False,
         "valid",
-    ): "d25ac5f34b1b352e2e61e2c22d22de18b5d7d8e38b54e5516bed8542e6affaae",
+    ): "0124abc0fa75d7e7ccae5d003e382bb1a9b16e9b4587835e15483dc6ef61d333",
     (
         "America/New_York",
         False,
         "valid",
-    ): "56e85c43a3369e26c9fb8dbec2dc4ad0b3f8592bc9c6122e07f26163ca23d3b0",
-    ("UTC", True, "valid"): "d3dac45e6bd1ac0bbcff58e9c226d488cf569bcce37466d5b45b04b16313bedc",
+    ): "8c5bd086de182fcb18d6cd509d127cddfa3d0d85543f88d62cce85910e984988",
+    ("UTC", True, "valid"): "49573af5ad9fe1422dfa8607d6584d83f3a946495a3c993a370961bf802a4a48",
     (
         "Europe/Paris",
         True,
         "valid",
-    ): "7c55a60142f0cb37b4e30be8fb40c9b992b439c82fcc057a333c288399784958",
+    ): "aaf05b6322842a47e532e56e63aa4d65d5ba58148442d217f62bd776dcaff09d",
     (
         "America/New_York",
         True,
         "valid",
-    ): "940cdcc07d10241f6ff2c0565f1da298f7595cb04ec2997c68c720a99c4189a2",
+    ): "20f0572c2ce9d59ba60e2963c732cf4ac4f5d1364bafd8b89687f0b993431311",
 }
 
 

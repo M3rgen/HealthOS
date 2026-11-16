@@ -4,7 +4,7 @@ Part of the [technical reference](../REFERENCE.md).
 
 ## Local API
 
-With Google and Garmin selected, the app registers 33 OpenAPI paths. The paths and their methods,
+With Google and Garmin selected, the app registers 36 OpenAPI paths. The paths and their methods,
 plus the WebSocket, are listed below, from the routers in `app/api/` as `app/main.py` includes them.
 Paths take query parameters as shown; JSON bodies are described where they matter.
 
@@ -33,11 +33,25 @@ Paths take query parameters as shown; JSON bodies are described where they matte
   ([Architecture](../ARCHITECTURE.md)).
 - `GET /api/dashboard/workouts?month=YYYY-MM-DD&timezone=<zone>` and
   `POST /api/dashboard/workouts` (manual workouts; body `exercise_type`, `start_time`,
-  `end_time`, optional `calories_kcal`, `distance_meters`)
+  `end_time`, optional `calories_kcal`, `distance_meters`). Every row has `has_track`: `true`
+  when the track endpoint below returns a track for its `id`.
+- `GET /api/dashboard/workouts/{workout_id}/track?max_points=<n>` (a listed Garmin or FIT
+  workout's track: summary, laps and columnar samples in SI units, optionally thinned to
+  100–50,000 points; `{"track": null}` without a track, `404` for another source or an unknown
+  id, `no-store`, streamed; [track API](garmin-tracks.md#track-api))
+- `GET /api/map/tiles.pmtiles` (the operator's own PMTiles basemap for the workout map, the file
+  `MAP_TILES_FILE` names and no other: one HTTP byte range `206`, no `Range` the whole file, both
+  streamed; several ranges or one past the end `416`; `404` (`no-store`) without the file;
+  `Cache-Control: private, max-age=3600` with an `ETag`; [workout map](maps.md#the-endpoint))
 - `GET /api/settings/appearance`, `PUT /api/settings/appearance` (the shared look; last write
   wins, body at most 4 KiB)
 - `GET /api/settings/display`, `PUT /api/settings/display` (shared display preferences; same
   limit, `409` when the stored row was written by a newer version)
+- `GET /api/plan`, `PUT /api/plan/state` (the private plan document and its replaceable state:
+  start date and checked shopping item ids; `GET` returns `{"plan": null}` while no plan has been
+  imported, `PUT` body at most 128 KiB and refuses unknown item ids with `422`; both `no-store`,
+  require a login session or bearer token, and `PUT` also `X-HealthOS-Request: 1`;
+  [plan document](plan.md))
 - `GET /api/devices` (**Cihazlarım**: the archive's devices with their freshness status, see
   [Devices](identity-and-versions.md#devices))
 - `POST /webhooks/apple-health` (Health Auto Export receiver, its own token, off by default), `POST /api/apple/import` (export.zip/export.xml upload) and `GET /api/apple/status` ([Apple Health](apple.md#apple-health-github-version))

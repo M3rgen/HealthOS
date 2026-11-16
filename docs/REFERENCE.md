@@ -19,6 +19,7 @@ The technical reference is split by topic; this page is its table of contents.
 | Garmin | [reference/garmin.md](reference/garmin.md) | Garmin Connect Personal API source |
 | Apple Health | [reference/apple.md](reference/apple.md) | Health Auto Export receiver and `export.zip` import (published release only) |
 | Source precedence | [reference/source-precedence.md](reference/source-precedence.md) | Which source is shown first when several report the same data |
+| Workout map | [reference/maps.md](reference/maps.md) | The workout detail view, your own PMTiles basemap, its endpoint and attribution |
 | Local API | [reference/api.md](reference/api.md) | HTTP routes of the local API |
 | Troubleshooting | [reference/troubleshooting.md](reference/troubleshooting.md) | Common failures |
 | Analytics compatibility | [reference/analytics.md](reference/analytics.md) | Analytics views and quarantined rollup records |
