@@ -23,6 +23,7 @@ from app.services.providers.ingestion_readers import ARCHIVES
 KINDS = {"steps": "steps", "sleep": "sleep", "heart": "daily-resting-heart-rate"}
 MODELS = {"steps": Steps, "sleep": SleepSession, "heart": RestingHeartRate}
 MIDDLE = TODAY - timedelta(days=35)
+STEP_WINDOW = "SELECT raw_health_data.raw_json \nFROM raw_health_data \n"
 
 
 def payload(metric, name, day, invalid=False):
@@ -46,8 +47,18 @@ async def read(sessions, metric="steps", **options):
 async def checked(sessions, monkeypatch, metric, first, last, *, cold=True):
     with counted_reads(sessions, monkeypatch) as (sql, _):
         result = await read(sessions, metric)
+    statements = read_statements(sql)
+    extra = 0
+    if metric == "steps" and cold:
+        # Google step bounds read the first and newest start (one statement in place of the
+        # former full read), then windows at the archive's ends that double from four days:
+        # none for an empty archive, at most seven per end across these <= 130-day archives.
+        anchors = [s for s in statements if s.startswith("SELECT min(raw_health_data.")]
+        windows = [s for s in statements if s.startswith(STEP_WINDOW)]
+        assert len(anchors) == 1 and len(windows) <= 2 * 7, sql
+        extra = len(windows)
     # GitHub-only Apple extension: + its bounds aggregate (cold only) and its page read.
-    assert len(read_statements(sql)) == (7 + 2 if cold else 4 + 1), sql
+    assert len(statements) == (7 + 2 if cold else 4 + 1) + extra, sql
     assert (result["earliest_date"], result["latest_date"]) == (first, last)
     assert result == await read(sessions, metric, use_bounds_cache=False)
     assert result == await read(sessions, metric)

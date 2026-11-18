@@ -15,6 +15,7 @@ from app.models.raw_versions import RawApiResponse, RawHealthDataVersion
 from app.models.state import RawHealthData
 from app.parsers.identity import google_name, record_identity
 from app.services.identities.identity_backfill_reading import spec_for
+from app.services.readers.measurement_windows import raw_interval_window
 from support.sqlite_guards import SQLITE_TRIGGER_SQL
 from support.sqlite_ownership import _SqliteLock
 
@@ -127,7 +128,13 @@ def refuse_while_held(operations, table, schema, where, what):
         raise RuntimeError(_refused(what))
 
 
+def one_step_window(session, raw, start, stop):
+    """SQLite has no interval type: the step window stays one part (the same rows)."""
+    return (raw_interval_window("steps", raw, start, stop),)
+
+
 OPERATIONS = {
+    "app.services.interpretation.google_daily_readers._step_window_parts": one_step_window,
     "app.services.readers.heart_maintenance.fence": denied,
     "app.services.readers.heart_projection.packets": no_role_risk,
     "app.sync.ownership._run_lock": _SqliteLock,

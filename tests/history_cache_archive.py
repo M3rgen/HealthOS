@@ -85,8 +85,7 @@ def counted_reads(sessions, monkeypatch):
 
         async def counted_execute(self, *args, **kwargs):
             result = await execute(self, *args, **kwargs)
-            # GitHub-only Apple extension: its readers run ORM selects, whose result has no
-            # ``returns_rows`` (it always carries rows); freezing counts them the same way.
+            # ORM-executed selects return a buffered ChunkedIteratorResult (no returns_rows).
             if getattr(result, "returns_rows", True):
                 frozen = result.freeze()
                 rows.extend([0] * len(frozen.data))

@@ -50,16 +50,16 @@ The guided installer checks Docker, writes `.env` with fresh secrets, configures
 **Linux, Raspberry Pi, VPS, macOS:**
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/M3rgen/HealthOS/v0.2.4/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/M3rgen/HealthOS/v0.2.5/install.sh | bash
 ```
 
 **Windows 10/11** (PowerShell):
 
 ```powershell
-irm https://raw.githubusercontent.com/M3rgen/HealthOS/v0.2.4/install.ps1 | iex
+irm https://raw.githubusercontent.com/M3rgen/HealthOS/v0.2.5/install.ps1 | iex
 ```
 
-These install the release v0.2.4. When it finishes, open **[localhost:8000](http://localhost:8000)** and enter the access token it printed (on a server, through an SSH tunnel). Re-running it is safe: it backs up `.env` first and never replaces a secret, removes a volume or deletes a backup. Reading the script first with `--dry-run`, the development version, every option and per-platform details are in the [installation guide](docs/INSTALL.md); a coding agent can also install it for you by following [AI_INSTALL.md](https://raw.githubusercontent.com/M3rgen/HealthOS/v0.2.4/docs/AI_INSTALL.md).
+These install the release v0.2.5. When it finishes, open **[localhost:8000](http://localhost:8000)** and enter the access token it printed (on a server, through an SSH tunnel). Re-running it is safe: it backs up `.env` first and never replaces a secret, removes a volume or deletes a backup. Reading the script first with `--dry-run`, the development version, every option and per-platform details are in the [installation guide](docs/INSTALL.md); a coding agent can also install it for you by following [AI_INSTALL.md](https://raw.githubusercontent.com/M3rgen/HealthOS/v0.2.5/docs/AI_INSTALL.md).
 
 ### Manual setup
 
@@ -68,7 +68,7 @@ The installer automates the steps below; you can also do them by hand. Requireme
 ### 1. Clone and configure
 
 ```sh
-git clone --branch v0.2.4 https://github.com/M3rgen/HealthOS.git
+git clone --branch v0.2.5 https://github.com/M3rgen/HealthOS.git
 cd HealthOS
 make env
 install -d -m 755 backup-status
@@ -169,6 +169,6 @@ Contributions are welcome. Keep changes focused, use synthetic examples only and
 
 ## Project status and license
 
-**Latest published release: [v0.2.4](https://github.com/M3rgen/HealthOS/releases/tag/v0.2.4).** This source tree declares 0.2.4 ([Changelog](CHANGELOG.md)). Upgrading a v0.2.2 install is covered in the [runbook](docs/RUNBOOK.md#upgrade-from-v022).
+**Latest published release: [v0.2.5](https://github.com/M3rgen/HealthOS/releases/tag/v0.2.5).** This source tree declares 0.2.5 ([Changelog](CHANGELOG.md)). Upgrading a v0.2.2 install is covered in the [runbook](docs/RUNBOOK.md#upgrade-from-v022).
 
 Project code is available under the [MIT License](LICENSE). The generic anatomical model retains its [MakeHuman provenance and CC0 license](frontend/public/models/PROVENANCE.md). HealthOS is an independent project and is not affiliated with Google, Fitbit, Garmin, Apple or OpenAI.

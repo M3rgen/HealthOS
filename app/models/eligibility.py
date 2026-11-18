@@ -12,6 +12,8 @@ tests/test_eligibility.py compares the two.
 
 from __future__ import annotations
 
+from typing import Any
+
 from sqlalchemy import and_, or_, select
 
 import app.models.health  # noqa: F401 - the normalized tables raw_counted probes
@@ -74,6 +76,24 @@ def raw_counted(raw=RawHealthData, data_types=None):
         raw.is_quarantined.is_(False),
         ~held_elsewhere(raw.id),
         *(~clause for clause in normalized_quarantined(raw, data_types)),
+    )
+
+
+def raw_counted_of_type(raw: Any, data_type: str):
+    """``raw_counted(raw, (data_type,))`` for a query that keeps ``raw.data_type == data_type``.
+
+    Except for heart rate, the supersession probe goes by the row's key (``key_held_elsewhere``)
+    instead of its id: the same links and holders, since a link records both rows' keys and
+    neither can change, but on the small index of that type's links (migration
+    20261116_0041), where the id probe lands anywhere among every type's links. Heart rate
+    has no such index (nine tenths of the links) and keeps the id probe."""
+    if data_type == "heart-rate":
+        return raw_counted(raw, (data_type,))
+    return and_(
+        raw.source_deleted_at.is_(None),
+        raw.is_quarantined.is_(False),
+        ~key_held_elsewhere(data_type, raw.google_data_point_id),
+        *(~clause for clause in normalized_quarantined(raw, (data_type,))),
     )
 
 

@@ -62,6 +62,22 @@ class RawHealthData(TimestampMixin, Base):
             "google_data_point_id",
             postgresql_where=text("source_deleted_at IS NOT NULL"),
         ),
+        # The few step intervals longer than a day (migration 20261116_0041): the others of a
+        # window lie in a closed range of the freshness index (measurement_windows.LONG_STEP).
+        Index(
+            "ix_raw_health_data_long_steps",
+            "source_start_time",
+            # measurement_windows.step_is_long / LONG_STEP_SQL: only bounds within the years
+            # 1-9999 are subtracted, so no row's write can fail on this predicate.
+            postgresql_where=text(
+                "CASE WHEN data_type <> 'steps' THEN false WHEN source_start_time >= "
+                "'0001-01-01 00:00:00+00'::timestamptz AND source_start_time < "
+                "'10000-01-01 00:00:00+00'::timestamptz AND source_end_time >= "
+                "'0001-01-01 00:00:00+00'::timestamptz AND source_end_time < "
+                "'10000-01-01 00:00:00+00'::timestamptz THEN (source_end_time - "
+                "source_start_time) > interval '1 day' ELSE true END"
+            ),
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)

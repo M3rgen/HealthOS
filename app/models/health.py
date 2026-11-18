@@ -4,7 +4,17 @@ import uuid
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import JSON, Boolean, DateTime, Index, Numeric, String, UniqueConstraint, false
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    DateTime,
+    Index,
+    Numeric,
+    String,
+    UniqueConstraint,
+    false,
+    text,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.providers import GOOGLE
@@ -34,8 +44,16 @@ class SourceMixin:
     quarantine_reason: Mapped[str | None] = mapped_column(String(255))
 
 
+def non_google(name: str, *columns: str) -> Index:
+    """A partial index of a table's non-Google rows (migration 20261116_0041): the provider
+    readers select one provider, a small share next to the Google rows."""
+    where = text(f"provider <> '{GOOGLE}'")
+    return Index(name, *columns, postgresql_where=where)
+
+
 class HeartRate(SourceMixin, TimestampMixin, Base):
     __tablename__ = "heart_rate"
+    __table_args__ = (non_google("ix_heart_rate_provider_time", "provider", "timestamp"),)
     timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
     bpm: Mapped[Decimal] = mapped_column(Numeric(10, 3), nullable=False)
     motion_context: Mapped[str | None] = mapped_column(String(128))
@@ -43,6 +61,9 @@ class HeartRate(SourceMixin, TimestampMixin, Base):
 
 class HeartRateVariability(SourceMixin, TimestampMixin, Base):
     __tablename__ = "heart_rate_variability"
+    __table_args__ = (
+        non_google("ix_heart_rate_variability_provider_record", "provider", "source_record_id"),
+    )
     timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
     rmssd: Mapped[Decimal | None] = mapped_column(Numeric(12, 4))
     metrics: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
@@ -50,6 +71,9 @@ class HeartRateVariability(SourceMixin, TimestampMixin, Base):
 
 class OxygenSaturation(SourceMixin, TimestampMixin, Base):
     __tablename__ = "oxygen_saturation"
+    __table_args__ = (
+        non_google("ix_oxygen_saturation_provider_record", "provider", "source_record_id"),
+    )
     timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
     spo2: Mapped[Decimal] = mapped_column(Numeric(8, 4), nullable=False)
 
@@ -69,7 +93,10 @@ class SleepSession(SourceMixin, TimestampMixin, Base):
 
 class Steps(SourceMixin, TimestampMixin, Base):
     __tablename__ = "steps"
-    __table_args__ = (Index("ix_steps_range", "start_time", "end_time"),)
+    __table_args__ = (
+        Index("ix_steps_range", "start_time", "end_time"),
+        non_google("ix_steps_provider_record", "provider", "source_record_id"),
+    )
     start_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     end_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     count: Mapped[Decimal] = mapped_column(Numeric(20, 3), nullable=False)

@@ -539,7 +539,7 @@ fails with nothing changed. Duration does not depend on the size of the archive.
 A merge revision with parents `20261108_0028` (installs of `main`) and `20261109_p001` (the bridge for
 v0.2.2 stamps). Its own identity is unchanged. It runs no SQL in either direction.
 `alembic upgrade head` from either line passes through it, and
-`alembic current` then prints `20261115_0040 (head)` ([FIT workout track links](#fit-workout-track-links--20261115_0040)); [Garmin FIT tracks](reference/garmin-tracks.md) documents `20261115_0039`; [Garmin original activity files](#garmin-original-activity-files--20261115_0038) documents `20261115_0038`; [plan document](#plan-document--20261115_0037) documents the preceding `20261115_0037`; [Google heart projection](reference/heart-projection.md) documents the preceding `20261114_0036` with its disposable packets and resumable fill; [Garmin time evidence](reference/garmin.md#time-evidence-and-recovery) documents `20261112_0035`.
+`alembic current` then prints `20261116_0041 (head)` ([reader indexes](#reader-indexes--20261116_0041)); [FIT workout track links](#fit-workout-track-links--20261115_0040) documents `20261115_0040`; [Garmin FIT tracks](reference/garmin-tracks.md) documents `20261115_0039`; [Garmin original activity files](#garmin-original-activity-files--20261115_0038) documents `20261115_0038`; [plan document](#plan-document--20261115_0037) documents the preceding `20261115_0037`; [Google heart projection](reference/heart-projection.md) documents the preceding `20261114_0036` with its disposable packets and resumable fill; [Garmin time evidence](reference/garmin.md#time-evidence-and-recovery) documents `20261112_0035`.
 
 
 ## Garmin record observations — 20261111_0030
@@ -635,12 +635,76 @@ guard, and a downgrade drops it even with rows. No existing table is read, locke
 revision. Garmin API workouts need no link (they reach their file through
 `garmin_activity_file_results`). See [track API](reference/garmin-tracks.md#track-api).
 
-## Apple extension merges — 20261111_a002, 20261112_a003, 20261112_a004, 20261114_a005, 20261115_a006, 20261115_a007
+## Reader indexes — 20261116_0041
+
+Adds six partial indexes and changes no data, so the past-week, month, coverage and history
+views stop reading rows they then drop when the database is cold:
+
+| Index | Rows | For |
+| --- | --- | --- |
+| `ix_raw_health_data_long_steps` | step rows longer than a day, or with a bound missing, infinite or outside the years 1–9999 (only bounds within them are subtracted, so no write can fail on the predicate; every constant is in the statement, so generic plans use it too) | a step window bounded on both sides (the rest ends within a day after it, on the freshness index) |
+| `ix_raw_health_data_supersessions_type_keys` | links of every type but heart rate | supersession probes by type and key, index-only |
+| `ix_heart_rate_provider_time` | non-Google heart rate | Garmin, FIT and sample heart rate by time |
+| `ix_steps_provider_record`, `ix_oxygen_saturation_provider_record`, `ix_heart_rate_variability_provider_record` | non-Google rows | the provider daily values by key |
+
+Each is built `CONCURRENTLY`, one at a time and the long-step index first, outside a
+transaction: writers are not blocked, but every build reads its whole table twice, and it waits
+for every transaction older than itself. No lock or statement timeout applies, so a role's
+`statement_timeout` cannot cancel a build half way.
+
+So that no build waits for a dump, none is started while another client session of the
+database holds a transaction or snapshot open (autovacuum does not count: a build does not wait
+for it). The upgrade waits up to ten seconds for a moment when none does (the running
+application's transactions are short), then leaves the remaining indexes for later and goes on
+without them, printing a `WARNING 20261116_0041: indexes left for later ...` followed by their
+statements, one per line. **Do not deploy while the nightly backup runs.**
+
+Until an index is built the views it serves stay as slow as before this revision, no slower:
+without a valid long-step index the step reader keeps the old one-part window. `healthos
+verify` names every missing or invalid index of this revision, with its statements. Run each
+statement on its own, in interactive `psql` or one `-c` per statement (`psql -c` runs a
+multi-statement string in one transaction, which `CONCURRENTLY` refuses), when no backup runs:
+
+```sh
+docker compose exec postgres psql -U health -d health \
+  -c "DROP INDEX CONCURRENTLY IF EXISTS ix_heart_rate_provider_time"
+docker compose exec postgres psql -U health -d health \
+  -c "CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_heart_rate_provider_time ON heart_rate (provider, timestamp) WHERE provider <> 'GOOGLE'"
+```
+
+A build that stops half way (the container stopped, a deadlock, a cancel) leaves an invalid
+index under its name. The upgrade keeps a valid index, drops an invalid one with
+`DROP INDEX CONCURRENTLY` (an index holds no data, as `20261017_0007` drops its ad-hoc index)
+and builds it again; a failed build is retried twice, and after the last failure its leftover is
+dropped and the upgrade stops with `20261116_0041: <index> could not be built ... Run the
+upgrade again`. Nothing else changed then; `docker compose up -d` again (outside the backup)
+starts that index anew. To see whether one is missing or invalid, `healthos verify`, or:
+
+```sh
+docker compose exec postgres psql -U health -d health -c \
+  "SELECT c.relname, i.indisvalid FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid \
+   WHERE c.relname LIKE 'ix_%_provider_%' OR c.relname LIKE 'ix_raw_health_data_%_steps' \
+   OR c.relname = 'ix_raw_health_data_supersessions_type_keys'"
+```
+
+Last, the upgrade creates statistics on the long-step expression
+(`raw_health_data_long_steps`) and runs `ANALYZE raw_health_data` once (a sample of the table;
+reads and writes go on). Without them the planner guesses that a third of the step rows are
+long and, for a past window, may scan the raw and step tables whole; autovacuum analyzes this
+table only after a tenth of it has changed, weeks later. `healthos verify` names the statistics
+when they are missing. If the upgrade ran without the `ANALYZE` (an offline script run in
+parts, for instance), run `ANALYZE raw_health_data` once.
+
+`downgrade()` drops the six indexes and the statistics in its own transaction (a 5 s lock timeout; a later refusal
+keeps them). SQLite (tests only) builds them as plain indexes; the long-step predicate there
+covers every step row.
+
+## Apple extension merges — 20261111_a002, 20261112_a003, 20261112_a004, 20261114_a005, 20261115_a006, 20261115_a007, 20261116_a008
 
 Published release only (the GitHub-only Apple extension). Merge revisions that run no SQL: they
 join the extension's real `20261107_a001` (Apple raw tables, [Apple Health](reference/apple.md))
 to the main line, `20261111_a002` at `20261109_0029`, `20261112_a003` at `20261111_0033`, `20261112_a004` at
-`20261112_0034`, `20261114_a005` at `20261114_0036`, `20261115_a006` at `20261115_0039` and
-`20261115_a007` at `20261115_0040`, so
+`20261112_0034`, `20261114_a005` at `20261114_0036`, `20261115_a006` at `20261115_0039`,
+`20261115_a007` at `20261115_0040` and `20261116_a008` at `20261116_0041`, so
 Alembic has one head. No parent's `down_revision` is edited; a later main-line revision gets
 another merge revision like these.

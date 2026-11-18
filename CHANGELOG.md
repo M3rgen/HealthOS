@@ -9,6 +9,47 @@ in this file when they were made; the 0.2 entry was written afterwards from the 
 > There is no 0.3, 0.4 or 0.5 release: 0.2 is newer than every snapshot labelled 0.5.0, and the
 > releases since are 0.2.1, 0.2.2 and so on.
 
+## [0.2.5] - 2026-11-17
+
+Past weeks, months and step history pages load far faster when the database is cold, and the step
+history no longer times out on a large archive. Everything here was merged after v0.2.4 was
+published.
+
+Upgrade notes:
+
+- Migration `20261116_0041` adds six small partial indexes, built `CONCURRENTLY` (writers are not blocked, each table is read twice; on a 10-million-row archive on rotating disks expect minutes). Then it adds statistics on the long-step expression and runs `ANALYZE raw_health_data` once (a minute or two on rotating disks). Do not deploy while the nightly backup runs: a build is never started while another client session holds a transaction open, and the upgrade then leaves the indexes for later with a `WARNING` and their statements, one per line; until they are built the views are as slow as before, and `healthos verify` names each one ([notes](docs/MIGRATIONS.md#reader-indexes--20261116_0041)).
+
+- With the shipped Compose file, `docker compose up -d` stops the running app before the migration service starts, so the app and the webhook are down for as long as the migration takes. Plan the upgrade as downtime.
+
+Not proven: migration `20261116_0041` was measured only on a copy of a production database (about 32 minutes of index builds there, with rotating disks simulated) and has since run once on a production database; its final form did not run end to end on that copy. The corrections made after review (the old one-part step window while the long-step index is missing or invalid, the long-step statistics and `ANALYZE`, the `healthos verify` notes for the six indexes) were not measured at full size. The full unit suite has not run on PostgreSQL 17: the integration suite and the related unit tests ran there before those corrections, the corrections on PostgreSQL 16 only.
+
+- The maintainer's pre-push hook accepts the snapshot on a candidate branch named after its
+  version (`github-main:snapshot/vVERSION`), with the same CI gate receipt and secret scan as a
+  push to `main`. The `main` ruleset refuses a commit that hosted CI has not passed, so the direct
+  push the hook allowed before could no longer publish a snapshot
+  ([development notes](docs/DEVELOPMENT.md#continuous-integration-and-releases)).
+- Step history (`GET /api/dashboard/history?metric=steps`) no longer times out on a large
+  archive: its first and last valid days are found from windows at the two ends of the archive
+  (four days, doubled until a valid day is complete inside them) instead of reading every step
+  payload, which exceeded the 60 s statement limit on rotating disks. The bounds are unchanged; a
+  row whose indexed interval disagrees with its payload falls back to the full read. No migration.
+- Past weeks, months and step history pages read far fewer pages when the database is cold
+  (`GET /api/dashboard` with a past `end_date` or `days=31`, `GET /api/dashboard/history`). A
+  past step window is now a closed range of the freshness index, plus the few intervals longer
+  than a day from an index of their own; before, it fetched every step row up to today and
+  dropped most of them. Supersession probes of every type but heart rate use a covering index
+  of that type's links, and the link's holder is found by its key; Garmin, FIT and sample rows
+  of heart rate, steps, SpO2 and HRV come from partial indexes instead of a scan of the day's
+  Google rows or of the whole table. On a copy of a 10-million-row archive with rotating disks
+  simulated, cold: a past week about 51 s → 14 s, a month 66 s → 24 s, an older step history
+  page 56 s → 14 s, today's dashboard 15 s → 8 s; the responses are unchanged. The coverage
+  panel's exclusion counts use the same link index, but its first page still reads every
+  record of four large types cold (about 77 s, no single statement over 18 s). Migration
+  `20261116_0041`.
+- `healthos verify` describes a holder row that is in turn superseded by another row as a two-link
+  chain; the earlier wording ("superseded themselves") read like a row superseding itself. The
+  check is unchanged.
+
 ## [0.2.4] - 2026-11-15
 
 A personal plan page, Garmin workout tracks with a map and charts, and a location guard for the

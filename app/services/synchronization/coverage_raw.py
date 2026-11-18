@@ -16,7 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.normalization import first_number
 from app.core.records import RecordType
-from app.models.eligibility import raw_counted
+from app.models.eligibility import raw_counted_of_type
 from app.models.state import RawHealthData
 from app.parsers.common import number, parse_date, payload_for
 from app.parsers.google_daily import daily_spo2
@@ -53,7 +53,7 @@ async def raw_value_days(
             RawHealthData.data_type == metric.data_type,
             RawHealthData.source_start_time >= start,
             RawHealthData.source_start_time < stop,
-            raw_counted(data_types=(metric.data_type,)),
+            raw_counted_of_type(RawHealthData, metric.data_type or ""),
         ),
         execution_options={"yield_per": _RAW_BATCH},
     )

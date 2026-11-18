@@ -2,7 +2,7 @@
 
 from importlib import import_module
 
-from sqlalchemy import DDL, BigInteger, Integer, event
+from sqlalchemy import DDL, BigInteger, Integer, event, text
 
 from app.db import guards
 from app.db.base import Base
@@ -57,6 +57,10 @@ def create_guards(target, connection, **kwargs):
         DDL(statement).execute_if(dialect="sqlite")(target, connection, **kwargs)
 
 
+# Index predicates SQLite cannot parse, as migration 20261116_0041 builds them there.
+SQLITE_PREDICATES = {"ix_raw_health_data_long_steps": text("data_type = 'steps'")}
+
+
 def install():
     """Adapt only the test schema; PostgreSQL DDL stays identical before and after this call."""
     for table in Base.metadata.tables.values():
@@ -78,6 +82,8 @@ def install():
                 column.type = column.type.with_variant(Integer(), "sqlite")
         for index in table.indexes:
             if (where := index.dialect_options["postgresql"].get("where")) is not None:
+                # SQLite has no interval type: that index covers every step row here.
+                where = SQLITE_PREDICATES.get(index.name, where)
                 index.dialect_options["sqlite"]["where"] = where
     if not event.contains(Base.metadata, "after_create", create_guards):
         event.listen(Base.metadata, "after_create", create_guards)

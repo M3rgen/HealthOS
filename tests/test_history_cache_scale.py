@@ -32,10 +32,14 @@ async def test_history_reads_scale(sessions, monkeypatch, tmp_path, days):
             second, hot = await measured_page(readers, monkeypatch)
         print(f"history days={days}: before={old_first}/{old_second}, after={cold}/{hot}")
         assert before == first == second
-        count = days * (1000 if large else 4)
+        per_day = 1000 if large else 4
+        # Bounds read the first and newest start (one buffered row), the oldest four days
+        # and the rows ending in the newest five (four-day window, its edge day included):
+        # the same rows for every archive length.
+        streamed = (4 + 5) * per_day
         # GitHub-only Apple extension: one more bounds aggregate (one row) and one more page read.
-        assert old_first == old_second == (5 + 2, count + 1, count)
-        assert cold == (7 + 2, count + 2 + 1, count)
+        assert old_first == old_second == (7 + 2, streamed + 1 + 1, streamed)
+        assert cold == (9 + 2, streamed + 3 + 1, streamed)
         assert hot == (4 + 1, 1, 0)
     finally:
         if engine is not None:

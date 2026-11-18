@@ -93,7 +93,11 @@ async def test_step_cursor_closes_preserving_transaction(
         finally:
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
-        assert len(opened) == opened[0].close.await_count == 1 and opened[0].closed
+        if bounds and outcome == "empty":
+            # No step row starts before the read's stop: bounds open no candidate cursor.
+            assert opened == []
+        else:
+            assert len(opened) == opened[0].close.await_count == 1 and opened[0].closed
         assert session.get_transaction() is transaction and transaction.is_active
         assert await snapshot(session) == before  # real queries prove the session still works
         assert not session.new and not session.dirty and not session.deleted
@@ -111,8 +115,11 @@ async def test_step_bounds_memory_stays_batched(sessions, monkeypatch, spread_da
             assert result == ArchiveBounds(
                 DAY - timedelta(days=count - 1) if spread_days else DAY, DAY
             )
-            assert session.stream_scalars.await_count == 1
-            assert session.stream_scalars.call_args.kwargs["execution_options"] == {"yield_per": 32}
+            # One cursor per end of the archive (one in all when a day holds it all), each
+            # within its first window: the number of reads does not grow with the archive.
+            assert session.stream_scalars.await_count == (2 if spread_days else 1)
+            for call in session.stream_scalars.call_args_list:
+                assert call.kwargs["execution_options"] == {"yield_per": 32}
             assert not session.identity_map and not session.new and not session.dirty
 
     peaks = []
@@ -136,7 +143,7 @@ async def test_step_bounds_memory_stays_batched(sessions, monkeypatch, spread_da
     assert peaks[1] < peaks[0] + 256 * 1024 + socket_buffers(sessions)
 
 
-async def test_long_dense_bounds_release_days_and_keep_one_query(sessions, monkeypatch):
+async def test_long_dense_bounds_release_days_and_read_only_the_ends(sessions, monkeypatch):
     from sqlalchemy import event
 
     from app.services.interpretation import step_totals
@@ -201,7 +208,12 @@ async def test_long_dense_bounds_release_days_and_keep_one_query(sessions, monke
                 tracemalloc.stop()
                 event.remove(engine, "before_cursor_execute", trace)
             assert result == ArchiveBounds(DAY - timedelta(days=days + 1), DAY - timedelta(days=1))
-            assert len(statements) == 1
+            # The archive's first and newest start, then one window at each end; the
+            # interval spanning the whole archive reaches the newest window by its end.
+            assert len(statements) == 3, statements
+            assert (
+                statements[0].lstrip().startswith("SELECT min(raw_health_data.source_start_time)")
+            )
             assert not session.identity_map and not session.new and not session.dirty
     assert maxima["days"] <= 3 and maxima["tails"] <= 2 * 24
     print(f"long dense step bounds peaks: {peaks}")

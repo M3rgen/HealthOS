@@ -10,7 +10,7 @@ from datetime import datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import func
+from sqlalchemy import and_, case, false, func, literal_column, true
 
 from app.models.health import SleepSession
 
@@ -36,6 +36,69 @@ def raw_interval_window(kind: str, raw: Any, start: datetime, stop: datetime):
     """
     left, right = raw.source_start_time, raw.source_end_time
     return (*interval_window(kind, left, right, start, stop), func.coalesce(right, left) >= start)
+
+
+# A step interval longer than this is "long"; the few there are have a partial index of
+# their own (``ix_raw_health_data_long_steps``, migration 20261116_0041), whose predicate is
+# ``step_is_long`` word for word (``LONG_STEP_SQL``).
+LONG_STEP = timedelta(days=1)
+LONG_STEPS_INDEX = "ix_raw_health_data_long_steps"
+# Bounds within the years the application can hold (1-9999): only there are they subtracted.
+_FIRST = "'0001-01-01 00:00:00+00'::timestamptz"
+_PAST_LAST = "'10000-01-01 00:00:00+00'::timestamptz"
+# Only step rows can be long: the type is part of the expression, so the statistics on it
+# (migration 20261116_0041) count the long step rows among all rows, and every constant is
+# written into the statement, so even a generic plan can use the partial index.
+LONG_STEP_SQL = (
+    "CASE WHEN data_type <> 'steps' THEN false "
+    f"WHEN source_start_time >= {_FIRST} AND source_start_time < {_PAST_LAST} "
+    f"AND source_end_time >= {_FIRST} AND source_end_time < {_PAST_LAST} "
+    "THEN (source_end_time - source_start_time) > interval '1 day' ELSE true END"
+)
+
+
+def step_is_long(raw: Any):
+    """A step row longer than ``LONG_STEP``, or not measurable: a bound missing, infinite or
+    outside the years 1-9999 (``LONG_STEP_SQL``; any other type is never long).
+
+    Only bounds in that range are subtracted, so neither this nor the index predicate can
+    raise for any row the database accepts (a difference of two far-apart timestamps
+    overflows ``interval``; PostgreSQL before 17 refuses infinite ones). Such rows count as
+    long, which keeps them out of the closed range and in the long part.
+    """
+    left, right = raw.source_start_time, raw.source_end_time
+    first, past_last = literal_column(_FIRST), literal_column(_PAST_LAST)
+    measurable = and_(left >= first, left < past_last, right >= first, right < past_last)
+    return case(
+        (raw.data_type != literal_column("'steps'"), false()),
+        (measurable, (right - left) > literal_column("interval '1 day'")),
+        else_=true(),
+    )
+
+
+def raw_step_window_parts(raw: Any, start: datetime, stop: datetime):
+    """``raw_interval_window("steps", ...)`` split in two disjoint parts, each bounded on
+    both sides by an index, for PostgreSQL readers (a union of the two is the same rows).
+
+    ``raw_interval_window`` bounds the ``COALESCE(end, start)`` index from below only, so an
+    older window read every later step row up to today. A finite interval of at most
+    ``LONG_STEP`` that meets the window ends before ``stop + LONG_STEP``: that bound closes the
+    range. The others, which can start any time before, come from their own small index.
+    """
+    left, right = raw.source_start_time, raw.source_end_time
+    window = raw_interval_window("steps", raw, start, stop)
+    longer = step_is_long(raw)
+    try:
+        bounded = (func.coalesce(right, left) < stop + LONG_STEP,)
+    except OverflowError:  # a window ending at the calendar's end: nothing later to leave out
+        bounded = ()
+    # The long part leaves out the COALESCE bound (implied by ``end > start`` there): with it
+    # the planner, which has no statistics for an interval's length, reads the one-sided
+    # freshness range instead of the long rows' own index.
+    return (
+        (*window, ~longer, *bounded),
+        (*interval_window("steps", left, right, start, stop), longer),
+    )
 
 
 @dataclass(frozen=True)

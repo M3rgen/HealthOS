@@ -104,12 +104,23 @@ def key_held_elsewhere(data_type: str, google_data_point_id: str | SQLColumnExpr
     """``held_elsewhere`` of the raw row with this data type and ``google_data_point_id``,
     found through the supersessions' ``(old_google_data_point_id, data_type)`` index: for a
     normalized row (keyed like its raw row), so a reader probes the links of the rows it reads
-    instead of joining every raw row of the data type (as the ``analytics_*`` views do)."""
+    instead of joining every raw row of the data type (as the ``analytics_*`` views do).
+
+    The holder is found by its key as well: a link's ``(data_type, new_google_data_point_id)``
+    is its holder's, both fixed (append-only links, immutable raw identity; ``verify`` checks
+    it), and that key is unique. Its index entries lie with those of the rows a reader has
+    just read, where the primary key of a superseding row is one more random read."""
     holder = aliased(RawHealthData)
     link = aliased(RawHealthDataSupersession)
     return (
         select(link.old_raw_id)
-        .join(holder, holder.id == link.new_raw_id)
+        .join(
+            holder,
+            and_(
+                holder.data_type == link.data_type,
+                holder.google_data_point_id == link.new_google_data_point_id,
+            ),
+        )
         .where(
             link.old_google_data_point_id == google_data_point_id,
             link.data_type == data_type,

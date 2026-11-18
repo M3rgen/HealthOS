@@ -337,7 +337,7 @@ rebuild, `DROP INDEX CONCURRENTLY` removes it: it holds no data of its own; both
 done by verify), chains refuted or rejected since (no
 longer used: the rows they linked count on their own), supersessions no longer in force,
 superseded rows that count again because every row holding them was marked deleted, holders that
-are superseded themselves, superseded rows holding an older value than their holder, and
+are in turn superseded by another row (two-link chains), superseded rows holding an older value than their holder, and
 superseded rows returned after their holder with another reading or end (hidden behind a stale
 holder until a complete fetch of their window marks it).
 Against a database still at 20261020_0011, or not yet at 20261024_0014 (without

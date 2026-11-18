@@ -2,16 +2,18 @@
 
 from collections.abc import AsyncGenerator, Iterator
 from contextlib import aclosing
-from datetime import UTC, date, datetime, time
+from datetime import UTC, date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import and_, select
+from sqlalchemy import ColumnElement, TextClause, and_, func, select, text, union_all
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
 from app.core.normalization import first_number
 from app.core.records import RecordType
-from app.models.eligibility import raw_counted
+from app.core.timeutil import as_utc
+from app.db.dialect import database_operation
+from app.models.eligibility import raw_counted_of_type
 from app.models.health import SleepSession, Steps
 from app.models.identity import plan_each_query
 from app.models.state import RawHealthData
@@ -26,12 +28,9 @@ from app.services.readers import (
     HistoryMetric,
     checked_dates,
     daily_window,
+    measurement_windows,
 )
-from app.services.readers.measurement_windows import (
-    raw_interval_window,
-    sleep_window,
-    step_window,
-)
+from app.services.readers.measurement_windows import sleep_window, step_window
 from app.services.readers.reading import ArchiveBounds, DailyValue
 from app.services.shared.finite_math import finite_number
 
@@ -64,9 +63,9 @@ async def read_steps(
     totals = StepTotals(calendar.end_date)
     # Split source intervals at civil-hour boundaries, including midnight and DST.
     step_raw = aliased(RawHealthData)  # the eligibility filter probes the raw table itself
-    # Streamed: a month of minute records is tens of thousands of decoded JSON documents, and
-    # only their sums are kept.
-    steps = await session.stream_scalars(
+    parts = _step_window_parts(session, step_raw, window.start, window.stop)
+    counted = calendar.sources.normalized(Steps, "steps")  # one eligibility tree for all parts
+    candidates = [
         select(step_raw.raw_json)
         .select_from(Steps)
         .join(
@@ -77,10 +76,17 @@ async def read_steps(
             ),
         )
         .where(
-            *raw_interval_window("steps", step_raw, window.start, window.stop),
+            *part,
             Steps.is_quarantined.is_(False),
-            calendar.sources.normalized(Steps, "steps"),
-        ),
+            counted,
+        )
+        for part in parts
+    ]
+    # Streamed: a month of minute records is tens of thousands of decoded JSON documents, and
+    # only their sums are kept. The parts are disjoint (at most two run). Their order is
+    # unspecified, as it was: a compensated sum may differ in its last bits.
+    steps = await session.stream_scalars(
+        candidates[0] if len(candidates) == 1 else union_all(*candidates),
         execution_options={"yield_per": _STEP_BATCH},
     )
     try:
@@ -102,6 +108,33 @@ async def read_steps(
             reads[source].days,
             [buckets[h].result() if h in buckets else None for h in range(24)],
         )
+
+
+# Whether the long steps' index is valid, as a condition the planner evaluates once per part
+# (an uncorrelated EXISTS: a one-time filter, so a part it rules out is never executed).
+_LONG_STEPS_VALID = (
+    "EXISTS (SELECT 1 FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid "
+    "JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = current_schema() "
+    f"AND c.relname = '{measurement_windows.LONG_STEPS_INDEX}' AND i.indisvalid)"
+)
+
+
+@database_operation
+def _step_window_parts(
+    session: AsyncSession, raw: type[RawHealthData], start: datetime, stop: datetime
+) -> tuple[tuple[ColumnElement[bool] | TextClause, ...], ...]:
+    """The step window in two disjoint parts, each a closed range of an index, while the
+    long steps' index is valid; otherwise the window as one part, as before migration
+    20261116_0041 (the same rows, bounded from below only).
+
+    The long part has no other bound: without its index (left for later by an upgrade, or
+    invalid after an interrupted build) it would read every step row. The choice is made in
+    the statement itself, so a read sends no extra query.
+    """
+    valid = text(_LONG_STEPS_VALID)
+    short, long = measurement_windows.raw_step_window_parts(raw, start, stop)
+    whole = measurement_windows.raw_interval_window("steps", raw, start, stop)
+    return ((*short, valid), (*long, valid), (*whole, text(f"NOT {_LONG_STEPS_VALID}")))
 
 
 async def read_sleep(
@@ -147,7 +180,7 @@ def _sleep_query(window: DashboardWindow, sources: DashboardSources):
             ),
         )
         .where(
-            *raw_interval_window("sleep", sleep_raw, window.start, window.stop),
+            *measurement_windows.raw_interval_window("sleep", sleep_raw, window.start, window.stop),
             SleepSession.is_quarantined.is_(False),
             sources.normalized(SleepSession, "sleep"),
         )
@@ -325,7 +358,36 @@ async def _sleep_archive_bounds(
 
 
 async def _step_archive_bounds(session: AsyncSession, today: date, zone: ZoneInfo) -> ArchiveBounds:
-    """Only representable per-platform daily totals establish contribution days."""
+    """Only representable per-platform daily totals establish contribution days.
+
+    The archive's two ends are read in widening windows (see ``_windowed_step_bounds``), not
+    the whole archive: every step row's payload and eligibility probes made a cold read
+    exceed the request statement limit. The result equals the full sweep's (``_full_step_bounds``),
+    which remains the fallback whenever a read contradicts the order the windows rely on.
+    """
+    stop = daily_window(today, 1, zone).stop
+    # Positions the windows only: every row of the type, eligible or not. Both extrema
+    # come from the ends of ix_raw_health_data_type_start.
+    first, last = (
+        await session.execute(
+            select(
+                func.min(RawHealthData.source_start_time),
+                func.max(RawHealthData.source_start_time),
+            ).where(RawHealthData.data_type == "steps", RawHealthData.source_start_time < stop)
+        )
+    ).one()
+    if first is None:
+        return ArchiveBounds(None, None)  # the full sweep's candidates are a subset: none
+    try:
+        return await _windowed_step_bounds(
+            session, zone, stop, as_utc(first).date(), as_utc(last).date()
+        )
+    except _UnorderedSteps:
+        return await _full_step_bounds(session, today, zone)
+
+
+async def _full_step_bounds(session: AsyncSession, today: date, zone: ZoneInfo) -> ArchiveBounds:
+    """Every candidate in one sweep: the reference the windows reproduce, and their fallback."""
     earliest = latest = None
     async with aclosing(_step_days(session, today, zone)) as days:
         async for day, measurement in days:
@@ -335,14 +397,22 @@ async def _step_archive_bounds(session: AsyncSession, today: date, zone: ZoneInf
     return ArchiveBounds(earliest, latest)
 
 
-async def _step_days(session: AsyncSession, today: date, zone: ZoneInfo):
-    start = datetime.min.replace(tzinfo=UTC)
-    stop = daily_window(today, 1, zone).stop
-    records = await session.stream_scalars(
+# The first window at each end spans this many UTC days; each retry doubles it.
+_BOUNDS_FIRST_DAYS = 4
+_ORIGIN = datetime.min.replace(tzinfo=UTC)
+
+
+class _UnorderedSteps(Exception):
+    """A current payload starts out of the order its row's indexed start was read in."""
+
+
+def _step_candidates(stop: datetime, *window: ColumnElement[bool]):
+    """Eligible step rows with an indexed interval before ``stop``, in sweep order."""
+    return (
         select(RawHealthData.raw_json)
         .where(
             RawHealthData.data_type == "steps",
-            raw_counted(data_types=("steps",)),
+            raw_counted_of_type(RawHealthData, "steps"),
             RawHealthData.source_start_time < stop,
             RawHealthData.source_end_time > RawHealthData.source_start_time,
             select(Steps.id)
@@ -351,8 +421,138 @@ async def _step_days(session: AsyncSession, today: date, zone: ZoneInfo):
                 Steps.is_quarantined.is_(False),
             )
             .exists(),
+            *window,
         )
-        .order_by(RawHealthData.source_start_time, RawHealthData.google_data_point_id),
+        .order_by(RawHealthData.source_start_time, RawHealthData.google_data_point_id)
+    )
+
+
+def _midnight(day: date) -> datetime:
+    return datetime.combine(day, time.min, UTC)
+
+
+class _StepPass:
+    """One ``StepSweep`` over successive ordered reads, keeping only valid-day extrema.
+
+    The sweep is the full reader's: the same payload validation, hourly allocation and
+    day completion. ``complete_from`` (an ordinal) ignores days that rows left out of the
+    reads could still reach. ``floor`` is the latest start the sweep has relied on: a
+    current payload starting before it would make the sweep order differ from the rows'.
+    """
+
+    def __init__(self, zone: ZoneInfo, stop: datetime, complete_from: int | None = None):
+        self.sweep = StepSweep(zone)
+        self.stop = stop
+        self.complete_from = complete_from
+        self.floor = _ORIGIN
+        self.earliest: date | None = None
+        self.latest: date | None = None
+
+    def _note(self, days: Iterator[tuple[date, str, int | None]]) -> None:
+        for day, source, value in days:
+            measurement = DailyValue(value, source, "GOOGLE")
+            if measurement.value is None:
+                continue
+            if self.complete_from is not None and day.toordinal() < self.complete_from:
+                continue
+            self.earliest = min(self.earliest, day) if self.earliest is not None else day
+            self.latest = max(self.latest, day) if self.latest is not None else day
+
+    async def read(self, session: AsyncSession, *window: ColumnElement[bool]) -> None:
+        records = await session.stream_scalars(
+            _step_candidates(self.stop, *window),
+            execution_options={"yield_per": _STEP_BATCH},
+        )
+        try:
+            with checked_dates():
+                async for record in records:
+                    allocation = step_window(record, _ORIGIN, self.stop)
+                    if allocation is None:
+                        continue
+                    if allocation.start < self.floor:
+                        raise _UnorderedSteps
+                    self.floor = allocation.start
+                    self._note(self.sweep.advance(allocation.start))
+                    self.sweep.add(_platform_source(record), allocation)
+        finally:
+            # Each window owns only its cursor, on success, failure and cancellation.
+            await records.close()
+
+    def release(self, before: datetime | None) -> None:
+        """Complete the days no interval starting at or after ``before`` can reach.
+
+        The full sweep performs the same pops before its next row (which starts at or
+        after ``before``) and completes these days with the same totals, only later.
+        """
+        with checked_dates():
+            self._note(self.sweep.advance(before))
+        if before is not None:
+            self.floor = max(self.floor, before)
+
+
+async def _windowed_step_bounds(
+    session: AsyncSession, zone: ZoneInfo, stop: datetime, first: date, last: date
+) -> ArchiveBounds:
+    """The full sweep's extrema from windows at both ends of the archive.
+
+    Window edges are UTC midnights. UTC offsets lie strictly within +/-24 hours, so an
+    interval part at or after edge ``T`` falls on civil days from ``T``'s date - 1, and one
+    before ``T`` on civil days up to ``T``'s date. Assumes, as the full sweep's order does,
+    that a row's indexed bounds are its current payload's (storage writes both from
+    ``temporal``); rows read out of that order fall back to the full read.
+
+    Earliest: consecutive start ranges from the archive's beginning, read into one sweep,
+    are a prefix of the full sweep's rows. After releasing ``T`` (the end of the ranges read
+    so far), every day before ``T``'s date - 1 is complete, and no later day can be earlier.
+
+    Latest: the rows whose interval ends at or after ``U`` include every part on days from
+    ``U``'s date + 1. A sweep over them alone (still in the full order) gives those days the
+    full sweep's totals; earlier days are ignored. Each miss doubles the window, until it
+    holds the earliest valid day.
+    """
+    start, end = RawHealthData.source_start_time, RawHealthData.source_end_time
+    head = _StepPass(zone, stop)
+    lower: datetime | None = None
+    span = _BOUNDS_FIRST_DAYS
+    while head.earliest is None:
+        # No upper edge once it would pass the newest start: this read takes the rest.
+        upper = _midnight(first + timedelta(span)) if span <= (last - first).days else None
+        await head.read(
+            session,
+            *((start >= lower,) if lower is not None else ()),
+            *((start < upper,) if upper is not None else ()),
+        )
+        head.release(upper)
+        if upper is None:  # every candidate was read: the full sweep's result
+            return ArchiveBounds(head.earliest, head.latest)
+        lower, span = upper, span * 2
+    earliest = head.earliest
+    span = _BOUNDS_FIRST_DAYS
+    while True:
+        # Never further back than the day before the earliest valid day: from that edge on,
+        # that day is complete, and so valid, in the window.
+        edge = max(last.toordinal() - span, earliest.toordinal() - 1)
+        bound = _midnight(date.fromordinal(edge)) if edge >= 1 else None
+        tail = _StepPass(zone, stop, edge + 1)
+        # COALESCE matches ix_raw_health_data_type_freshness; candidates have an end.
+        await tail.read(
+            session, *((func.coalesce(end, start) >= bound,) if bound is not None else ())
+        )
+        tail.release(None)
+        if tail.latest is not None:
+            return ArchiveBounds(earliest, tail.latest)
+        if edge + 1 <= earliest.toordinal():
+            # Only a write between the reads can hide the earliest day here. Read every
+            # candidate in one statement instead.
+            raise _UnorderedSteps
+        span *= 2
+
+
+async def _step_days(session: AsyncSession, today: date, zone: ZoneInfo):
+    start = _ORIGIN
+    stop = daily_window(today, 1, zone).stop
+    records = await session.stream_scalars(
+        _step_candidates(stop),
         execution_options={"yield_per": _STEP_BATCH},
     )
     sweep = StepSweep(zone)

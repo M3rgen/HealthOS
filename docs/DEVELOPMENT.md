@@ -81,7 +81,12 @@ This publication guard is only for the maintainer clone that publishes `github-m
 Install the local publication guard with `make hooks` (sets this clone's `core.hooksPath` to
 `scripts/hooks`; replaces any existing hook path). Pushes to `origin` accept only
 `github-main:main` or a release tag `vMAJOR.MINOR.PATCH` or `vMAJOR.MINOR.PATCH.N` (interim, N ≥ 1) that matches the project version and is on
-`github-main`. Both need a receipt from `make ci-gate` (runs `.github/workflows/ci.yml` for that
+`github-main`, or the snapshot candidate `github-main:snapshot/vVERSION`, a branch named after the
+project version of the pushed commit. The `main` ruleset refuses a commit without a passing hosted
+`summary` check, so the snapshot goes up as the candidate first, a pull request from it to `main`
+runs `ci.yml`, and the same commit is then pushed as `github-main:main` (a fast-forward; the
+merge button would create a different commit). A merged candidate may be deleted with
+`git push origin :snapshot/vVERSION`. All three pushes need a receipt from `make ci-gate` (runs `.github/workflows/ci.yml` for that
 exact commit under `act` and Docker) and require `gitleaks git` to pass for the outgoing range; a
 new remote branch or tag scans the entire reachable history. Install Gitleaks locally before
 publishing. Repository rulesets, CODEOWNERS and the release rules are in

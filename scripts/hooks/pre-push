@@ -29,17 +29,36 @@ check_release_tag() {
     fail "$tag is not on the published snapshot branch github-main"
 }
 
+# A snapshot candidate is the same commit github-main would publish, on a branch named after its
+# version, so hosted CI can run on it (through a pull request) before the main ruleset accepts it.
+CANDIDATE='^refs/heads/snapshot/v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(\.[1-9][0-9]*)?$'
+
+check_candidate_branch() {
+  local ref="$1" oid="$2" commit version
+  [ "$4" = "refs/heads/github-main $oid $ref $3" ] || return 1
+  [[ "$ref" =~ $CANDIDATE ]] || return 1
+  commit="$(git rev-parse --verify "$oid^{commit}")" || fail "$ref does not name a commit"
+  version="$(git show "$commit:pyproject.toml" | sed -n 's/^version = "\(.*\)"$/\1/p' | head -n 1)"
+  [ "refs/heads/snapshot/v$version" = "$ref" ] || fail "$ref does not match project version $version"
+}
+
 branch_updates=()
 tag_updates=()
 while IFS= read -r update; do
   read -r local_ref local_oid remote_ref remote_oid <<< "$update"
-  # GitHub main receives only the local snapshot branch; tags only well-formed release tags.
+  # GitHub main and a snapshot candidate branch receive only the local snapshot branch; a merged
+  # candidate may be deleted (nothing is sent); tags only well-formed release tags.
   if [ "$local_ref" = refs/heads/github-main ] && [ "$remote_ref" = refs/heads/main ]; then
     branch_updates+=("$remote_oid $local_oid")
+  elif check_candidate_branch "$remote_ref" "$local_oid" "$remote_oid" "$update"; then
+    branch_updates+=("$remote_oid $local_oid")
+  elif [ "$update" = "(delete) $local_oid $remote_ref $remote_oid" ] &&
+    [[ "$local_oid" =~ ^0+$ ]] && [[ "$remote_ref" =~ $CANDIDATE ]]; then
+    continue
   elif [ "$local_ref" = "$remote_ref" ] && check_release_tag "$remote_ref" "$local_oid" "$remote_oid" "$update"; then
     tag_updates+=("$remote_ref $local_oid")
   else
-    fail "origin accepts only github-main:main or a release tag vMAJOR.MINOR.PATCH or vMAJOR.MINOR.PATCH.N (interim, N ≥ 1)"
+    fail "origin accepts only github-main:main, github-main:snapshot/vVERSION (the project version) or a release tag vMAJOR.MINOR.PATCH or vMAJOR.MINOR.PATCH.N (interim, N ≥ 1)"
   fi
 done
 [ "$(( ${#branch_updates[@]} + ${#tag_updates[@]} ))" -gt 0 ] || exit 0

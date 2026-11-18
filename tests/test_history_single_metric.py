@@ -66,6 +66,23 @@ async def test_a_page_is_the_dashboard_for_its_metric(archive, metric, timezone)
     assert any(day["value"] is not None for day in page["days"])
 
 
+def step_bounds_statements(statements, batch_sizes, reads):
+    """The first/newest start, the oldest window, then (unless it held every start) the newest
+    window, each validating payloads in bounded batches; then the Garmin bounds."""
+    assert statements[0].startswith("SELECT min(raw_health_data.source_start_time)")
+    for index in range(1, 1 + reads):
+        assert statements[index].startswith("SELECT raw_health_data.raw_json")
+        assert "source_end_time > raw_health_data.source_start_time" in statements[index]
+        assert batch_sizes[index] == 1000
+    assert "raw_health_data.source_start_time >=" not in statements[1]
+    if reads == 2:
+        assert "coalesce(raw_health_data.source_end_time" in statements[2]
+    fields = statements[1 + reads].split("\nFROM", 1)[0]
+    assert fields.startswith("SELECT steps.source_record_id, steps.count, ")
+    assert "garmin_raw_records.body -> " in fields
+    assert batch_sizes[1 + reads] == 1000
+
+
 @pytest.mark.parametrize("metric", METRICS)
 @pytest.mark.parametrize("archive_days", [0, 100])
 async def test_a_page_reads_its_metric_alone(archive, metric, archive_days):
@@ -133,11 +150,16 @@ async def test_a_page_reads_its_metric_alone(archive, metric, archive_days):
     assert len(revisions) == 2  # Before and after the unchanged bounded streaming miss.
     # Boundary reads (Google, Garmin, Apple), then one page read per archive: Google, Garmin,
     # sample data and the GitHub-only Apple extension.
-    assert len(statements) == 7, statements
-    assert len(statements) <= 8, statements
-    # Apple's boundary query aggregates in SQL and loads no payload.
-    assert "min(" in statements[2] and "max(" in statements[2]
-    assert "raw_json" not in statements[2]
+    # Google step bounds read the archive's first and newest start, then one window at each
+    # end (each end here has a valid day in its first window), or one read when the first
+    # window already holds every start (the four-day archive): one or two more statements.
+    steps_reads = 2 if archive_days else 1
+    google_bounds = 1 + steps_reads if metric == "steps" else 1
+    assert len(statements) == google_bounds + 6, statements
+    # Apple's boundary query (after the Garmin bounds) aggregates in SQL and loads no payload.
+    apple_bounds = statements[google_bounds + 1]
+    assert "min(" in apple_bounds and "max(" in apple_bounds
+    assert "raw_json" not in apple_bounds
     # Google bounds validate current payloads in bounded batches.
     if metric == "sleep":
         assert (
@@ -155,13 +177,7 @@ async def test_a_page_reads_its_metric_alone(archive, metric, archive_days):
         )
         assert batch_sizes[0] == 1000
     if metric == "steps":
-        assert statements[0].startswith("SELECT raw_health_data.raw_json")
-        assert "source_end_time > raw_health_data.source_start_time" in statements[0]
-        assert batch_sizes[0] == 1000
-        fields = statements[1].split("\nFROM", 1)[0]
-        assert fields.startswith("SELECT steps.source_record_id, steps.count, ")
-        assert "garmin_raw_records.body -> " in fields
-        assert batch_sizes[1] == 1000
+        step_bounds_statements(statements, batch_sizes, steps_reads)
     if metric == "sleep":
         for index in (1, 4, 5):  # Garmin bounds, Garmin page, DEMO page.
             fields = statements[index].split("\nFROM", 1)[0]

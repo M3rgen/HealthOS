@@ -116,7 +116,8 @@ class _SupersessionChecks:
         stacked = len(self.targets & self.superseded_rows)
         if stacked:
             notes.append(
-                f"{stacked} holder row(s) are superseded themselves (readers follow both links)"
+                f"{stacked} holder row(s) are in turn superseded by another row "
+                "(two-link chains; readers follow both links)"
             )
 
         return notes

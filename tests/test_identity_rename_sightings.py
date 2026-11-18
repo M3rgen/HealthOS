@@ -214,7 +214,10 @@ async def test_verify_accepts_links_after_a_later_rename(sessions, clock, monkey
     # C's new row holds B's, which holds A's (readers count C's alone).
     assert await problems(sessions) == (
         [],
-        ["1 holder row(s) are superseded themselves (readers follow both links)"],
+        [
+            "1 holder row(s) are in turn superseded by another row "
+            "(two-link chains; readers follow both links)"
+        ],
     )
     async with sessions() as session:
         stamps = (await session.scalars(select(RawHealthDataSupersession.created_at))).all()

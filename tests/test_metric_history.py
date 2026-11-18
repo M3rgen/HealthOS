@@ -361,9 +361,11 @@ async def test_history_archive_date_conversion_overflow(dashboard_dates, monkeyp
         "/api/dashboard/history", params={"metric": metric, "timezone": "Etc/GMT+12"}
     )
     assert response.status_code == 422, response.text
-    assert len(statements) == 2  # One visibility probe, then the original failing bounds read.
+    # One visibility probe, then the bounds reads up to the failing one: for steps the
+    # archive's first and newest start, then its oldest window.
+    assert len(statements) == (3 if metric == "steps" else 2)
     assert statements[0] in REVISION_READS
-    assert "raw_health_data" in statements[1]
+    assert all("raw_health_data" in statement for statement in statements[1:])
     assert response.json() == {"detail": "Seçilen tarih aralığı bu saat diliminde hesaplanamıyor."}
 
 

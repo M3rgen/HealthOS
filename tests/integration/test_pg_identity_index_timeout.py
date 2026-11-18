@@ -53,7 +53,8 @@ def test_the_deleted_index_build_has_no_statement_timeout(database_url, alembic_
         command.upgrade(alembic_config, "head")
     finally:
         event.remove(Engine, "before_cursor_execute", seen)
-    assert during == [("0", "0")]
+    # 0012's build, then 20261116_0041's six: none under a timeout.
+    assert during == [("0", "0")] * 7
 
 
 async def test_a_deferral_whose_row_a_writer_held_stays_open(pg_sessions, clock) -> None:

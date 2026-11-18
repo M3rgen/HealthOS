@@ -115,7 +115,7 @@ def test_session_links_add_one_table_and_a_populated_downgrade_keeps_packages(da
         insert_evidence(connection)
         insert_track(connection)
         packages = connection.execute(text("SELECT * FROM garmin_tracks")).all()
-    command.upgrade(config, LINKS)
+    command.upgrade(config, "head")  # through LINKS; alembic check compares head only
     command.check(config)
     engine.dispose()  # A pooled SQLite connection may still hold the schema before 0040.
     assert {index["name"] for index in inspect(engine).get_indexes("garmin_track_sessions")} == {

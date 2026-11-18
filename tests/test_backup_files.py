@@ -1,7 +1,9 @@
 """Encrypted artifacts are published completely and never replace an existing name."""
 
+import io
 import stat
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 
 import pytest
 
@@ -62,3 +64,78 @@ def test_failure_keeps_existing_artifact_and_only_callers_partial(tmp_path, monk
     assert target.read_bytes() == b"old"
     assert partial.exists() and peer.exists()
     assert set(tmp_path.iterdir()) == {target, partial, peer}
+
+
+@pytest.mark.parametrize("name", ["backup.sql", ".dump.age", "backup.dump.zip"])
+def test_publish_rejects_target_without_encrypted_dump_suffix(tmp_path, name):
+    partial = tmp_path / "piece.partial"
+    partial.write_bytes(b"ciphertext")
+    with pytest.raises(ValueError, match="encrypted dump target required"):
+        backup_files.publish(partial, tmp_path / name)
+    assert set(tmp_path.iterdir()) == {partial}
+
+
+def test_publish_rejects_partial_outside_backup_directory_or_equal_to_target(tmp_path):
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    backups = tmp_path / "backups"
+    backups.mkdir()
+    outside = elsewhere / "piece.partial"
+    outside.write_bytes(b"ciphertext")
+    target = backups / "night.dump.age"
+    with pytest.raises(ValueError, match="separate temporary file"):
+        backup_files.publish(outside, target)
+    target.write_bytes(b"ciphertext")
+    with pytest.raises(ValueError, match="separate temporary file"):
+        backup_files.publish(target, target)
+    assert target.read_bytes() == b"ciphertext" and outside.exists()
+
+
+class _Stdio:
+    def __init__(self, data=b""):
+        self.buffer = io.BytesIO(data)
+
+
+def test_main_check_stream_forwards_bytes_and_fails_closed_on_empty(monkeypatch, capsys):
+    out = _Stdio()
+    monkeypatch.setattr(backup_files.sys, "stdin", _Stdio(b"dump-bytes"))
+    monkeypatch.setattr(backup_files.sys, "stdout", out)
+    assert backup_files.main(["check-stream"]) == 0
+    assert out.buffer.getvalue() == b"dump-bytes"
+
+    monkeypatch.undo()
+    monkeypatch.setattr(backup_files.sys, "stdin", _Stdio(b""))
+    assert backup_files.main(["check-stream"]) == 1
+    assert capsys.readouterr().err == "backup: pg_dump stream is empty or could not be forwarded\n"
+
+
+def test_main_create_then_publish_prints_paths(tmp_path, capsys):
+    target = tmp_path / "night.dump.gpg"
+    assert backup_files.main(["create", str(target)]) == 0
+    partial = Path(capsys.readouterr().out.strip())
+    assert partial.parent == tmp_path and partial.name.endswith(".partial")
+    assert stat.S_IMODE(partial.stat().st_mode) == 0o600
+    partial.write_bytes(b"ciphertext")
+
+    assert backup_files.main(["publish", str(partial), str(target)]) == 0
+    assert capsys.readouterr().out.strip() == str(target)
+    assert target.read_bytes() == b"ciphertext" and not partial.exists()
+
+
+@pytest.mark.parametrize(
+    "args", [[], ["create"], ["publish", "only-one"], ["remove", "x"], ["check-stream", "extra"]]
+)
+def test_main_rejects_unknown_operations_without_output(args, capsys):
+    assert backup_files.main(args) == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == "backup: could not allocate or publish encrypted dump\n"
+
+
+def test_main_reports_publish_failure_and_keeps_partial(tmp_path, capsys):
+    partial = tmp_path / "piece.partial"
+    partial.write_bytes(b"")
+    target = tmp_path / "night.dump.age"
+    assert backup_files.main(["publish", str(partial), str(target)]) == 1
+    assert capsys.readouterr().err == "backup: could not allocate or publish encrypted dump\n"
+    assert partial.exists() and not target.exists()

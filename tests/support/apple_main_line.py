@@ -1,7 +1,8 @@
 """The main line's migrations without the GitHub-only Apple extension, for main-line tests.
 
 The extension adds the real Apple revision (20261107_a001) and its merges with the main line
-(20261111_a002, 20261112_a003, 20261112_a004, 20261114_a005, 20261115_a006, 20261115_a007).
+(20261111_a002, 20261112_a003, 20261112_a004, 20261114_a005, 20261115_a006, 20261115_a007,
+20261116_a008).
 Tests that pin the main line's own chain (tests/test_legacy_placeholder.py) run in a copy of the
 checkout's Alembic setup without those files, whose drift checks compare with the models minus
 the Apple tables; the extension's chain is covered by tests/test_apple_legacy_placeholder.py. A
@@ -23,6 +24,7 @@ EXTENSION_REVISIONS = (
     "20261114_a005_merge_apple_line.py",
     "20261115_a006_merge_apple_line.py",
     "20261115_a007_merge_apple_line.py",
+    "20261116_a008_merge_apple_line.py",
 )
 TARGET = "target_metadata = Base.metadata\n"
 MAIN_LINE_TARGET = """from sqlalchemy import MetaData

@@ -73,6 +73,16 @@ class RawHealthDataSupersession(Base):
             "old_fingerprint",
             "new_fingerprint",
         ),
+        # Links by type and old key, covering the in-force test and the holder key (migration
+        # 20261116_0041): a type's probes stay on its own pages. Heart rate, nine tenths of
+        # the links and probed through its own anti-join, is left out.
+        Index(
+            "ix_raw_health_data_supersessions_type_keys",
+            "data_type",
+            "old_google_data_point_id",
+            postgresql_include=["new_google_data_point_id", "old_fingerprint", "new_fingerprint"],
+            postgresql_where=text("data_type <> 'heart-rate'"),
+        ),
     )
 
     # A row may be linked again when its links are no longer in force (identity_queries.in_force);

@@ -37,7 +37,11 @@ from sqlalchemy.sql.elements import ColumnElement
 
 from app.core.providers import GOOGLE
 from app.core.timeutil import as_utc
-from app.models.eligibility import normalized_counted, normalized_quarantined, raw_counted
+from app.models.eligibility import (
+    normalized_counted,
+    normalized_quarantined,
+    raw_counted_of_type,
+)
 from app.models.health import SleepSession, Steps, Weight
 from app.models.manual import ManualMeasurement
 from app.models.state import RawHealthData
@@ -330,14 +334,15 @@ async def _normalized_records(
                 raw.source_start_time < stop,
             ),
         )
-    types = (metric.data_type,)
     # Aliased: raw_counted's quarantine probe of the normalized table must not correlate.
     row = aliased(model)
     statement = (
         select(*columns, row.google_data_point_id.is_not(None))
         .select_from(raw)
         .outerjoin(row, raw.google_data_point_id == row.google_data_point_id)
-        .where(raw.data_type == metric.data_type, *where, raw_counted(raw, types))
+        .where(
+            raw.data_type == metric.data_type, *where, raw_counted_of_type(raw, metric.data_type)
+        )
     )
     rows = await session.stream(statement, execution_options={"yield_per": _NORMALIZED_BATCH})
     try:
@@ -460,7 +465,7 @@ async def metric_exclusions(session: AsyncSession, metric: Metric, window: Windo
             start = datetime.combine(window.first, time.min, UTC)
             stop = datetime.combine(window.end + timedelta(days=1), time.min, UTC)
         raw = RawHealthData
-        left_out = ~raw_counted(raw, types)
+        left_out = ~raw_counted_of_type(raw, metric.data_type)
         quarantined = and_(
             left_out, or_(raw.is_quarantined.is_(True), *normalized_quarantined(raw, types))
         )

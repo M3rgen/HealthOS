@@ -8,9 +8,12 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from sqlalchemy import func, select, text
+from sqlalchemy.dialects import postgresql
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.schema import CreateIndex
 
 from app.core.timeutil import as_utc
+from app.db.base import Base
 from app.db.dialect import database_operation
 from app.db.guards import definitions
 from app.models.eligibility import raw_counted
@@ -311,7 +314,10 @@ async def _index_notes(session: AsyncSession) -> list[str]:
             f"without it): build it with {_BUILD_DELETED_INDEX} when no dump or long "
             "transaction runs (docs/RUNBOOK.md)"
         )
+    notes.extend(await _reader_index_notes(session))
     for (name,) in (await session.execute(_INVALID_INDEXES_SQL)).tuples():
+        if name in READER_INDEXES:
+            continue  # named above, with its own statements
         if name == "ix_raw_health_data_source_deleted":
             notes.append(
                 f"index {name} is invalid (an interrupted concurrent build; it is not used): "
@@ -325,6 +331,58 @@ async def _index_notes(session: AsyncSession) -> list[str]:
                 f"keep it up to date): DROP INDEX CONCURRENTLY {name} removes it, or REINDEX "
                 f"INDEX CONCURRENTLY {name} rebuilds it (docs/RUNBOOK.md)"
             )
+    return notes
+
+
+# The partial indexes of migration 20261116_0041. An upgrade leaves one for later while a
+# client session holds a transaction open, and an interrupted build leaves it invalid.
+READER_INDEXES = (
+    "ix_raw_health_data_long_steps",
+    "ix_steps_provider_record",
+    "ix_heart_rate_variability_provider_record",
+    "ix_oxygen_saturation_provider_record",
+    "ix_raw_health_data_supersessions_type_keys",
+    "ix_heart_rate_provider_time",
+)
+
+
+def reader_index_statement(name: str) -> str:
+    """The statement that builds the reader index ``name``, from its model."""
+    (index,) = [
+        index
+        for table in Base.metadata.tables.values()
+        for index in table.indexes
+        if index.name == name
+    ]
+    ddl = str(CreateIndex(index, if_not_exists=True).compile(dialect=postgresql.dialect()))
+    return " ".join(ddl.replace("CREATE INDEX", "CREATE INDEX CONCURRENTLY", 1).split()) + ";"
+
+
+async def _reader_index_notes(session: AsyncSession) -> list[str]:
+    """Each reader index missing or invalid, with the statements that build it."""
+    valid = dict((await session.execute(_READER_INDEXES_SQL)).tuples().all())
+    notes = []
+    for name in READER_INDEXES:
+        if valid.get(name) is True:
+            continue
+        state = "is missing" if name not in valid else "is invalid (an interrupted build)"
+        notes.append(
+            f"index {name} of 20261116_0041 {state}; the history views are slower without it. "
+            "When no dump or long transaction runs, run each statement on its own: "
+            f"DROP INDEX CONCURRENTLY IF EXISTS {name}; then {reader_index_statement(name)} "
+            "(docs/MIGRATIONS.md)"
+        )
+    if not await session.scalar(_LONG_STEP_STATISTICS_SQL):
+        # The long-step expression is the long steps' index predicate (LONG_STEP_SQL).
+        table = Base.metadata.tables["raw_health_data"]
+        (index,) = [i for i in table.indexes if i.name == READER_INDEXES[0]]
+        expression = index.dialect_options["postgresql"]["where"]
+        notes.append(
+            "statistics raw_health_data_long_steps of 20261116_0041 are missing; without them "
+            "the planner may scan the raw and step tables for a past step window. Run: "
+            f"CREATE STATISTICS IF NOT EXISTS raw_health_data_long_steps ON (({expression})) "
+            "FROM raw_health_data; then ANALYZE raw_health_data (docs/MIGRATIONS.md)"
+        )
     return notes
 
 
@@ -449,6 +507,16 @@ _INVALID_INDEXES_SQL = text(
     "JOIN pg_namespace n ON n.oid = c.relnamespace "
     "WHERE n.nspname = current_schema() AND i.indrelid = 'raw_health_data'::regclass "
     "AND NOT i.indisvalid ORDER BY c.relname"
+)
+_LONG_STEP_STATISTICS_SQL = text(
+    "SELECT EXISTS (SELECT 1 FROM pg_statistic_ext WHERE stxname = 'raw_health_data_long_steps')"
+)
+_READER_INDEXES_SQL = text(
+    "SELECT c.relname, i.indisvalid FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid "
+    "JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = current_schema() "
+    "AND c.relname IN ('ix_raw_health_data_long_steps', 'ix_steps_provider_record', "
+    "'ix_heart_rate_variability_provider_record', 'ix_oxygen_saturation_provider_record', "
+    "'ix_raw_health_data_supersessions_type_keys', 'ix_heart_rate_provider_time')"
 )
 _DELETED_INDEX_SQL = text(
     "SELECT i.indisvalid FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid "

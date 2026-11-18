@@ -25,10 +25,12 @@ branch and code-owner-reviewed pull request, then wait for successful hosted CI 
 ancestry and exact commit's successful CI, compares the image with the smoke-tested manifest,
 scans it and verifies provenance before the environment review allows publication.
 
-The current snapshot script and local pre-push hook only allow the direct snapshot push. That
-path will be rejected once the main ruleset is applied. Adapting those tools to a reviewed branch
-is a separate prerequisite for applying these files; do not restore an admin bypass to make the
-old path work. An independent code owner must approve the pull request.
+The local pre-push hook lets the snapshot reach GitHub on a candidate branch named after its
+version (`github-main:snapshot/vVERSION`), with the same receipt and secret scan as a push to
+`main`; a pull request from that branch runs hosted CI. A direct snapshot push to `main` is
+rejected by the main ruleset until that exact commit has a passing `summary` check; do not restore
+an admin bypass to make it work. With the review rule of `main.json` applied, an independent code
+owner must also approve the pull request.
 
 ## The `release` environment
 

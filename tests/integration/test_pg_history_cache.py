@@ -19,9 +19,11 @@ async def test_pg_history_statement_and_row_counts(pg_sessions, monkeypatch, day
         first, cold = await measured_page(readers, monkeypatch)
         second, hot = await measured_page(readers, monkeypatch)
     assert expected == first == second
+    # Step bounds: the first and newest start, then the oldest four days and the rows ending
+    # in the newest five, whatever the archive's length (see test_history_cache_scale).
     # GitHub-only Apple extension: one more bounds aggregate (one row) and one more page read.
-    assert before == (5 + 2, days * 4 + 1, days * 4)
-    assert cold == (7 + 2, days * 4 + 2 + 1, days * 4)
+    assert before == (7 + 2, 9 * 4 + 1 + 1, 9 * 4)
+    assert cold == (9 + 2, 9 * 4 + 3 + 1, 9 * 4)
     assert hot == (4 + 1, 1, 0)
 
 
